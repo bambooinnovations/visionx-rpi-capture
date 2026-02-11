@@ -1,20 +1,23 @@
-import logging
+import os
 import shutil
 import tempfile
 import threading
 from pathlib import Path
 
+import structlog
 from flask import Flask, after_this_request, jsonify, request, send_file
 from flask_cors import CORS
 
 from imageCapture import DEFAULT_IMAGE_SIZE, capture_image
+from log_config import configure_logging
 from metrics import get_stats, init_db, record_capture
 from tasks import CAPTURE_TMP_DIR, start_cleanup_task
 
+configure_logging(env=os.environ.get("ENV", "dev"))
+logger = structlog.get_logger()
+
 app = Flask(__name__)
 CORS(app)
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 start_cleanup_task()
 init_db()
@@ -32,7 +35,7 @@ def metrics_stats():
     try:
         return jsonify(get_stats())
     except Exception as e:
-        logger.exception("Failed to retrieve metrics stats")
+        logger.exception("metrics_stats_failed")
         return jsonify({"error": str(e)}), 500
 
 
@@ -61,20 +64,20 @@ def capture():
             )
         except Exception as e:
             shutil.rmtree(tmp_path, ignore_errors=True)
-            logger.error("Capture failed: %s", e)
+            logger.error("capture_failed", error=str(e))
             return jsonify({"error": str(e)}), 500
 
         try:
             record_capture(capture_metrics)
         except Exception:
-            logger.exception("Failed to record capture metrics")
+            logger.exception("record_metrics_failed")
 
         @after_this_request
         def cleanup(response):
             shutil.rmtree(tmp_path, ignore_errors=True)
             return response
 
-        logger.info("Captured image at %dx%d: %s", *target_resolution, image_path.name)
+        logger.info("image_captured", width=w, height=h, file=image_path.name)
         return send_file(image_path)
     finally:
         capture_lock.release()
