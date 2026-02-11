@@ -28,3 +28,7 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# Local data (metrics DB, etc.)
+data/
+*.db
