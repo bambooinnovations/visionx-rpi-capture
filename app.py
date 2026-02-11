@@ -5,6 +5,9 @@ import threading
 from pathlib import Path
 
 import structlog
+from dotenv import load_dotenv
+
+load_dotenv()
 from flask import Flask, after_this_request, jsonify, request, send_file
 from flask_cors import CORS
 
