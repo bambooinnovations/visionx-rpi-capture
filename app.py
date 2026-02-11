@@ -1,21 +1,23 @@
 import logging
-import random
+import shutil
+import tempfile
 import threading
 from pathlib import Path
 
-from flask import Flask, jsonify, send_file
+from flask import Flask, after_this_request, jsonify, request, send_file
 from flask_cors import CORS
 
-STATIC_DIR = Path(__file__).parent / "static"
+from imageCapture import DEFAULT_IMAGE_SIZE, capture_image
+from tasks import CAPTURE_TMP_DIR, start_cleanup_task
 
 app = Flask(__name__)
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-capture_lock = threading.Lock()
+start_cleanup_task()
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+capture_lock = threading.Lock()
 
 
 @app.route("/health")
@@ -28,15 +30,36 @@ def capture():
     if not capture_lock.acquire(blocking=False):
         return jsonify({"error": "Capture already in progress"}), 429
     try:
-        images = [
-            f.name for f in STATIC_DIR.iterdir()
-            if f.suffix.lower() in IMAGE_EXTENSIONS
-        ]
-        if not images:
-            return jsonify({"error": "No images available"}), 503
-        chosen = random.choice(images)
-        logger.info("Serving image: %s", chosen)
-        return send_file(STATIC_DIR / chosen)
+        width = request.args.get("width", type=int)
+        height = request.args.get("height", type=int)
+
+        if (width is None) != (height is None):
+            return jsonify({"error": "Provide both width and height, or neither"}), 400
+
+        # Ensure target_resolution is a tuple[int, int] (width/height may be Optional[int])
+        w = width if width is not None else DEFAULT_IMAGE_SIZE[0]
+        h = height if height is not None else DEFAULT_IMAGE_SIZE[1]
+        target_resolution = (w, h)
+
+        CAPTURE_TMP_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_path = Path(tempfile.mkdtemp(dir=CAPTURE_TMP_DIR))
+        try:
+            image_path = capture_image(
+                target_resolution=target_resolution,
+                output_folder=tmp_path,
+            )
+        except Exception as e:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            logger.error("Capture failed: %s", e)
+            return jsonify({"error": str(e)}), 500
+
+        @after_this_request
+        def cleanup(response):
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            return response
+
+        logger.info("Captured image at %dx%d: %s", *target_resolution, image_path.name)
+        return send_file(image_path)
     finally:
         capture_lock.release()
 

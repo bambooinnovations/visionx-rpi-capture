@@ -1,11 +1,21 @@
-FROM python:3.11-slim
+FROM python:3.13-slim-bookworm
+
+# Install uv
+COPY --from=astral/uv:latest /uv /bin/uv
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy dependency files first for layer caching
+COPY pyproject.toml uv.lock ./
 
+# Install dependencies from the lockfile (no dev deps, no editable installs)
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy application code
 COPY . .
+
+# Make the venv available on PATH
+ENV PATH="/app/.venv/bin:$PATH"
 
 RUN useradd -r appuser && chown -R appuser:appuser /app
 USER appuser
