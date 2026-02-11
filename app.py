@@ -8,6 +8,7 @@ from flask import Flask, after_this_request, jsonify, request, send_file
 from flask_cors import CORS
 
 from imageCapture import DEFAULT_IMAGE_SIZE, capture_image
+from metrics import get_stats, init_db, record_capture
 from tasks import CAPTURE_TMP_DIR, start_cleanup_task
 
 app = Flask(__name__)
@@ -16,6 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 start_cleanup_task()
+init_db()
 
 capture_lock = threading.Lock()
 
@@ -23,6 +25,15 @@ capture_lock = threading.Lock()
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/metrics/stats")
+def metrics_stats():
+    try:
+        return jsonify(get_stats())
+    except Exception as e:
+        logger.exception("Failed to retrieve metrics stats")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/rpi/capture", methods=["POST"])
@@ -44,7 +55,7 @@ def capture():
         CAPTURE_TMP_DIR.mkdir(parents=True, exist_ok=True)
         tmp_path = Path(tempfile.mkdtemp(dir=CAPTURE_TMP_DIR))
         try:
-            image_path = capture_image(
+            image_path, capture_metrics = capture_image(
                 target_resolution=target_resolution,
                 output_folder=tmp_path,
             )
@@ -52,6 +63,11 @@ def capture():
             shutil.rmtree(tmp_path, ignore_errors=True)
             logger.error("Capture failed: %s", e)
             return jsonify({"error": str(e)}), 500
+
+        try:
+            record_capture(capture_metrics)
+        except Exception:
+            logger.exception("Failed to record capture metrics")
 
         @after_this_request
         def cleanup(response):

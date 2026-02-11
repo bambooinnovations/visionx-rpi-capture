@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -11,6 +12,8 @@ try:
 except ImportError:
     print("Pillow is not installed. Please install it using 'pip install Pillow'")
     sys.exit(2)
+
+from metrics import CaptureMetrics
 
 RPI_64MP_SIZE = (9152, 6944)  # native resolution of the camera sensor
 DEFAULT_IMAGE_SIZE = (4624, 3472)  # ~16MP
@@ -26,7 +29,7 @@ def capture_image(
     target_resolution: tuple[int, int] = DEFAULT_IMAGE_SIZE,
     capture_resolution: tuple[int, int] = RPI_64MP_SIZE,
     output_folder: Path = DEFAULT_CAPTURE_TMP_DIR,
-) -> Path:
+) -> tuple[Path, CaptureMetrics]:
     """Capture an image at full sensor resolution, then downscale to target_resolution.
 
     Args:
@@ -35,12 +38,13 @@ def capture_image(
         output_folder: Directory where both the full-res and resized images are saved.
 
     Returns:
-        Path to the resized output image.
+        Tuple of (path to resized output image, capture performance metrics).
     """
     rpicam = shutil.which("rpicam-jpeg")
     if not rpicam:
         raise RuntimeError("rpicam-jpeg not found in PATH. Please install it.")
 
+    captured_at = datetime.now(timezone.utc).isoformat()
     current_time = int(time.time())
     full_image = output_folder / f"{current_time}_full.jpg"
     resized_image = output_folder / f"{current_time}_resized.jpg"
@@ -57,9 +61,14 @@ def capture_image(
     ]
 
     # capture the image at full resolution
+    t0 = time.perf_counter()
     run(command)
+    capture_duration_ms = (time.perf_counter() - t0) * 1000
+
+    before_size = full_image.stat().st_size
 
     # downscale and optionally denoise/sharpen the image for better quality at the target resolution
+    t1 = time.perf_counter()
     downscale_rpicam_jpeg(
         input_path=str(full_image),
         output_path=str(resized_image),
@@ -67,8 +76,23 @@ def capture_image(
         denoise=True,
         sharpen=False,
     )
+    downscale_duration_ms = (time.perf_counter() - t1) * 1000
 
-    return resized_image
+    after_size = resized_image.stat().st_size
+
+    metrics = CaptureMetrics(
+        captured_at=captured_at,
+        capture_duration_ms=capture_duration_ms,
+        downscale_duration_ms=downscale_duration_ms,
+        capture_width=capture_resolution[0],
+        capture_height=capture_resolution[1],
+        target_width=target_resolution[0],
+        target_height=target_resolution[1],
+        before_size_bytes=before_size,
+        after_size_bytes=after_size,
+    )
+
+    return resized_image, metrics
 
 
 def downscale_rpicam_jpeg(
