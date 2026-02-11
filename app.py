@@ -11,7 +11,7 @@ load_dotenv()
 from flask import Flask, after_this_request, jsonify, request, send_file
 from flask_cors import CORS
 
-from imageCapture import DEFAULT_IMAGE_SIZE, capture_image
+from imageCapture import DEFAULT_IMAGE_SIZE, capture_image, init_camera
 from log_config import configure_logging
 from metrics import get_stats, init_db, record_capture
 from tasks import CAPTURE_TMP_DIR, start_cleanup_task
@@ -24,6 +24,7 @@ CORS(app)
 
 start_cleanup_task()
 init_db()
+init_camera()
 
 capture_lock = threading.Lock()
 
