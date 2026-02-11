@@ -52,7 +52,12 @@ def _ensure_camera(resolution: tuple[int, int]) -> "Picamera2":
     config = cam.create_still_configuration(main={"size": resolution})
     cam.configure(config)
     cam.start()
-    cam.set_controls({"AfMode": 2, "AfTrigger": 0})  # continuous autofocus
+
+    # Single-shot AF (AfMode=1) is correct for still capture.
+    # Continuous AF (AfMode=2) needs a fast preview stream to drive its algorithm;
+    # a still configuration doesn't supply enough frames, so the lens never moves.
+    if "AfMode" in cam.camera_controls:
+        cam.set_controls({"AfMode": 1})
 
     _camera = cam
     _camera_resolution = resolution
@@ -73,6 +78,11 @@ def capture_image(
     output_image = output_folder / f"{int(time.time())}.jpg"
 
     camera = _ensure_camera(resolution)
+
+    if "AfMode" in camera.camera_controls:
+        success = camera.autofocus_cycle()
+        if not success:
+            logger.warning("autofocus_failed", path=str(output_image))
 
     t0 = time.perf_counter()
     camera.capture_file(str(output_image))
