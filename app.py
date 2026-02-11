@@ -62,7 +62,7 @@ def capture():
         tmp_path = Path(tempfile.mkdtemp(dir=CAPTURE_TMP_DIR))
         try:
             image_path, capture_metrics = capture_image(
-                target_resolution=target_resolution,
+                resolution=target_resolution,
                 output_folder=tmp_path,
             )
         except Exception as e:
