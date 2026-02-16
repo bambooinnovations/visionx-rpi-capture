@@ -24,6 +24,11 @@ Thumbs.db
 # Environment
 .env
 .env.*
+!.env.example
 
 # Docker
 docker-compose.override.yml
+
+# Local data (metrics DB, etc.)
+data/
+*.db
