@@ -9,8 +9,8 @@ import structlog
 logger = structlog.get_logger()
 
 CAPTURE_TMP_DIR = Path(os.environ.get("CAPTURE_TMP_DIR", "/tmp/visionx_captures"))
-CLEANUP_INTERVAL_SECONDS = 5 * 60  # run every 5 minutes
-MAX_AGE_SECONDS = 5 * 60  # delete dirs older than 5 minutes
+CLEANUP_INTERVAL_SECONDS = int(os.environ.get("CLEANUP_INTERVAL_SECONDS", 5 * 60))
+MAX_AGE_SECONDS = int(os.environ.get("MAX_AGE_SECONDS", 5 * 60))
 
 
 def _cleanup_stale_tmp_dirs() -> None:
