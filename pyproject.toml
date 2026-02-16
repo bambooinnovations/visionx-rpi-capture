@@ -8,12 +8,19 @@ dependencies = [
     "flask>=3.1.2",
     "flask-cors>=6.0.2",
     "gunicorn>=25.0.3",
-    "pillow>=12.1.0",
     "structlog>=25.5.0",
     "python-dotenv>=1.1.0",
 ]
 
 [project.optional-dependencies]
 rpi = [
-    "picamera2",
+    "picamera2; sys_platform == 'linux'",
 ]
+
+# python-prctl is a C extension that only builds on Linux (a transitive dep of picamera2).
+# Stub its metadata so uv can resolve the lockfile on non-Linux dev machines without
+# attempting to compile it from source.
+[[tool.uv.dependency-metadata]]
+name = "python-prctl"
+version = "1.8.1"
+requires-dist = []
