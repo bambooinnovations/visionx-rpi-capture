@@ -8,7 +8,7 @@ METRICS_DB_PATH = Path(os.environ.get("METRICS_DB_PATH", "/data/visionx_metrics.
 
 @dataclass
 class CaptureMetrics:
-    captured_at: str           # ISO 8601 UTC timestamp
+    captured_at: str  # ISO 8601 UTC timestamp
     capture_duration_ms: float
     width: int
     height: int
@@ -44,9 +44,9 @@ def get_stats(db_path: Path = METRICS_DB_PATH) -> dict:
         return round(v, 2) if v is not None else None
 
     return {
-        "total_captures":      row[0],
+        "total_captures": row[0],
         "capture_duration_ms": {"avg": r(row[1]), "min": r(row[2]), "max": r(row[3])},
-        "file_size_bytes":     {"avg": r(row[4]), "min": row[5],    "max": row[6]},
+        "file_size_bytes": {"avg": r(row[4]), "min": row[5], "max": row[6]},
     }
 
 
@@ -57,5 +57,11 @@ def record_capture(metrics: CaptureMetrics, db_path: Path = METRICS_DB_PATH) -> 
             INSERT INTO capture_metrics (captured_at, capture_duration_ms, width, height, file_size_bytes)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (metrics.captured_at, metrics.capture_duration_ms, metrics.width, metrics.height, metrics.file_size_bytes),
+            (
+                metrics.captured_at,
+                metrics.capture_duration_ms,
+                metrics.width,
+                metrics.height,
+                metrics.file_size_bytes,
+            ),
         )

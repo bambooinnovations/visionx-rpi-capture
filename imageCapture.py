@@ -9,6 +9,7 @@ import structlog
 
 try:
     from picamera2 import Picamera2
+
     _PICAMERA2_AVAILABLE = True
 except ImportError:
     Picamera2 = None  # type: ignore[assignment,misc]
@@ -19,7 +20,9 @@ from metrics import CaptureMetrics
 logger = structlog.get_logger()
 
 DEFAULT_IMAGE_SIZE = (4624, 3472)  # ~16MP, full-sensor 2x2 binned mode for ArduCam 64MP
-DEFAULT_CAPTURE_TMP_DIR = Path(os.environ.get("CAPTURE_TMP_DIR", "/tmp/visionx_captures"))
+DEFAULT_CAPTURE_TMP_DIR = Path(
+    os.environ.get("CAPTURE_TMP_DIR", "/tmp/visionx_captures")
+)
 
 _camera: Picamera2 | None = None
 _camera_resolution: tuple[int, int] | None = None
