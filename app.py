@@ -24,7 +24,10 @@ CORS(app)
 
 start_cleanup_task()
 init_db()
-init_camera()
+try:
+    init_camera()
+except RuntimeError as e:
+    logger.warning("camera_init_skipped", reason=str(e))
 
 capture_lock = threading.Lock()
 
@@ -38,9 +41,9 @@ def health():
 def metrics_stats():
     try:
         return jsonify(get_stats())
-    except Exception as e:
+    except Exception:
         logger.exception("metrics_stats_failed")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @app.route("/rpi/capture", methods=["POST"])
@@ -54,6 +57,9 @@ def capture():
         if (width is None) != (height is None):
             return jsonify({"error": "Provide both width and height, or neither"}), 400
 
+        if width is not None and (width <= 0 or height <= 0):
+            return jsonify({"error": "width and height must be positive integers"}), 400
+
         # Ensure target_resolution is a tuple[int, int] (width/height may be Optional[int])
         w = width if width is not None else DEFAULT_IMAGE_SIZE[0]
         h = height if height is not None else DEFAULT_IMAGE_SIZE[1]
@@ -66,10 +72,10 @@ def capture():
                 resolution=target_resolution,
                 output_folder=tmp_path,
             )
-        except Exception as e:
+        except Exception:
             shutil.rmtree(tmp_path, ignore_errors=True)
-            logger.error("capture_failed", error=str(e))
-            return jsonify({"error": str(e)}), 500
+            logger.exception("capture_failed")
+            return jsonify({"error": "Capture failed"}), 500
 
         try:
             record_capture(capture_metrics)

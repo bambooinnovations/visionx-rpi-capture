@@ -13,6 +13,6 @@ cd "$PROJECT_ROOT"
 echo "Starting visionx-rpi-capture (production)..."
 exec env ENV=prod uv run gunicorn \
     --bind 0.0.0.0:8080 \
-    --workers 2 \
+    --workers 1 \
     --timeout 120 \
     "app:app"

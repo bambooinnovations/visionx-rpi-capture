@@ -1,7 +1,7 @@
 [project]
 name = "visionx-rpi-capture"
 version = "0.1.0"
-description = "Add your description here"
+description = "Raspberry Pi image capture and streaming service for VisionX using Flask"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

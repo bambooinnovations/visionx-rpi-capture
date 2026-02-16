@@ -3,7 +3,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-METRICS_DB_PATH = Path(os.environ.get("METRICS_DB_PATH", "/data/visionx_metrics.db"))
+METRICS_DB_PATH = Path(os.environ.get("METRICS_DB_PATH", "/tmp/visionx_metrics.db"))
 
 
 @dataclass
