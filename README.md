@@ -94,3 +94,5 @@ Copy `.env.example` to `.env` and adjust as needed.
 | `CLEANUP_INTERVAL_SECONDS` | `300`                      | How often (seconds) the background cleanup task runs                   |
 | `MAX_AGE_SECONDS`          | `300`                      | Minimum age (seconds) of a temp dir before the cleanup task removes it |
 | `METRICS_DB_PATH`          | `/data/visionx_metrics.db` | Path to the SQLite database for capture performance metrics            |
+| `CAMERA_SHARPNESS`         | `1.0`                      | ISP sharpness multiplier. Set to `0` for ML defect detection pipelines (disables IPA unsharp mask to avoid artificial edge halos) |
+| `LOCK_EXPOSURE`            | `false`                    | Set to `true` to lock AE/AWB after a 2 s settle at startup. Keeps exposure and colour temperature constant across captures for consistent defect scoring |
