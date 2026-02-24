@@ -9,7 +9,7 @@
 set -euo pipefail
 
 # Ensure uv is on PATH (systemd doesn't load shell profiles).
-export PATH="$HOME/.local/bin:/root/.local/bin:$PATH"
+export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 
 # Resolve the project root regardless of where the script is called from.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
