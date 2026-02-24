@@ -27,24 +27,20 @@ Returns `400` if only one dimension is provided, `429` if a capture is already i
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
-### On a Raspberry Pi
-
-Install dependencies (including `picamera2`):
+### Raspberry Pi Deployment
 
 ```bash
-uv sync --extra rpi
+git clone https://github.com/bambooinnovations/rpi-capture-api.git
+cd rpi-capture-api
+make setup
+make start
 ```
 
-Copy and edit the environment file:
+Verify:
 
 ```bash
-cp .env.example .env
-```
-
-Start the server:
-
-```bash
-./scripts/start.sh
+curl http://localhost:8080/health
+curl -X POST http://localhost:8080/rpi/capture --output test.jpg
 ```
 
 ### Local Development (without camera)
@@ -56,25 +52,48 @@ python app.py
 
 > `picamera2` is only available on Raspberry Pi. Without it, the `/rpi/capture` endpoint will return a 500 error, but all other endpoints work normally.
 
-## Scripts
+## Make Targets
 
-| Script                 | Description                                                                 |
-| ---------------------- | --------------------------------------------------------------------------- |
-| `scripts/start.sh`     | Start the server in production mode via Gunicorn                            |
-| `scripts/calibrate.sh` | Live camera preview with continuous autofocus for physical lens calibration |
+Run `make help` to see all available targets:
 
-> The server must be stopped before running `calibrate.sh` — `libcamera` only allows one process to access the camera at a time.
+| Command          | Description                                                  |
+| ---------------- | ------------------------------------------------------------ |
+| `make setup`     | Full one-time setup (system deps + venv + .env + systemd)    |
+| `make start`     | Start the server (via systemd)                               |
+| `make stop`      | Stop the server                                              |
+| `make restart`   | Restart the server                                           |
+| `make status`    | Check server status                                          |
+| `make logs`      | Tail server logs                                             |
+| `make calibrate` | Live camera preview for lens calibration (stops server first)|
+| `make verify`    | Verify picamera2 is working                                  |
+| `make clean`     | Remove venv, logs, and pid file                              |
+
+### Camera Calibration
+
+Use `make calibrate` to open a live video preview for physically positioning and focusing the camera. This automatically stops the server (only one process can access the camera), opens the preview, and restarts the server when you press `Ctrl+C`.
+
+Useful when:
+
+- Setting up a new Pi with the camera for the first time
+- Repositioning the camera or changing the mounting distance
+- Verifying the field of view and framing before capturing
+
+The preview runs at 2312x1736, matching the full-sensor field of view of the default capture resolution (4624x3472).
+
+> Requires `rpicam-apps` (pre-installed on Raspberry Pi OS). If missing: `sudo apt install rpicam-apps`
 
 ## Project Structure
 
 ```
 .
+├── Makefile             # All commands: setup, start, stop, logs, calibrate, etc.
 ├── app.py               # Flask application and route handlers
 ├── imageCapture.py      # picamera2 camera init and image capture logic
 ├── log_config.py        # structlog configuration
 ├── metrics.py           # SQLite-backed capture performance metrics
 ├── tasks.py             # Background cleanup task for stale temp files
 ├── scripts/
+│   ├── setup.sh         # One-time Raspberry Pi setup
 │   ├── start.sh         # Production server startup (Gunicorn)
 │   └── calibrate.sh     # Camera calibration preview
 ├── pyproject.toml

@@ -32,3 +32,9 @@ docker-compose.override.yml
 # Local data (metrics DB, etc.)
 data/
 *.db
+
+# Logs
+logs/
+
+# Gunicorn PID
+.gunicorn.pid
