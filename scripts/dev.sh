@@ -28,4 +28,5 @@ echo "Starting visionx-rpi-capture (dev mode) — Ctrl+C to stop"
 exec env ENV=dev uv run flask --app app run \
     --host 0.0.0.0 \
     --port 8080 \
-    --debug
+    --debug \
+    --no-reload
