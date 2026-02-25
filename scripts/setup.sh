@@ -58,6 +58,10 @@ _setup_app() {
         log SUCCESS "uv already installed: $(as_user uv --version)"
     fi
 
+    log INFO "Linking uv to /usr/local/bin/uv..."
+    ln -sf "$REAL_HOME/.local/bin/uv" /usr/local/bin/uv
+    log SUCCESS "uv available system-wide at /usr/local/bin/uv."
+
     echo ""
     log INFO "Creating virtual environment with system site-packages..."
     as_user uv venv --system-site-packages
