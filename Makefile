@@ -1,4 +1,4 @@
-.PHONY: help setup install env service start stop restart status logs calibrate verify clean
+.PHONY: help setup start stop restart status logs calibrate verify clean
 
 SERVICE_NAME := rpi-capture
 SERVICE_FILE := /etc/systemd/system/$(SERVICE_NAME).service
@@ -12,42 +12,8 @@ help: ## Show this help
 
 # ---------- Full setup (run once on a fresh Pi) ----------
 
-setup: install env service ## Full one-time setup (system deps + venv + .env + systemd)
-	@echo ""
-	@echo "Setup complete!"
-	@echo "  make start   - start the server"
-	@echo "  make logs    - tail logs"
-	@echo "  make status  - check status"
-
-install: ## Install system deps, uv, venv, and Python packages
-	@echo "==> Installing system dependencies..."
-	sudo apt update
-	sudo apt install -y python3-libcamera python3-kms++
-	@echo ""
-	@echo "==> Checking for uv..."
-	@command -v uv >/dev/null 2>&1 || { echo "    Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
-	@echo ""
-	@echo "==> Creating virtual environment with system site-packages..."
-	uv venv --system-site-packages
-	@echo ""
-	@echo "==> Installing Python dependencies..."
-	uv sync --extra rpi
-	@$(MAKE) verify
-
-env: ## Copy .env.example to .env (skips if .env exists)
-	@if [ ! -f .env ]; then \
-		cp .env.example .env; \
-		echo "Created .env from .env.example — edit with: nano .env"; \
-	else \
-		echo ".env already exists, skipping."; \
-	fi
-
-service: ## Install and enable the systemd service
-	@echo "==> Installing systemd service..."
-	@printf '[Unit]\nDescription=VisionX RPI Capture API\nAfter=network.target\n\n[Service]\nType=exec\nUser=%s\nWorkingDirectory=%s\nExecStart=%s/scripts/start.sh\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n' "$(shell whoami)" "$(PROJECT_ROOT)" "$(PROJECT_ROOT)" | sudo tee $(SERVICE_FILE) >/dev/null
-	sudo systemctl daemon-reload
-	sudo systemctl enable $(SERVICE_NAME)
-	@echo "    Service installed and enabled."
+setup: ## Full setup: camera drivers + app + systemd service (requires sudo)
+	sudo bash scripts/setup.sh
 
 # ---------- Server control ----------
 
