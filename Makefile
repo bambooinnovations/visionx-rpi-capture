@@ -35,7 +35,8 @@ status: ## Check server status
 logs: ## Tail server logs
 	journalctl -u $(SERVICE_NAME) -f
 
-dev: stop ## Run dev server in foreground with auto-reload (stops systemd service first)
+dev: ## Run dev server in foreground with auto-reload (stops systemd service if running)
+	@sudo systemctl stop $(SERVICE_NAME) 2>/dev/null || true
 	@bash scripts/dev.sh
 
 # ---------- Utilities ----------
