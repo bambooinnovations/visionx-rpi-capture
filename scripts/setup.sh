@@ -27,7 +27,13 @@ source "$SCRIPT_DIR/modules/camera.sh"
 # ── User context ──────────────────────────────────────────────────────────────
 # Detect the real (non-root) user who invoked sudo, so that uv, venv, and
 # Python dependencies are owned by the correct user rather than root.
-REAL_USER="${SUDO_USER:-$USER}"
+if [[ -z "${SUDO_USER:-}" ]]; then
+    echo "ERROR: This script must be run via sudo, not from a root shell." >&2
+    echo "Usage: sudo bash scripts/setup.sh" >&2
+    exit 1
+fi
+
+REAL_USER="${SUDO_USER}"
 REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 
 # Run a command as the real user with the correct HOME and PATH.
@@ -41,6 +47,8 @@ as_user() {
 # ── App setup ─────────────────────────────────────────────────────────────────
 _setup_app() {
     log INFO "━━━  App setup  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    cd "$PROJECT_ROOT"
 
     echo ""
     log INFO "Installing system dependencies..."

@@ -131,16 +131,10 @@ Complete one-command setup. Must be run as root. Installs camera drivers, the Py
 ### `scripts/start.sh`
 
 ```bash
-./scripts/start.sh          # foreground (logs to stdout)
-./scripts/start.sh --bg     # background (logs to logs/capture.log)
-./scripts/start.sh --stop   # stop the background server
+./scripts/start.sh   # foreground (logs to stdout)
 ```
 
-Starts the Flask app via Gunicorn. Used directly by the systemd service (`make start` is preferred for day-to-day use).
-
-- Foreground mode: streams logs to stdout, useful for debugging
-- Background mode: daemonises Gunicorn, writes PID to `.gunicorn.pid` and logs to `logs/capture.log`
-- Stop mode: sends SIGTERM to the PID from `.gunicorn.pid`
+Starts the Flask app via Gunicorn. Used directly by the systemd service. Logs stream to stdout, which systemd captures via `journalctl -u rpi-capture`.
 
 ### `scripts/calibrate.sh`
 
