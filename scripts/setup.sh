@@ -4,15 +4,15 @@
 #
 # This script:
 #   1. Detects OS version and sets the correct boot config path
-#   2. Prompts for the CSI port the camera is connected to (CAM1 default)
-#   3. Downloads and installs the Arducam Pivariety camera drivers
-#   4. Patches the boot config with the camera overlay
-#   5. Installs system packages (python3-libcamera, python3-kms++)
-#   6. Installs uv (if not present) and creates a virtual environment
-#   7. Installs Python dependencies
-#   8. Copies .env.example → .env
-#   9. Installs and enables the rpi-capture systemd service
-#  10. Prompts to reboot (the service starts automatically after reboot)
+#   2. Prompts for camera type (Arducam 64MP or standard Pi Camera)
+#   3. Arducam only: prompts for CSI port, downloads and installs drivers,
+#      patches the boot config with the camera overlay
+#   4. Installs system packages (python3-libcamera, python3-kms++)
+#   5. Installs uv (if not present) and creates a virtual environment
+#   6. Installs Python dependencies
+#   7. Copies .env.example → .env
+#   8. Installs and enables the rpi-capture systemd service
+#   9. Prompts to reboot (the service starts automatically after reboot)
 
 set -euo pipefail
 
@@ -121,7 +121,7 @@ EOF
 # ── Reboot prompt ─────────────────────────────────────────────────────────────
 _prompt_reboot() {
     echo ""
-    log SUCCESS "Setup complete! A reboot is required for the camera overlay to take effect."
+    log SUCCESS "Setup complete! A reboot is required for all changes to take effect."
     echo ""
     echo "  After rebooting, the rpi-capture service starts automatically."
     echo "  To check status:"

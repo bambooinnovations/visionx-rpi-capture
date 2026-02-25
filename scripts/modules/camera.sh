@@ -1,10 +1,36 @@
 #!/usr/bin/env bash
-# modules/camera.sh — Arducam 64MP Hawkeye driver installation and config
+# modules/camera.sh — Camera driver installation and config
 # Requires: lib/utils.sh (log, CONFIG_TXT, CAM_APP_PREFIX)
 
 ARDUCAM_INSTALLER_URL="https://github.com/ArduCAM/Arducam-Pivariety-V4L2-Driver/releases/download/install_script/install_pivariety_pkgs.sh"
 ARDUCAM_INSTALLER="/tmp/install_pivariety_pkgs.sh"
 DTOVERLAY_LINE="dtoverlay=arducam-64mp"   # default; overridden by _select_cam_port
+CAM_TYPE=""                               # set by _select_cam_type: "arducam" or "picam"
+
+# ── Camera type selection ──────────────────────────────────────────────────────
+_select_cam_type() {
+    echo ""
+    log INFO "Which camera are you using?"
+    echo "        [1]  Arducam 64MP Hawkeye  (requires driver installation)"
+    echo "        [2]  Standard Pi Camera    (v2, v3, HQ — no extra drivers needed)"
+    read -rp "  Enter choice [1/2, default: 1]: " type_choice
+
+    case "${type_choice}" in
+        2)
+            CAM_TYPE="picam"
+            log SUCCESS "Camera type: Standard Pi Camera"
+            ;;
+        1|"")
+            CAM_TYPE="arducam"
+            log SUCCESS "Camera type: Arducam 64MP Hawkeye"
+            ;;
+        *)
+            log WARN "Unrecognised input '${type_choice}' — defaulting to Arducam."
+            CAM_TYPE="arducam"
+            ;;
+    esac
+    echo ""
+}
 
 # ── Download the Arducam installer script ─────────────────────────────────────
 _download_installer() {
@@ -85,22 +111,41 @@ verify_camera() {
     fi
 
     log INFO "Checking camera detection with '${app} --list-cameras'..."
-    if "$app" --list-cameras 2>&1 | grep -qi "arducam\|64mp\|hawk"; then
-        log SUCCESS "Camera detected successfully."
+    local output
+    output=$("$app" --list-cameras 2>&1)
+
+    if [[ "$CAM_TYPE" == "arducam" ]]; then
+        if echo "$output" | grep -qi "arducam\|64mp\|hawk"; then
+            log SUCCESS "Camera detected successfully."
+        else
+            log WARN "Camera not detected yet. A reboot may be required."
+        fi
     else
-        log WARN "Camera not detected yet. A reboot may be required."
+        if echo "$output" | grep -qi "Available cameras\|imx\|ov"; then
+            log SUCCESS "Camera detected successfully."
+        else
+            log WARN "Camera not detected yet. A reboot may be required."
+        fi
     fi
 }
 
 # ── Public entry point ────────────────────────────────────────────────────────
 setup_camera() {
     log INFO "━━━  Camera setup  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    _select_cam_port
-    _download_installer
-    _install_pkg "libcamera_dev"
-    _install_pkg "libcamera_apps"
-    _install_pkg "64mp_pi_hawk_eye_kernel_driver"
-    _patch_config
+    _select_cam_type
+
+    if [[ "$CAM_TYPE" == "arducam" ]]; then
+        _select_cam_port
+        _download_installer
+        _install_pkg "libcamera_dev"
+        _install_pkg "libcamera_apps"
+        _install_pkg "64mp_pi_hawk_eye_kernel_driver"
+        _patch_config
+    else
+        log INFO "Standard Pi Camera selected — no extra drivers required."
+        log INFO "libcamera support will be installed via apt in the app setup step."
+    fi
+
     log SUCCESS "Camera setup complete."
     log INFO "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
