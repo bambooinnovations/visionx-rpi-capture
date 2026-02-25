@@ -31,5 +31,6 @@ echo "Starting visionx-rpi-capture..."
 exec env ENV=prod uv run gunicorn \
     --bind 0.0.0.0:8080 \
     --workers 1 \
+    --worker-class gevent \
     --timeout 120 \
     "app:app"

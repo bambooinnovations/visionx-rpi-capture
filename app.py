@@ -8,10 +8,10 @@ import structlog
 from dotenv import load_dotenv
 
 load_dotenv()
-from flask import Flask, after_this_request, jsonify, request, send_file
+from flask import Flask, Response, after_this_request, jsonify, request, send_file
 from flask_cors import CORS
 
-from imageCapture import DEFAULT_IMAGE_SIZE, capture_image, init_camera
+from imageCapture import DEFAULT_IMAGE_SIZE, capture_image, init_camera, stream_frames
 from log_config import configure_logging
 from metrics import get_stats, init_db, record_capture
 from tasks import CAPTURE_TMP_DIR, start_cleanup_task
@@ -30,6 +30,23 @@ except RuntimeError as e:
     logger.warning("camera_init_skipped", reason=str(e))
 
 capture_lock = threading.Lock()
+
+
+@app.route("/rpi/stream")
+def stream():
+    def generate():
+        for frame in stream_frames():
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n"
+                + frame
+                + b"\r\n"
+            )
+
+    return Response(
+        generate(),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @app.route("/health")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,54 +23,64 @@ logger = structlog.get_logger()
 
 DEFAULT_IMAGE_SIZE = (4624, 3472)  # ~16MP, full-sensor 2x2 binned mode for ArduCam 64MP
 
+# Stream resolution for the lores preview channel.
+# Width must be a multiple of 32, height a multiple of 2 (libcamera alignment).
+STREAM_SIZE = (
+    int(os.environ.get("STREAM_WIDTH", "1280")),
+    int(os.environ.get("STREAM_HEIGHT", "960")),
+)
+STREAM_FPS = int(os.environ.get("STREAM_FPS", "15"))
+STREAM_QUALITY = int(os.environ.get("STREAM_QUALITY", "60"))
+
 _SHARPNESS = float(os.environ.get("CAMERA_SHARPNESS", "1.0"))
 _LOCK_EXPOSURE = os.environ.get("LOCK_EXPOSURE", "false").lower() == "true"
 DEFAULT_CAPTURE_TMP_DIR = Path(
     os.environ.get("CAPTURE_TMP_DIR", "/tmp/visionx_captures")
 )
 
-_camera: Picamera2 | None = None
-_camera_resolution: tuple[int, int] | None = None
+_camera: "Picamera2 | None" = None
+# Held by stream_frames() during each frame grab, and by capture_image() for the
+# full AF + mode-switch + capture cycle.  This ensures the two never overlap.
+_camera_lock = threading.Lock()
+# Cached so capture_image() can restore preview mode without re-creating the dict.
+_preview_config: dict | None = None
 
 
-def init_camera(resolution: tuple[int, int] = DEFAULT_IMAGE_SIZE) -> None:
-    """Warm up the camera at startup so the first capture request has no init delay."""
-    _ensure_camera(resolution)
-    logger.info("camera_initialized", width=resolution[0], height=resolution[1])
+def init_camera() -> None:
+    """Warm up the camera in preview+lores mode at startup."""
+    _ensure_camera()
+    logger.info(
+        "camera_initialized",
+        stream_size=STREAM_SIZE,
+        capture_size=DEFAULT_IMAGE_SIZE,
+    )
 
 
-def _ensure_camera(resolution: tuple[int, int]) -> "Picamera2":
-    """Return the singleton Picamera2 instance, reconfiguring only if the resolution changed."""
+def _ensure_camera() -> "Picamera2":
+    """Return the singleton Picamera2 instance, creating it if necessary.
+
+    The camera is always left running in preview configuration with a lores
+    stream so that stream_frames() can read continuously.  capture_image()
+    temporarily switches to still mode and then restores this config.
+    """
     if not _PICAMERA2_AVAILABLE:
         raise RuntimeError(
             "picamera2 is not installed. On Raspberry Pi run: uv sync --extra rpi"
         )
 
-    global _camera, _camera_resolution
-
-    if _camera is not None and _camera_resolution == resolution:
-        return _camera
+    global _camera, _preview_config
 
     if _camera is not None:
-        logger.info("camera_reconfiguring", new_resolution=resolution)
-        _camera.stop()
-        _camera.close()
+        return _camera
 
     cam = Picamera2()
-    config = cam.create_still_configuration(
-        main={"size": resolution},
-        controls={
-            # Match rpicam-still defaults for maximum sharpness.
-            # Sharpness=1.0 activates the IPA's sharpening algorithm.
-            # Setting it to 0 (as Arducam docs sometimes show) drops Laplacian
-            # score by ~15% and is the #1 cause of "params make it softer".
-            "Sharpness": _SHARPNESS,
-            # HighQuality NR for stills (rpicam-still default for still capture).
-            "NoiseReductionMode": 2,
-        },
+
+    _preview_config = cam.create_preview_configuration(
+        main={"size": DEFAULT_IMAGE_SIZE},
+        lores={"size": STREAM_SIZE},
     )
-    cam.configure(config)
-    cam.options["quality"] = 95  # JPEG quality; picamera2 default is lower
+    cam.configure(_preview_config)
+    cam.options["quality"] = 95
     cam.start()
 
     if _LOCK_EXPOSURE:
@@ -81,21 +93,51 @@ def _ensure_camera(resolution: tuple[int, int]) -> "Picamera2":
             "AnalogueGain": meta["AnalogueGain"],
             "ColourGains":  meta["ColourGains"],
         })
-        logger.info("exposure_locked",
-                    exposure_us=meta["ExposureTime"],
-                    gain=round(meta["AnalogueGain"], 2))
+        logger.info(
+            "exposure_locked",
+            exposure_us=meta["ExposureTime"],
+            gain=round(meta["AnalogueGain"], 2),
+        )
 
-    # Single-shot AF (AfMode=1) is correct for still capture.
-    # Continuous AF (AfMode=2) needs a fast preview stream to drive its algorithm;
-    # a still configuration doesn't supply enough frames, so the lens never moves.
-    # NEVER use AfMode=0 + LensPosition=0.0 unless shooting at true infinity —
-    # that is the biggest cause of soft picamera2 images.
+    # Single-shot AF for still captures.  Continuous AF (AfMode=2) requires a
+    # fast preview stream to run its algorithm — which we now have.
     if "AfMode" in cam.camera_controls:
         cam.set_controls({"AfMode": 1})
 
     _camera = cam
-    _camera_resolution = resolution
     return _camera
+
+
+def stream_frames():
+    """Yield raw JPEG bytes for each lores preview frame.
+
+    Acquires _camera_lock around each frame grab so that capture_image() can
+    take over the camera without racing.  The lock is released before yielding
+    so the HTTP layer can flush the frame to the client independently.
+    """
+    cam = _ensure_camera()
+    frame_interval = 1.0 / STREAM_FPS
+
+    while True:
+        start = time.monotonic()
+        frame_data = None
+
+        with _camera_lock:
+            try:
+                img = cam.capture_image("lores")
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=STREAM_QUALITY)
+                frame_data = buf.getvalue()
+            except Exception:
+                logger.warning("stream_frame_skipped")
+
+        if frame_data:
+            yield frame_data
+
+        elapsed = time.monotonic() - start
+        remaining = frame_interval - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
 
 
 def _laplacian_score(path: str) -> float:
@@ -112,25 +154,50 @@ def capture_image(
     resolution: tuple[int, int] = DEFAULT_IMAGE_SIZE,
     output_folder: Path = DEFAULT_CAPTURE_TMP_DIR,
 ) -> tuple[Path, CaptureMetrics]:
-    """Capture an image using picamera2 at the requested resolution.
+    """Capture a high-quality still image.
 
-    The camera is kept warm across requests — no subprocess spawn or
-    AGC/AWB settling delay on repeated calls.
-    For the ArduCam 64MP, (4624, 3472) uses the full sensor via 2x2 binning.
+    Workflow:
+      1. Acquire _camera_lock (stream_frames() releases it between frames).
+      2. Run autofocus in preview mode — more frames available than still mode.
+      3. Stop camera, reconfigure to still mode, restart.
+      4. Capture to file.
+      5. Stop camera, restore preview+lores config, restart.
+      6. Release lock so streaming resumes.
     """
+    cam = _ensure_camera()
     captured_at = datetime.now(timezone.utc).isoformat()
     output_image = output_folder / f"{int(time.time())}.jpg"
 
-    camera = _ensure_camera(resolution)
+    still_config = cam.create_still_configuration(
+        main={"size": resolution},
+        controls={
+            "Sharpness": _SHARPNESS,
+            "NoiseReductionMode": 2,
+        },
+    )
 
-    if "AfMode" in camera.camera_controls:
-        success = camera.autofocus_cycle()
-        if not success:
-            logger.warning("autofocus_failed", path=str(output_image))
+    with _camera_lock:
+        # AF while still in preview mode — lens converges faster with more frames.
+        if "AfMode" in cam.camera_controls:
+            success = cam.autofocus_cycle()
+            if not success:
+                logger.warning("autofocus_failed", path=str(output_image))
 
-    t0 = time.perf_counter()
-    camera.capture_file(str(output_image))
-    capture_duration_ms = (time.perf_counter() - t0) * 1000
+        # Switch to high-quality still mode.
+        cam.stop()
+        cam.configure(still_config)
+        cam.start()
+
+        t0 = time.perf_counter()
+        cam.capture_file(str(output_image))
+        capture_duration_ms = (time.perf_counter() - t0) * 1000
+
+        # Restore preview+lores mode so streaming can resume.
+        cam.stop()
+        cam.configure(_preview_config)
+        cam.start()
+        if "AfMode" in cam.camera_controls:
+            cam.set_controls({"AfMode": 1})
 
     sharpness = _laplacian_score(str(output_image))
     logger.info("capture_sharpness", score=sharpness, path=str(output_image))
