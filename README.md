@@ -1,6 +1,6 @@
 # visionX-rpi-capture
 
-A lightweight Flask API that captures images from a Raspberry Pi CSI camera (Arducam 64MP Hawkeye) and serves them over HTTP.
+A lightweight Flask API that captures images from a Raspberry Pi CSI camera and serves them over HTTP. Supports the Arducam 64MP Hawkeye and standard Pi Cameras (v2, v3, HQ).
 
 ---
 
@@ -9,9 +9,9 @@ A lightweight Flask API that captures images from a Raspberry Pi CSI camera (Ard
 | Requirement  | Detail                                                               |
 | ------------ | -------------------------------------------------------------------- |
 | **Hardware** | Raspberry Pi 5, 4B, 3B+, 3A+, Zero, Zero 2W, CM3/CM3+/CM4            |
-| **Camera**   | Arducam 64MP Hawkeye (connected via MIPI CSI-2)                      |
-| **OS**       | Raspberry Pi OS — Bullseye, Bookworm, or Trixie (64-bit recommended) |
-| **Internet** | Required during setup to download drivers                            |
+| **Camera**   | Arducam 64MP Hawkeye **or** standard Pi Camera v2 / v3 / HQ (MIPI CSI-2) |
+| **OS**       | Raspberry Pi OS — Bullseye, Bookworm, or Trixie (64-bit recommended)      |
+| **Internet** | Required during setup (Arducam: driver download; all: uv installer)        |
 
 ---
 
@@ -20,23 +20,21 @@ A lightweight Flask API that captures images from a Raspberry Pi CSI camera (Ard
 ```bash
 git clone https://github.com/bambooinnovations/visionx-rpi-capture.git
 cd visionx-rpi-capture
-sudo bash scripts/setup.sh
+make setup        # or: sudo bash scripts/setup.sh
 ```
 
 The script handles everything in one go:
 
 1. Detects your OS version and sets the correct boot config path
-2. Asks which CSI port the camera is connected to (CAM1 default, CAM0 optional)
-3. Downloads and runs the Arducam Pivariety driver installer
-4. Installs `libcamera_dev`, `libcamera_apps`, and the 64MP kernel driver
-5. Patches `/boot/config.txt` (or `/boot/firmware/config.txt`) with the camera overlay
-6. Installs `python3-libcamera` and `python3-kms++` via apt
-7. Installs [uv](https://docs.astral.sh/uv/) if not already present
-8. Creates a virtual environment with access to system site-packages
-9. Installs Python dependencies (including `picamera2`)
-10. Copies `.env.example` to `.env`
-11. Installs and enables the `rpi-capture` systemd service
-12. Prompts to reboot
+2. **Prompts for camera type** — Arducam 64MP Hawkeye or standard Pi Camera (v2, v3, HQ)
+3. *Arducam only:* asks which CSI port (CAM1 default, CAM0 optional), downloads and runs the Pivariety driver installer, installs `libcamera_dev` / `libcamera_apps` / the 64MP kernel driver, and patches the boot config with the camera overlay
+4. Installs `python3-libcamera` and `python3-kms++` via apt
+5. Installs [uv](https://docs.astral.sh/uv/) if not already present
+6. Creates a virtual environment with access to system site-packages
+7. Installs Python dependencies (including `picamera2`)
+8. Copies `.env.example` to `.env`
+9. Installs and enables the `rpi-capture` systemd service
+10. Prompts to reboot
 
 After rebooting, the `rpi-capture` service starts automatically.
 
@@ -111,16 +109,16 @@ Run `make help` to see all available targets:
 ### `scripts/setup.sh`
 
 ```bash
-sudo bash scripts/setup.sh   # or: sudo make setup
+make setup               # recommended
+sudo bash scripts/setup.sh   # alternative
 ```
 
 Complete one-command setup. Must be run as root. Installs camera drivers, the Python app environment, and the systemd service — then prompts to reboot. The service starts automatically after reboot.
 
 - Detects OS codename (Bullseye / Bookworm / Trixie) and selects the correct boot config path
-- Prompts for CSI port selection (CAM1 default, CAM0 for Pi 5 / CM4 dual-port boards)
-- Downloads and runs the Arducam Pivariety V4L2 driver installer
-- Installs `libcamera_dev`, `libcamera_apps`, `64mp_pi_hawk_eye_kernel_driver`
-- Appends `dtoverlay=arducam-64mp` (or `dtoverlay=arducam-64mp,cam0`) to the boot config
+- Prompts for camera type: **Arducam 64MP Hawkeye** or **standard Pi Camera** (v2, v3, HQ)
+- *Arducam only:* prompts for CSI port (CAM1 / CAM0), downloads and runs the Pivariety V4L2 driver installer, installs `libcamera_dev`, `libcamera_apps`, `64mp_pi_hawk_eye_kernel_driver`, and appends `dtoverlay=arducam-64mp` (or `dtoverlay=arducam-64mp,cam0`) to the boot config
+- *Standard Pi Camera:* no extra drivers — libcamera support is installed via apt
 - Installs `python3-libcamera` and `python3-kms++` system packages
 - Installs [uv](https://docs.astral.sh/uv/) and creates `.venv` with `--system-site-packages`
 - Runs uv, venv, and Python dependency installs as the invoking user (not root)
@@ -158,7 +156,9 @@ Useful when:
 
 ## Camera Port (CAM0 vs CAM1)
 
-Most Raspberry Pi boards have a single CSI connector labelled **CAM1**. The `install.sh` installer defaults to this port.
+Most Raspberry Pi boards have a single CSI connector labelled **CAM1**. The setup script defaults to this port.
+
+> **Applies to Arducam only.** Standard Pi Cameras (v2, v3, HQ) are detected automatically by libcamera — no port selection or overlay is required.
 
 | Port | Overlay written to `config.txt` | When to use                                          |
 | ---- | ------------------------------- | ---------------------------------------------------- |
@@ -178,7 +178,7 @@ visionx-rpi-capture/
 │   ├── lib/
 │   │   └── utils.sh        # Shared helpers: coloured logging, OS detection, root check
 │   ├── modules/
-│   │   └── camera.sh       # Arducam driver download, package install, config patching
+│   │   └── camera.sh       # Camera type selection; Arducam driver install + config patching
 │   ├── setup.sh            # Complete setup: camera drivers + app + systemd (run as root)
 │   ├── start.sh            # Production server startup (Gunicorn)
 │   └── calibrate.sh        # Live camera preview for lens calibration
