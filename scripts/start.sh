@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 # Start the visionx-rpi-capture server in production mode via gunicorn.
+# Called by systemd (ExecStart) and can also be run manually for debugging.
 #
-# Usage:
-#   ./scripts/start.sh            # foreground (logs to stdout)
-#   ./scripts/start.sh --bg       # background (logs to logs/capture.log)
-#   ./scripts/start.sh --stop     # stop the background server
+# Usage: ./scripts/start.sh
 
 set -euo pipefail
-
-# Ensure uv is on PATH (systemd doesn't load shell profiles).
-export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 
 # Resolve the project root regardless of where the script is called from.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,39 +12,22 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
-LOG_DIR="$PROJECT_ROOT/logs"
-LOG_FILE="$LOG_DIR/capture.log"
-PID_FILE="$PROJECT_ROOT/.gunicorn.pid"
-
-if [ "${1:-}" = "--stop" ]; then
-    if [ -f "$PID_FILE" ]; then
-        kill "$(cat "$PID_FILE")" 2>/dev/null && echo "Server stopped." || echo "Server not running."
-        rm -f "$PID_FILE"
+# ── Locate uv ─────────────────────────────────────────────────────────────────
+# setup.sh symlinks uv to /usr/local/bin/uv, which is always on PATH.
+# If that symlink is absent (manual install or different setup), fall back to
+# the standard user install location and add it to PATH explicitly.
+if ! command -v uv &>/dev/null; then
+    if [ -x "$HOME/.local/bin/uv" ]; then
+        export PATH="$HOME/.local/bin:$PATH"
     else
-        echo "No PID file found. Server may not be running."
+        echo "ERROR: uv not found."
+        echo "  Run 'sudo bash scripts/setup.sh' to complete setup, or install uv manually:"
+        echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
+        exit 1
     fi
-    exit 0
 fi
 
-if [ "${1:-}" = "--bg" ]; then
-    mkdir -p "$LOG_DIR"
-    echo "Starting visionx-rpi-capture (background)..."
-    echo "  PID file: $PID_FILE"
-    echo "  Log file: $LOG_FILE"
-    env ENV=prod uv run gunicorn \
-        --bind 0.0.0.0:8080 \
-        --workers 1 \
-        --timeout 120 \
-        --pid "$PID_FILE" \
-        --access-logfile "$LOG_FILE" \
-        --error-logfile "$LOG_FILE" \
-        --daemon \
-        "app:app"
-    echo "Server started (PID: $(cat "$PID_FILE"))."
-    exit 0
-fi
-
-echo "Starting visionx-rpi-capture (foreground)..."
+echo "Starting visionx-rpi-capture..."
 exec env ENV=prod uv run gunicorn \
     --bind 0.0.0.0:8080 \
     --workers 1 \
