@@ -1,9 +1,10 @@
-import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-METRICS_DB_PATH = Path(os.environ.get("METRICS_DB_PATH", "/tmp/visionx_metrics.db"))
+import config
+
+METRICS_DB_PATH: Path = config.METRICS_DB_PATH
 
 
 @dataclass

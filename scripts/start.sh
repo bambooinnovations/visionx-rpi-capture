@@ -28,9 +28,10 @@ if ! command -v uv &>/dev/null; then
 fi
 
 echo "Starting visionx-rpi-capture..."
-exec env ENV=prod uv run gunicorn \
+exec uv run gunicorn \
     --bind 0.0.0.0:8080 \
     --workers 1 \
-    --worker-class gevent \
+    --worker-class gthread \
+    --threads 4 \
     --timeout 120 \
     "app:app"

@@ -1,0 +1,59 @@
+# configuration.toml — visionX-rpi-capture
+
+# Runtime environment.
+# "dev"  — coloured human-readable console logs
+# "prod" — structured JSON logs (one line per event)
+[server]
+env = "dev"
+
+# ISP and exposure settings.
+[camera]
+sharpness = 1.0        # ISP sharpness multiplier; 0 = off, 1.0 = IPA default
+lock_exposure = false  # Lock AE/AWB after startup — set true for stable rig lighting
+
+# Live preview stream (GET /rpi/stream).
+[stream]
+fps = 15       # Max frames per second
+quality = 60   # JPEG quality 1–95; lower = smaller frames / more bandwidth tolerance
+
+# Per-request temporary files created during capture.
+[capture]
+tmp_dir = "/tmp/visionx_captures"
+
+# SQLite capture-metrics database.
+# Change to a persistent path (e.g. "./data/metrics.db") to retain data across restarts.
+[metrics]
+db_path = "/tmp/visionx_metrics.db"
+
+# Background task that removes stale capture temp directories.
+[cleanup]
+interval_seconds = 300   # How often the cleanup task runs
+max_age_seconds  = 300   # Minimum age before a temp directory is deleted
+
+# ─── Camera profiles ──────────────────────────────────────────────────────────
+# Model names match cam.camera_properties["Model"] reported by picamera2.
+# Cameras not listed here fall back to auto-detection (largest full-sensor mode).
+#
+# capture_size = [width, height]  default still-capture resolution
+# stream_size  = [width, height]  preview stream output resolution;
+#                                 should match the sensor's native aspect ratio
+
+[camera_profiles.arducam_64mp]
+capture_size = [4624, 3472]   # 16MP 2x2 binned full-sensor mode, 10fps
+stream_size  = [1280, 960]    # 4:3
+
+[camera_profiles.imx477]
+capture_size = [4056, 3040]   # 12MP full-sensor, Raspberry Pi HQ Camera
+stream_size  = [1280, 960]    # 4:3
+
+[camera_profiles.imx708]
+capture_size = [4608, 2592]   # 12MP full-sensor, Raspberry Pi Camera Module 3
+stream_size  = [1280, 720]    # 16:9 — native sensor aspect ratio
+
+[camera_profiles.imx219]
+capture_size = [3280, 2464]   # 8MP full-sensor, Raspberry Pi Camera Module v2
+stream_size  = [1280, 960]    # 4:3
+
+[camera_profiles.ov5647]
+capture_size = [2592, 1944]   # 5MP full-sensor, Raspberry Pi Camera Module v1
+stream_size  = [1280, 960]    # 4:3

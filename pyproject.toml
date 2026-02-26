@@ -10,7 +10,6 @@ dependencies = [
     "gevent>=24.2.1",
     "gunicorn>=25.0.3",
     "structlog>=25.5.0",
-    "python-dotenv>=1.1.0",
 ]
 
 [project.optional-dependencies]

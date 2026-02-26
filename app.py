@@ -1,22 +1,20 @@
-import os
 import shutil
 import tempfile
 import threading
 from pathlib import Path
 
 import structlog
-from dotenv import load_dotenv
 
-load_dotenv()
-from flask import Flask, Response, after_this_request, jsonify, request, send_file
-from flask_cors import CORS
-
-from imageCapture import DEFAULT_IMAGE_SIZE, capture_image, init_camera, stream_frames
+import config
+from imageCapture import capture_image, init_camera, stream_frames
 from log_config import configure_logging
 from metrics import get_stats, init_db, record_capture
 from tasks import CAPTURE_TMP_DIR, start_cleanup_task
 
-configure_logging(env=os.environ.get("ENV", "dev"))
+from flask import Flask, Response, after_this_request, jsonify, request, send_file
+from flask_cors import CORS
+
+configure_logging(env=config.ENV)
 logger = structlog.get_logger()
 
 app = Flask(__name__)
@@ -77,10 +75,8 @@ def capture():
         if width is not None and (width <= 0 or height <= 0):
             return jsonify({"error": "width and height must be positive integers"}), 400
 
-        # Ensure target_resolution is a tuple[int, int] (width/height may be Optional[int])
-        w = width if width is not None else DEFAULT_IMAGE_SIZE[0]
-        h = height if height is not None else DEFAULT_IMAGE_SIZE[1]
-        target_resolution = (w, h)
+        # None → capture_image() uses the profile / auto-detected resolution.
+        target_resolution = (width, height) if width is not None else None
 
         CAPTURE_TMP_DIR.mkdir(parents=True, exist_ok=True)
         tmp_path = Path(tempfile.mkdtemp(dir=CAPTURE_TMP_DIR))
@@ -104,7 +100,7 @@ def capture():
             shutil.rmtree(tmp_path, ignore_errors=True)
             return response
 
-        logger.info("image_captured", width=w, height=h, file=image_path.name)
+        logger.info("image_captured", resolution=target_resolution, file=image_path.name)
         return send_file(image_path)
     finally:
         capture_lock.release()
