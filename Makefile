@@ -1,4 +1,4 @@
-.PHONY: help setup start stop restart status logs calibrate verify clean
+.PHONY: help setup start stop restart status logs dev calibrate verify clean
 
 SERVICE_NAME := rpi-capture
 SERVICE_FILE := /etc/systemd/system/$(SERVICE_NAME).service
@@ -34,6 +34,10 @@ status: ## Check server status
 
 logs: ## Tail server logs
 	journalctl -u $(SERVICE_NAME) -f
+
+dev: ## Run dev server in foreground with auto-reload (stops systemd service if running)
+	@sudo systemctl stop $(SERVICE_NAME) 2>/dev/null || true
+	@bash scripts/dev.sh
 
 # ---------- Utilities ----------
 

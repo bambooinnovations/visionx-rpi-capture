@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
-# Start the visionx-rpi-capture server in production mode via gunicorn.
-# Called by systemd (ExecStart) and can also be run manually for debugging.
+# Start the development server in the foreground.
+# Uses Flask's built-in server with auto-reload on code changes.
+# NOT for production — use scripts/start.sh (or make start) for that.
 #
-# Usage: ./scripts/start.sh
+# Usage: ./scripts/dev.sh
 
 set -euo pipefail
 
-# Resolve the project root regardless of where the script is called from.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
 # ── Locate uv ─────────────────────────────────────────────────────────────────
-# setup.sh symlinks uv to /usr/local/bin/uv, which is always on PATH.
-# If that symlink is absent (manual install or different setup), fall back to
-# the standard user install location and add it to PATH explicitly.
 if ! command -v uv &>/dev/null; then
     if [ -x "$HOME/.local/bin/uv" ]; then
         export PATH="$HOME/.local/bin:$PATH"
@@ -27,11 +24,10 @@ if ! command -v uv &>/dev/null; then
     fi
 fi
 
-echo "Starting visionx-rpi-capture..."
-exec uv run gunicorn \
-    --bind 0.0.0.0:8080 \
-    --workers 1 \
-    --worker-class gthread \
-    --threads 4 \
-    --timeout 120 \
-    "app:app"
+echo "Starting visionx-rpi-capture (dev mode) — Ctrl+C to stop"
+exec uv run flask --app app run \
+    --host 0.0.0.0 \
+    --port 8080 \
+    --debug \
+    --no-reload \
+    --with-threads
