@@ -40,7 +40,7 @@ max_age_seconds  = 300   # Minimum age before a temp directory is deleted
 
 [camera_profiles.arducam_64mp]
 capture_size = [4624, 3472]   # 16MP 2x2 binned full-sensor mode, 10fps
-stream_size  = [1280, 960]    # 4:3
+stream_size  = [2312, 1736]   # full-sensor 30fps native mode
 
 [camera_profiles.imx477]
 capture_size = [4056, 3040]   # 12MP full-sensor, Raspberry Pi HQ Camera
