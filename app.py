@@ -85,6 +85,10 @@ def capture():
                 resolution=target_resolution,
                 output_folder=tmp_path,
             )
+        except RuntimeError as e:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            logger.warning("capture_no_camera", reason=str(e))
+            return jsonify({"error": "No camera detected"}), 503
         except Exception:
             shutil.rmtree(tmp_path, ignore_errors=True)
             logger.exception("capture_failed")
