@@ -10,9 +10,8 @@
 #   4. Installs system packages (python3-libcamera, python3-kms++)
 #   5. Installs uv (if not present) and creates a virtual environment
 #   6. Installs Python dependencies
-#   7. Copies .env.example → .env
-#   8. Installs and enables the rpi-capture systemd service
-#   9. Prompts to reboot (the service starts automatically after reboot)
+#   7. Installs and enables the rpi-capture systemd service
+#   8. Prompts to reboot (the service starts automatically after reboot)
 
 set -euo pipefail
 
@@ -87,16 +86,6 @@ _setup_app() {
     else
         log ERROR "picamera2 import failed. Check that the camera is enabled in raspi-config."
         exit 1
-    fi
-
-    if [ ! -f "$PROJECT_ROOT/.env" ]; then
-        echo ""
-        log INFO "Copying .env.example to .env..."
-        as_user cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
-        log SUCCESS "Created .env — edit to configure: nano $PROJECT_ROOT/.env"
-    else
-        echo ""
-        log INFO ".env already exists, skipping."
     fi
 
     echo ""
