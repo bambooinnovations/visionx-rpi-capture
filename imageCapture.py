@@ -108,7 +108,10 @@ def _ensure_camera() -> "Picamera2":
     if _camera is not None:
         return _camera
 
-    cam = Picamera2()
+    try:
+        cam = Picamera2()
+    except (IndexError, RuntimeError) as exc:
+        raise RuntimeError(f"No camera detected: {exc}") from exc
 
     # Resolve stream size: camera profile → default (1280x960).
     model = cam.camera_properties.get("Model", "")
@@ -171,11 +174,19 @@ def stream_frames():
     Acquires _camera_lock around each frame grab so that capture_image() can
     take over the camera without racing.  The lock is released before yielding
     so the HTTP layer can flush the frame to the client independently.
+
+    If no camera is connected the generator waits and retries until one appears.
     """
-    cam = _ensure_camera()
     frame_interval = 1.0 / config.STREAM_FPS
 
     while True:
+        try:
+            cam = _ensure_camera()
+        except RuntimeError:
+            logger.warning("stream_waiting_for_camera")
+            time.sleep(2)
+            continue
+
         start = time.monotonic()
         frame_data = None
 
