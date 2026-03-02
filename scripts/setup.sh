@@ -53,7 +53,7 @@ _setup_app() {
     echo ""
     log INFO "Installing system dependencies..."
     apt update
-    apt install -y python3-libcamera python3-kms++
+    apt install -y python3-libcamera python3-kms++ libcap-dev
     log SUCCESS "System dependencies ready."
 
     echo ""
