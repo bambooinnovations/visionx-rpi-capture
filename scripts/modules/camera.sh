@@ -139,7 +139,11 @@ setup_camera() {
         _download_installer
         _install_pkg "libcamera_dev"
         _install_pkg "libcamera_apps"
-        _install_pkg "64mp_pi_hawk_eye_kernel_driver"
+        if [[ -f "/boot/firmware/overlays/arducam-64mp.dtbo" ]]; then
+            log SUCCESS "Arducam 64MP kernel driver already present — skipping."
+        else
+            _install_pkg "64mp_pi_hawk_eye_kernel_driver"
+        fi
         _patch_config
     else
         log INFO "Standard Pi Camera selected — no extra drivers required."
