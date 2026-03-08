@@ -4,14 +4,15 @@
 #
 # This script:
 #   1. Detects OS version and sets the correct boot config path
-#   2. Prompts for camera type (Arducam 64MP or standard Pi Camera)
-#   3. Arducam only: prompts for CSI port, downloads and installs drivers,
+#   2. Installs Caddy internal CA certs (system CA store + Chrome NSS)
+#   3. Prompts for camera type (Arducam 64MP or standard Pi Camera)
+#   4. Arducam only: prompts for CSI port, downloads and installs drivers,
 #      patches the boot config with the camera overlay
-#   4. Installs system packages (python3-libcamera, python3-kms++)
-#   5. Installs uv (if not present) and creates a virtual environment
-#   6. Installs Python dependencies
-#   7. Installs and enables the rpi-capture systemd service
-#   8. Prompts to reboot (the service starts automatically after reboot)
+#   5. Installs system packages (python3-libcamera, python3-kms++)
+#   6. Installs uv (if not present) and creates a virtual environment
+#   7. Installs Python dependencies
+#   8. Installs and enables the rpi-capture systemd service
+#   9. Prompts to reboot (the service starts automatically after reboot)
 
 set -euo pipefail
 
