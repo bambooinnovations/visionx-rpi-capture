@@ -26,15 +26,16 @@ make setup        # or: sudo bash scripts/setup.sh
 The script handles everything in one go:
 
 1. Detects your OS version and sets the correct boot config path
-2. **Prompts for camera type** — Arducam 64MP Hawkeye or standard Pi Camera (v2, v3, HQ)
-3. *Arducam only:* asks which CSI port (CAM1 default, CAM0 optional), downloads and runs the Pivariety driver installer, installs `libcamera_dev` / `libcamera_apps` / the 64MP kernel driver, and patches the boot config with the camera overlay
-4. Installs `python3-libcamera` and `python3-kms++` via apt
-5. Installs [uv](https://docs.astral.sh/uv/) if not already present
-6. Creates a virtual environment with access to system site-packages
-7. Installs Python dependencies (including `picamera2`)
-8. Copies `.env.example` to `.env`
-9. Installs and enables the `rpi-capture` systemd service
-10. Prompts to reboot
+2. **Installs TLS certificates** — downloads the Caddy internal CA root and intermediate certs, adds them to the system CA store and Chrome/Chromium's NSS database (restarts Chrome if running)
+3. **Prompts for camera type** — Arducam 64MP Hawkeye or standard Pi Camera (v2, v3, HQ)
+4. *Arducam only:* asks which CSI port (CAM1 default, CAM0 optional), downloads and runs the Pivariety driver installer, installs `libcamera_dev` / `libcamera_apps` / the 64MP kernel driver, and patches the boot config with the camera overlay
+5. Installs `python3-libcamera` and `python3-kms++` via apt
+6. Installs [uv](https://docs.astral.sh/uv/) if not already present
+7. Creates a virtual environment with access to system site-packages
+8. Installs Python dependencies (including `picamera2`)
+9. Copies `.env.example` to `.env`
+10. Installs and enables the `rpi-capture` systemd service
+11. Prompts to reboot
 
 After rebooting, the `rpi-capture` service starts automatically.
 
@@ -116,6 +117,7 @@ sudo bash scripts/setup.sh   # alternative
 Complete one-command setup. Must be run as root. Installs camera drivers, the Python app environment, and the systemd service — then prompts to reboot. The service starts automatically after reboot.
 
 - Detects OS codename (Bullseye / Bookworm / Trixie) and selects the correct boot config path
+- Installs Caddy internal CA certificates to the system trust store and Chrome/Chromium NSS database
 - Prompts for camera type: **Arducam 64MP Hawkeye** or **standard Pi Camera** (v2, v3, HQ)
 - *Arducam only:* prompts for CSI port (CAM1 / CAM0), downloads and runs the Pivariety V4L2 driver installer, installs `libcamera_dev`, `libcamera_apps`, `64mp_pi_hawk_eye_kernel_driver`, and appends `dtoverlay=arducam-64mp` (or `dtoverlay=arducam-64mp,cam0`) to the boot config
 - *Standard Pi Camera:* no extra drivers — libcamera support is installed via apt
@@ -178,7 +180,8 @@ visionx-rpi-capture/
 │   ├── lib/
 │   │   └── utils.sh        # Shared helpers: coloured logging, OS detection, root check
 │   ├── modules/
-│   │   └── camera.sh       # Camera type selection; Arducam driver install + config patching
+│   │   ├── camera.sh       # Camera type selection; Arducam driver install + config patching
+│   │   └── certs.sh        # TLS certificate installation (system CA store + Chrome NSS)
 │   ├── setup.sh            # Complete setup: camera drivers + app + systemd (run as root)
 │   ├── start.sh            # Production server startup (Gunicorn)
 │   └── calibrate.sh        # Live camera preview for lens calibration
