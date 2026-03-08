@@ -22,6 +22,8 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/lib/utils.sh"
 # shellcheck source=modules/camera.sh
 source "$SCRIPT_DIR/modules/camera.sh"
+# shellcheck source=modules/certs.sh
+source "$SCRIPT_DIR/modules/certs.sh"
 
 # ── User context ──────────────────────────────────────────────────────────────
 # Detect the real (non-root) user who invoked sudo, so that uv, venv, and
@@ -148,6 +150,7 @@ main() {
 
     check_root
     detect_os
+    setup_certs
     setup_camera
     _setup_app
     _prompt_reboot
