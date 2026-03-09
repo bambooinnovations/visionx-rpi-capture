@@ -1,43 +1,36 @@
-# visionX-rpi-capture
+# rpi-capture-api
 
-A lightweight Flask API that captures images from a Raspberry Pi CSI camera and serves them over HTTP. Supports the Arducam 64MP Hawkeye and standard Pi Cameras (v2, v3, HQ).
-
----
+Flask API that captures images from a Raspberry Pi CSI camera and serves them over HTTP on port **8080**. Supports the Arducam 64MP Hawkeye and standard Pi Cameras (v2, v3, HQ).
 
 ## Requirements
 
-| Requirement  | Detail                                                               |
-| ------------ | -------------------------------------------------------------------- |
-| **Hardware** | Raspberry Pi 5, 4B, 3B+, 3A+, Zero, Zero 2W, CM3/CM3+/CM4            |
+| Requirement  | Detail                                                                    |
+| ------------ | ------------------------------------------------------------------------- |
+| **Hardware** | Raspberry Pi 5, 4B, 3B+, 3A+, Zero, Zero 2W, CM3/CM3+/CM4               |
 | **Camera**   | Arducam 64MP Hawkeye **or** standard Pi Camera v2 / v3 / HQ (MIPI CSI-2) |
 | **OS**       | Raspberry Pi OS — Bullseye, Bookworm, or Trixie (64-bit recommended)      |
-| **Internet** | Required during setup (Arducam: driver download; all: uv installer)        |
-
----
+| **Internet** | Required during setup (driver downloads, uv installer, TLS certificates)  |
 
 ## Installation
 
 ```bash
-git clone https://github.com/bambooinnovations/visionx-rpi-capture.git
-cd visionx-rpi-capture
+cd rpi-capture-api
 make setup        # or: sudo bash scripts/setup.sh
 ```
 
-The script handles everything in one go:
+The setup script handles everything in one run:
 
-1. Detects your OS version and sets the correct boot config path
-2. **Installs TLS certificates** — downloads the Caddy internal CA root and intermediate certs, adds them to the system CA store and Chrome/Chromium's NSS database (restarts Chrome if running)
-3. **Prompts for camera type** — Arducam 64MP Hawkeye or standard Pi Camera (v2, v3, HQ)
-4. *Arducam only:* asks which CSI port (CAM1 default, CAM0 optional), downloads and runs the Pivariety driver installer, installs `libcamera_dev` / `libcamera_apps` / the 64MP kernel driver, and patches the boot config with the camera overlay
-5. Installs `python3-libcamera` and `python3-kms++` via apt
-6. Installs [uv](https://docs.astral.sh/uv/) if not already present
-7. Creates a virtual environment with access to system site-packages
-8. Installs Python dependencies (including `picamera2`)
-9. Copies `.env.example` to `.env`
-10. Installs and enables the `rpi-capture` systemd service
-11. Prompts to reboot
+1. Detects OS version and sets the correct boot config path
+2. Installs TLS certificates (see [TLS Certificates](#tls-certificates) below)
+3. Prompts for camera type — Arducam 64MP Hawkeye or standard Pi Camera
+4. *Arducam only:* prompts for CSI port, downloads Pivariety drivers, patches boot config
+5. Installs system packages (`python3-libcamera`, `python3-kms++`, `libcap-dev`)
+6. Installs [uv](https://docs.astral.sh/uv/) and creates a venv with system site-packages
+7. Installs Python dependencies (including `picamera2`)
+8. Installs and enables the `rpi-capture` systemd service
+9. Prompts to reboot
 
-After rebooting, the `rpi-capture` service starts automatically.
+After reboot the service starts automatically.
 
 ### Verify
 
@@ -46,171 +39,183 @@ curl http://localhost:8080/health
 curl -X POST http://localhost:8080/rpi/capture --output test.jpg
 ```
 
----
+## TLS Certificates
+
+The platform frontend is served over HTTPS by a Caddy reverse proxy that uses an internal CA. For the Raspberry Pi's browser (Chromium) and system tools (`curl`, `wget`, Python `requests`) to trust this CA, the setup script installs the root and intermediate certificates.
+
+### What the setup does
+
+The cert module (`scripts/modules/certs.sh`) runs automatically as part of `make setup`:
+
+1. **Downloads** the Caddy internal CA root and intermediate certificates from the [certs repo](https://github.com/bambooinnovations/certs)
+2. **System CA store** — copies both certs to `/usr/local/share/ca-certificates/` and runs `update-ca-certificates`, so `curl`, `wget`, Python, and other tools that use the system trust store will accept the platform's TLS certificate
+3. **Chrome/Chromium NSS database** — installs `libnss3-tools` (if needed) and adds both certs to the NSS database (`~/.pki/nssdb`) for **every user** on the system (root + all UID >= 1000). If Chrome is running for a user it is restarted so the new certs take effect
+4. **Verifies** the root cert against the system CA store
+
+### Manual re-run
+
+To re-install certificates without running the full setup:
+
+```bash
+sudo bash -c '
+  source scripts/lib/utils.sh
+  source scripts/modules/certs.sh
+  setup_certs
+'
+```
+
+### DNS setup
+
+Each Pi needs host entries pointing to the server running Caddy. Edit `/etc/hosts`:
+
+```
+server_ip visionxai.com api.visionxai.com
+```
+
+Replace the IP with your actual server address.
+
+### Verifying certificates
+
+After setup (or after a manual re-run), verify the certs are installed correctly:
+
+```bash
+# System trust store — should complete without SSL errors
+curl https://visionxai.com
+
+# Chromium NSS database — look for "Caddy VisionX Root" with trust flags "C,,"
+certutil -d sql:$HOME/.pki/nssdb -L
+
+# If Chromium was open during cert install, restart it to pick up the new certs
+pkill -f chromium
+```
+
+### Troubleshooting
+
+| Symptom | Fix |
+| ------- | --- |
+| `curl: (60) SSL certificate problem` | Certs not in system store — re-run setup or the manual command above |
+| Chromium shows "Not Secure" / cert warning | NSS certs missing for your user — re-run setup (installs for all users) |
+| `certutil: command not found` | `sudo apt install libnss3-tools` |
+| Caddy regenerated its CA (e.g. after deleting `caddy/pki/`) | The old certs are invalid — re-run setup to fetch and install the new ones |
 
 ## API Endpoints
 
-| Method | Path             | Description                                                               |
-| ------ | ---------------- | ------------------------------------------------------------------------- |
-| GET    | `/health`        | Health check — returns `{"status": "ok"}`                                 |
-| POST   | `/rpi/capture`   | Capture and return an image (JPEG)                                        |
-| GET    | `/metrics/stats` | Aggregate capture performance stats (durations, sizes, compression ratio) |
+| Method | Path             | Description                                         |
+| ------ | ---------------- | --------------------------------------------------- |
+| GET    | `/health`        | Health check — `{"status": "ok"}`                   |
+| POST   | `/rpi/capture`   | Capture and return an image (JPEG)                  |
+| GET    | `/rpi/stream`    | MJPEG live preview stream                           |
+| GET    | `/metrics/stats` | Capture performance stats (durations, sizes, ratio) |
 
 ### `POST /rpi/capture`
 
-Optional query parameters to override the capture resolution:
+Optional query parameters to override capture resolution:
 
 | Parameter | Type | Description             |
 | --------- | ---- | ----------------------- |
 | `width`   | int  | Output width in pixels  |
 | `height`  | int  | Output height in pixels |
 
-Both `width` and `height` must be provided together. Defaults to `4624×3472` (full-sensor 2×2 binned mode).
+Both must be provided together. Defaults to the camera profile's `capture_size` (e.g. `4624×3472` for Arducam 64MP).
 
-Returns `400` if only one dimension is provided, `429` if a capture is already in progress, and `500` on camera error.
+Returns `400` if only one dimension is provided, `429` if a capture is already in progress, `503` if no camera is detected.
 
----
+### `GET /rpi/stream`
+
+Returns a continuous MJPEG stream. Frame rate and JPEG quality are configured in `configuration.toml` under `[stream]`.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and adjust as needed (`make setup` does this automatically).
+All settings live in `configuration.toml`:
 
-| Variable                   | Default                    | Description                                                                                                                                              |
-| -------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ENV`                      | `dev`                      | Log format: `dev` = coloured console, `prod` = JSON                                                                                                      |
-| `CAPTURE_TMP_DIR`          | `/tmp/visionx_captures`    | Directory for temporary per-request capture files                                                                                                        |
-| `CLEANUP_INTERVAL_SECONDS` | `300`                      | How often (seconds) the background cleanup task runs                                                                                                     |
-| `MAX_AGE_SECONDS`          | `300`                      | Minimum age (seconds) of a temp dir before the cleanup task removes it                                                                                   |
-| `METRICS_DB_PATH`          | `/data/visionx_metrics.db` | Path to the SQLite database for capture performance metrics                                                                                              |
-| `CAMERA_SHARPNESS`         | `1.0`                      | ISP sharpness multiplier. Set to `0` for ML defect detection pipelines (disables IPA unsharp mask to avoid artificial edge halos)                        |
-| `LOCK_EXPOSURE`            | `false`                    | Set to `true` to lock AE/AWB after a 2 s settle at startup. Keeps exposure and colour temperature constant across captures for consistent defect scoring |
+```toml
+[server]
+env = "dev"                # "dev" = coloured console logs, "prod" = JSON
 
----
+[camera]
+sharpness = 1.0            # ISP sharpness; 0 = off (recommended for ML pipelines)
+lock_exposure = false       # Lock AE/AWB after startup for consistent captures
+
+[stream]
+fps = 15                   # Max MJPEG stream frame rate
+quality = 60               # JPEG quality 1–95
+
+[capture]
+tmp_dir = "/tmp/visionx_captures"
+
+[metrics]
+db_path = "/tmp/visionx_metrics.db"
+
+[cleanup]
+interval_seconds = 300     # How often stale temp dirs are cleaned up
+max_age_seconds  = 300     # Minimum age before removal
+```
+
+Camera-specific capture and stream resolutions are defined under `[camera_profiles.*]` — see the file for per-model defaults.
 
 ## Make Targets
 
-Run `make help` to see all available targets:
-
-| Command          | Description                                                   |
-| ---------------- | ------------------------------------------------------------- |
-| `make setup`     | Full setup: camera drivers + app + systemd service (sudo)     |
-| `make start`     | Start the server (via systemd)                                |
-| `make stop`      | Stop the server                                               |
-| `make restart`   | Restart the server                                            |
-| `make status`    | Check server status                                           |
-| `make logs`      | Tail server logs                                              |
-| `make calibrate` | Live camera preview for lens calibration (stops server first) |
-| `make verify`    | Verify picamera2 is working                                   |
-| `make clean`     | Remove venv, logs, and pid file                               |
-
----
-
-## Scripts Reference
-
-### `scripts/setup.sh`
-
-```bash
-make setup               # recommended
-sudo bash scripts/setup.sh   # alternative
-```
-
-Complete one-command setup. Must be run as root. Installs camera drivers, the Python app environment, and the systemd service — then prompts to reboot. The service starts automatically after reboot.
-
-- Detects OS codename (Bullseye / Bookworm / Trixie) and selects the correct boot config path
-- Installs Caddy internal CA certificates to the system trust store and Chrome/Chromium NSS database
-- Prompts for camera type: **Arducam 64MP Hawkeye** or **standard Pi Camera** (v2, v3, HQ)
-- *Arducam only:* prompts for CSI port (CAM1 / CAM0), downloads and runs the Pivariety V4L2 driver installer, installs `libcamera_dev`, `libcamera_apps`, `64mp_pi_hawk_eye_kernel_driver`, and appends `dtoverlay=arducam-64mp` (or `dtoverlay=arducam-64mp,cam0`) to the boot config
-- *Standard Pi Camera:* no extra drivers — libcamera support is installed via apt
-- Installs `python3-libcamera` and `python3-kms++` system packages
-- Installs [uv](https://docs.astral.sh/uv/) and creates `.venv` with `--system-site-packages`
-- Runs uv, venv, and Python dependency installs as the invoking user (not root)
-- Copies `.env.example` → `.env` if `.env` does not exist
-- Writes and enables `/etc/systemd/system/rpi-capture.service`
-- Safe to re-run — skips steps already completed
-
-### `scripts/start.sh`
-
-```bash
-./scripts/start.sh   # foreground (logs to stdout)
-```
-
-Starts the Flask app via Gunicorn. Used directly by the systemd service. Logs stream to stdout, which systemd captures via `journalctl -u rpi-capture`.
-
-### `scripts/calibrate.sh`
-
-```bash
-./scripts/calibrate.sh   # or: make calibrate
-```
-
-Opens a live camera preview using `rpicam-vid` for physically positioning and focusing the lens. The server must be stopped before running this — libcamera only allows one process to access the camera at a time (`make calibrate` handles stop/restart automatically).
-
-- Preview runs at 2312×1736, which matches the full-sensor field of view of the default capture resolution (4624×3472)
-- Press `Ctrl+C` to stop the preview
-- Requires `rpicam-apps` (pre-installed on Raspberry Pi OS; if missing: `sudo apt install rpicam-apps`)
-
-Useful when:
-
-- Setting up a new Pi with the camera for the first time
-- Repositioning the camera or changing the mounting distance
-- Verifying field of view and framing before capturing
-
----
+| Command          | Description                                               |
+| ---------------- | --------------------------------------------------------- |
+| `make setup`     | Full setup: certs + camera drivers + app + systemd (sudo) |
+| `make dev`       | Dev server with auto-reload (stops systemd service first) |
+| `make start`     | Start the server (via systemd)                            |
+| `make stop`      | Stop the server                                           |
+| `make restart`   | Restart the server                                        |
+| `make status`    | Check server status                                       |
+| `make logs`      | Tail server logs                                          |
+| `make calibrate` | Live camera preview for lens calibration                  |
+| `make verify`    | Verify picamera2 is working                               |
+| `make clean`     | Remove venv, logs, and pid file                           |
 
 ## Camera Port (CAM0 vs CAM1)
 
-Most Raspberry Pi boards have a single CSI connector labelled **CAM1**. The setup script defaults to this port.
+> Applies to Arducam only. Standard Pi Cameras are detected automatically — no port selection needed.
 
-> **Applies to Arducam only.** Standard Pi Cameras (v2, v3, HQ) are detected automatically by libcamera — no port selection or overlay is required.
+| Port | Overlay in `config.txt`          | When to use                                     |
+| ---- | -------------------------------- | ----------------------------------------------- |
+| CAM1 | `dtoverlay=arducam-64mp`         | Single CSI connector (default)                  |
+| CAM0 | `dtoverlay=arducam-64mp,cam0`    | Dual-port boards: Raspberry Pi 5, CM4 carriers  |
 
-| Port | Overlay written to `config.txt` | When to use                                          |
-| ---- | ------------------------------- | ---------------------------------------------------- |
-| CAM1 | `dtoverlay=arducam-64mp`        | Standard setup — single CSI connector (default)      |
-| CAM0 | `dtoverlay=arducam-64mp,cam0`   | Dual-port boards: Raspberry Pi 5, CM4 carrier boards |
-
-> To change the port after installation, edit the `dtoverlay` line in `/boot/firmware/config.txt` (Bookworm/Trixie) or `/boot/config.txt` (Bullseye) and reboot.
-
----
+To change after installation, edit the `dtoverlay` line in `/boot/firmware/config.txt` (Bookworm/Trixie) or `/boot/config.txt` (Bullseye) and reboot.
 
 ## Project Structure
 
 ```
-visionx-rpi-capture/
-├── Makefile                # All commands: setup, start, stop, logs, calibrate, etc.
+rpi-capture-api/
+├── Makefile                # All commands: setup, start, stop, dev, logs, calibrate
+├── configuration.toml      # Runtime config (camera, stream, capture, metrics)
 ├── scripts/
 │   ├── lib/
-│   │   └── utils.sh        # Shared helpers: coloured logging, OS detection, root check
+│   │   └── utils.sh        # Shared helpers: logging, OS detection, root check
 │   ├── modules/
-│   │   ├── camera.sh       # Camera type selection; Arducam driver install + config patching
-│   │   └── certs.sh        # TLS certificate installation (system CA store + Chrome NSS)
-│   ├── setup.sh            # Complete setup: camera drivers + app + systemd (run as root)
+│   │   ├── camera.sh       # Camera selection, Arducam driver install + config patching
+│   │   └── certs.sh        # TLS cert installation (system CA store + Chrome NSS)
+│   ├── setup.sh            # Complete setup entry point (run as root)
 │   ├── start.sh            # Production server startup (Gunicorn)
+│   ├── dev.sh              # Development server (Flask debug mode)
 │   └── calibrate.sh        # Live camera preview for lens calibration
 ├── app.py                  # Flask application and route handlers
-├── imageCapture.py         # picamera2 camera init and image capture logic
+├── config.py               # TOML config loader — typed module-level constants
+├── imageCapture.py         # picamera2 camera init, capture, and streaming
 ├── log_config.py           # structlog configuration
 ├── metrics.py              # SQLite-backed capture performance metrics
-├── tasks.py                # Background cleanup task for stale temp files
+├── tasks.py                # Background cleanup for stale temp files
 ├── pyproject.toml
-├── requirements.txt
-├── .env.example
-└── static/                 # Captured images directory
+└── requirements.txt
 ```
-
----
 
 ## Local Development (without camera)
 
 ```bash
 uv sync
-python app.py
+make dev
 ```
 
-> `picamera2` is only available on Raspberry Pi. Without it, the `/rpi/capture` endpoint returns `500`, but all other endpoints work normally.
-
----
+`picamera2` is only available on Raspberry Pi. Without it the `/rpi/capture` endpoint returns `503`, but all other endpoints work normally.
 
 ## References
 
-- [Arducam 64MP Hawkeye — Official Documentation](https://docs.arducam.com/Raspberry-Pi-Camera/Native-camera/64MP-Hawkeye/)
+- [Arducam 64MP Hawkeye — Documentation](https://docs.arducam.com/Raspberry-Pi-Camera/Native-camera/64MP-Hawkeye/)
 - [Arducam Pivariety V4L2 Driver](https://github.com/ArduCAM/Arducam-Pivariety-V4L2-Driver)
-- [Raspberry Pi libcamera Documentation](https://www.raspberrypi.com/documentation/computers/camera_software.html)
+- [Raspberry Pi Camera Documentation](https://www.raspberrypi.com/documentation/computers/camera_software.html)
