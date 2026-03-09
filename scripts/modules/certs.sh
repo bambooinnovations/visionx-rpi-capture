@@ -2,8 +2,8 @@
 # modules/certs.sh — Install Caddy internal CA certificates
 # Requires: lib/utils.sh (log), REAL_USER / REAL_HOME from setup.sh
 
-ROOT_CRT_URL="https://raw.githubusercontent.com/bambooinnovations/caddy/refs/heads/main/pki/authorities/local/root.crt"
-INTERMEDIATE_CRT_URL="https://raw.githubusercontent.com/bambooinnovations/caddy/refs/heads/main/pki/authorities/local/intermediate.crt"
+ROOT_CRT_URL="https://raw.githubusercontent.com/bambooinnovations/certs/refs/heads/main/pki/authorities/local/root.crt"
+INTERMEDIATE_CRT_URL="https://raw.githubusercontent.com/bambooinnovations/certs/refs/heads/main/pki/authorities/local/intermediate.crt"
 
 CERT_NAME="caddy-visionx"
 SYS_CERT_DIR="/usr/local/share/ca-certificates"
