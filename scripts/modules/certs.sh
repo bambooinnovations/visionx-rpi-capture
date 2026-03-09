@@ -39,35 +39,52 @@ _install_system_certs() {
     log SUCCESS "System CA store updated (curl, wget, Python will trust the cert)."
 }
 
-# ── Install to Chrome/Chromium NSS database ──────────────────────────────────
+# ── Install certs into a single user's NSS database ──────────────────────────
+_install_nss_for_user() {
+    local user="$1"
+    local home="$2"
+    local nssdb="${home}/.pki/nssdb"
+
+    if [[ ! -d "$nssdb" ]]; then
+        sudo -u "$user" mkdir -p "$nssdb"
+        sudo -u "$user" certutil -d "sql:${nssdb}" -N --empty-password
+    fi
+
+    sudo -u "$user" certutil -d "sql:${nssdb}" -A \
+        -t "C,," -n "Caddy VisionX Root" -i "$TMP_DIR/root.crt"
+    sudo -u "$user" certutil -d "sql:${nssdb}" -A \
+        -t "C,," -n "Caddy VisionX Intermediate" -i "$TMP_DIR/intermediate.crt"
+
+    log SUCCESS "  ${user} (${nssdb})"
+
+    # Restart Chrome/Chromium if the user has it running
+    if pgrep -u "$user" -f "chrome|chromium" &>/dev/null; then
+        sudo -u "$user" pkill -f "chrome|chromium" || true
+        log INFO "  Restarted Chrome for ${user} — reopen the browser to continue."
+    fi
+}
+
+# ── Install to Chrome/Chromium NSS database for all users ────────────────────
 _install_chrome_certs() {
     if ! command_exists certutil; then
         log INFO "Installing libnss3-tools for Chrome cert support..."
         apt install -y libnss3-tools
     fi
 
-    local nssdb="${REAL_HOME}/.pki/nssdb"
+    log INFO "Installing certificates to Chrome NSS store for all users..."
 
-    if [[ ! -d "$nssdb" ]]; then
-        log INFO "Creating NSS database at ${nssdb}..."
-        sudo -u "$REAL_USER" mkdir -p "$nssdb"
-        sudo -u "$REAL_USER" certutil -d "sql:${nssdb}" -N --empty-password
-    fi
+    local count=0
+    while IFS=: read -r user _ uid _ _ home _; do
+        # Include root (UID 0) and regular users (UID >= 1000, excluding nobody)
+        [[ "$uid" -ne 0 && ( "$uid" -lt 1000 || "$uid" -eq 65534 ) ]] && continue
+        # Skip users without a valid home directory
+        [[ ! -d "$home" ]] && continue
 
-    log INFO "Adding certificates to Chrome NSS store..."
-    sudo -u "$REAL_USER" certutil -d "sql:${nssdb}" -A \
-        -t "C,," -n "Caddy VisionX Root" -i "$TMP_DIR/root.crt"
-    sudo -u "$REAL_USER" certutil -d "sql:${nssdb}" -A \
-        -t "C,," -n "Caddy VisionX Intermediate" -i "$TMP_DIR/intermediate.crt"
+        _install_nss_for_user "$user" "$home"
+        count=$((count + 1))
+    done < <(getent passwd)
 
-    # Restart Chrome/Chromium so it picks up the new certs
-    if pgrep -u "$REAL_USER" -f "chrome|chromium" &>/dev/null; then
-        log INFO "Restarting Chrome/Chromium..."
-        sudo -u "$REAL_USER" pkill -f "chrome|chromium" || true
-        log SUCCESS "Chrome restarted — reopen the browser to continue."
-    else
-        log SUCCESS "Chrome certs installed."
-    fi
+    log SUCCESS "Chrome certs installed for ${count} user(s)."
 }
 
 # ── Verify ───────────────────────────────────────────────────────────────────
