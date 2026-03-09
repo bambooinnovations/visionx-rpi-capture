@@ -27,15 +27,20 @@ source "$SCRIPT_DIR/modules/camera.sh"
 source "$SCRIPT_DIR/modules/certs.sh"
 
 # ── User context ──────────────────────────────────────────────────────────────
-# Detect the real (non-root) user who invoked sudo, so that uv, venv, and
-# Python dependencies are owned by the correct user rather than root.
-if [[ -z "${SUDO_USER:-}" ]]; then
-    echo "ERROR: This script must be run via sudo, not from a root shell." >&2
-    echo "Usage: sudo bash scripts/setup.sh" >&2
-    exit 1
+# Detect the real (non-root) user for owning uv, venv, and the systemd service.
+# If run from a root shell (SUDO_USER is empty or "root"), fall back to the
+# first regular user on the system (UID >= 1000).
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    REAL_USER="${SUDO_USER}"
+else
+    REAL_USER="$(getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 { print $1; exit }')"
+    if [[ -z "$REAL_USER" ]]; then
+        echo "ERROR: No regular user found (UID >= 1000). Create a user first." >&2
+        exit 1
+    fi
+    log INFO "Running from root shell — using '${REAL_USER}' for app ownership."
 fi
 
-REAL_USER="${SUDO_USER}"
 REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 
 # Run a command as the real user with the correct HOME and PATH.
