@@ -160,9 +160,13 @@ def _ensure_camera() -> "Picamera2":
             gain=round(meta["AnalogueGain"], 2),
         )
 
-    # Continuous AF so the preview stream stays in focus.
+    # Focus: fixed position (manual) or continuous AF.
     if "AfMode" in cam.camera_controls:
-        cam.set_controls({"AfMode": 2})
+        if config.LENS_POSITION is not None:
+            cam.set_controls({"AfMode": 0, "LensPosition": config.LENS_POSITION})
+            logger.info("focus_locked", lens_position=config.LENS_POSITION)
+        else:
+            cam.set_controls({"AfMode": 2})
 
     _camera = cam
     return _camera
@@ -253,8 +257,8 @@ def capture_image(
     )
 
     with _camera_lock:
-        # AF while still in preview mode — lens converges faster with more frames.
-        if "AfMode" in cam.camera_controls:
+        # AF while still in preview mode — skipped when focus is locked.
+        if "AfMode" in cam.camera_controls and config.LENS_POSITION is None:
             success = cam.autofocus_cycle()
             if not success:
                 logger.warning("autofocus_failed", path=str(output_image))
@@ -273,7 +277,10 @@ def capture_image(
         cam.configure(_preview_config)
         cam.start()
         if "AfMode" in cam.camera_controls:
-            cam.set_controls({"AfMode": 2})
+            if config.LENS_POSITION is not None:
+                cam.set_controls({"AfMode": 0, "LensPosition": config.LENS_POSITION})
+            else:
+                cam.set_controls({"AfMode": 2})
 
     sharpness = _laplacian_score(str(output_image))
     logger.info("capture_sharpness", score=sharpness, path=str(output_image))

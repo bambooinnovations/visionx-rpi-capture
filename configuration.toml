@@ -10,6 +10,9 @@ env = "dev"
 [camera]
 sharpness = 1.0        # ISP sharpness multiplier; 0 = off, 1.0 = IPA default
 lock_exposure = false  # Lock AE/AWB after startup — set true for stable rig lighting
+# lens_position = 2.0  # Manual fixed focus in dioptres (1 / distance_metres).
+#                      # Run scripts/focus_calibration.py to find your value.
+#                      # Uncomment to enable; comment out to use continuous autofocus.
 
 # Live preview stream (GET /rpi/stream).
 [stream]
