@@ -30,6 +30,8 @@ _preview_config: dict | None = None
 # Resolved during _ensure_camera() from: camera profile → auto-detect.
 _capture_size: tuple[int, int] | None = None
 _stream_size: tuple[int, int] | None = None
+# Focus controls embedded into every config — resolved once at camera init.
+_focus_controls: dict = {}
 
 
 def init_camera() -> None:
@@ -103,7 +105,7 @@ def _ensure_camera() -> "Picamera2":
             "picamera2 is not installed. On Raspberry Pi run: uv sync --extra rpi"
         )
 
-    global _camera, _preview_config, _capture_size, _stream_size
+    global _camera, _preview_config, _capture_size, _stream_size, _focus_controls
 
     if _camera is not None:
         return _camera
@@ -135,10 +137,21 @@ def _ensure_camera() -> "Picamera2":
         raw_preview_size=raw_preview_size,
     )
 
+    # Build focus controls once — embedded into every config so the lens
+    # position is applied from the first frame after each start(), with no
+    # window where focus state is undefined.
+    if "AfMode" in cam.camera_controls:
+        if config.LENS_POSITION is not None:
+            _focus_controls = {"AfMode": 0, "LensPosition": config.LENS_POSITION}
+            logger.info("focus_locked", lens_position=config.LENS_POSITION)
+        else:
+            _focus_controls = {"AfMode": 2}
+
     # raw stream pins libcamera to the full-FOV sensor mode.
     _preview_config = cam.create_preview_configuration(
         main={"size": effective_stream_size},
         raw={"size": raw_preview_size},
+        controls=_focus_controls,
     )
     cam.configure(_preview_config)
     cam.options["quality"] = 95
@@ -159,14 +172,6 @@ def _ensure_camera() -> "Picamera2":
             exposure_us=meta["ExposureTime"],
             gain=round(meta["AnalogueGain"], 2),
         )
-
-    # Focus: fixed position (manual) or continuous AF.
-    if "AfMode" in cam.camera_controls:
-        if config.LENS_POSITION is not None:
-            cam.set_controls({"AfMode": 0, "LensPosition": config.LENS_POSITION})
-            logger.info("focus_locked", lens_position=config.LENS_POSITION)
-        else:
-            cam.set_controls({"AfMode": 2})
 
     _camera = cam
     return _camera
@@ -248,16 +253,20 @@ def capture_image(
     captured_at = datetime.now(timezone.utc).isoformat()
     output_image = output_folder / f"{int(time.time())}.jpg"
 
+    # Focus controls are embedded so the lens position is correct from the
+    # first frame after each start() — no post-start set_controls needed.
+    still_controls: dict = {
+        "Sharpness": config.CAMERA_SHARPNESS,
+        "NoiseReductionMode": 2,
+        **_focus_controls,
+    }
     still_config = cam.create_still_configuration(
         main={"size": resolution},
-        controls={
-            "Sharpness": config.CAMERA_SHARPNESS,
-            "NoiseReductionMode": 2,
-        },
+        controls=still_controls,
     )
 
     with _camera_lock:
-        # AF while still in preview mode — skipped when focus is locked.
+        # AF cycle in preview mode — skipped when focus is locked.
         if "AfMode" in cam.camera_controls and config.LENS_POSITION is None:
             success = cam.autofocus_cycle()
             if not success:
@@ -276,11 +285,6 @@ def capture_image(
         cam.stop()
         cam.configure(_preview_config)
         cam.start()
-        if "AfMode" in cam.camera_controls:
-            if config.LENS_POSITION is not None:
-                cam.set_controls({"AfMode": 0, "LensPosition": config.LENS_POSITION})
-            else:
-                cam.set_controls({"AfMode": 2})
 
     sharpness = _laplacian_score(str(output_image))
     logger.info("capture_sharpness", score=sharpness, path=str(output_image))
