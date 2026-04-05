@@ -75,41 +75,51 @@ def main() -> None:
 
     cam = Picamera2()
 
-    # Use still config for full-resolution captures
-    still_cfg = cam.create_still_configuration()
-    cam.configure(still_cfg)
+    if "AfMode" not in cam.camera_controls:
+        print("WARNING: Camera does not report AfMode control — may not support motorised focus.")
+
+    # Boot once with continuous AF so AE/AWB can converge under real lighting.
+    init_cfg = cam.create_still_configuration(
+        controls={"AfMode": 2} if "AfMode" in cam.camera_controls else {},
+    )
+    cam.configure(init_cfg)
     cam.start()
     time.sleep(2)  # let AE/AWB stabilise
 
-    # Lock AE/AWB so exposure doesn't vary between shots
+    # Snapshot locked exposure values so every shot is comparable.
     meta = cam.capture_metadata()
-    cam.set_controls({
+    locked_exposure = {
         "AeEnable":     False,
         "AwbEnable":    False,
         "ExposureTime": meta["ExposureTime"],
         "AnalogueGain": meta["AnalogueGain"],
         "ColourGains":  meta["ColourGains"],
-    })
-
-    if "AfMode" not in cam.camera_controls:
-        print("WARNING: Camera does not report AfMode control — may not support motorised focus.")
+    }
+    cam.stop()
 
     total = len(positions)
     for i, pos in enumerate(positions, start=1):
-        # Switch to manual focus at this position
-        if "AfMode" in cam.camera_controls:
-            cam.set_controls({"AfMode": 0, "LensPosition": pos})
+        # Embed focus + locked exposure into the config so both are applied
+        # atomically on start() — no post-start set_controls race.
+        focus_controls = (
+            {"AfMode": 0, "LensPosition": pos}
+            if "AfMode" in cam.camera_controls else {}
+        )
+        still_cfg = cam.create_still_configuration(
+            controls={**locked_exposure, **focus_controls},
+        )
+        cam.configure(still_cfg)
+        cam.start()
 
-        time.sleep(args.settle)  # let the lens physically settle
+        time.sleep(args.settle)  # let the lens physically move and settle
 
         filename = output_dir / f"focus_{pos:.2f}.jpg"
         cam.capture_file(str(filename))
+        cam.stop()
 
         # Approx real-world distance for display
         dist = f"~{1/pos*100:.0f} cm" if pos > 0 else "infinity"
         print(f"  [{i:>2}/{total}]  LensPosition={pos:.2f}  ({dist})  → {filename.name}")
-
-    cam.stop()
 
     print(f"\nDone. {total} images saved to: {output_dir.resolve()}")
     print("\nNext step:")
