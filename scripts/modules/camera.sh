@@ -102,6 +102,45 @@ _patch_config() {
     log SUCCESS "Added '${DTOVERLAY_LINE}' to ${CONFIG_TXT}"
 }
 
+# ── Check ArduCam installation status ────────────────────────────────────────
+check_arducam() {
+    echo ""
+    log INFO "━━━  ArduCam installation status  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    local all_ok=true
+
+    local dtbo="/boot/firmware/overlays/arducam-64mp.dtbo"
+    if [[ -f "$dtbo" ]]; then
+        log SUCCESS "Kernel overlay   ${dtbo}"
+    else
+        log WARN    "Kernel overlay   ${dtbo}  ✗ not found"
+        all_ok=false
+    fi
+
+    local cfg="${CONFIG_TXT:-/boot/firmware/config.txt}"
+    if [[ -f "$cfg" ]] && grep -qF "dtoverlay=arducam-64mp" "$cfg"; then
+        log SUCCESS "Boot config      dtoverlay=arducam-64mp present in ${cfg}"
+    else
+        log WARN    "Boot config      dtoverlay=arducam-64mp not found in ${cfg}"
+        all_ok=false
+    fi
+
+    local lc_ver
+    if lc_ver=$(dpkg-query -W -f='${Version}' libcamera0 2>/dev/null); then
+        log SUCCESS "libcamera        installed (${lc_ver})"
+    else
+        log WARN    "libcamera        not detected"
+        all_ok=false
+    fi
+
+    echo ""
+    if $all_ok; then
+        log SUCCESS "ArduCam 64MP is fully installed."
+    else
+        log WARN    "ArduCam 64MP is not fully installed. Run 'Install ArduCam' to fix."
+    fi
+    log INFO "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
 # ── Verify the camera is detected (post-reboot check) ────────────────────────
 verify_camera() {
     local app="${CAM_APP_PREFIX}-still"
@@ -129,27 +168,20 @@ verify_camera() {
     fi
 }
 
-# ── Public entry point ────────────────────────────────────────────────────────
-setup_camera() {
-    log INFO "━━━  Camera setup  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    _select_cam_type
-
-    if [[ "$CAM_TYPE" == "arducam" ]]; then
-        _select_cam_port
-        _download_installer
-        _install_pkg "libcamera_dev"
-        _install_pkg "libcamera_apps"
-        if [[ -f "/boot/firmware/overlays/arducam-64mp.dtbo" ]]; then
-            log SUCCESS "Arducam 64MP kernel driver already present — skipping."
-        else
-            _install_pkg "64mp_pi_hawk_eye_kernel_driver"
-        fi
-        _patch_config
+# ── Install ArduCam driver (public entry point) ───────────────────────────────
+install_arducam() {
+    log INFO "━━━  ArduCam driver installation  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    _select_cam_port
+    _download_installer
+    _install_pkg "libcamera_dev"
+    _install_pkg "libcamera_apps"
+    if [[ -f "/boot/firmware/overlays/arducam-64mp.dtbo" ]]; then
+        log SUCCESS "Arducam 64MP kernel driver already present — skipping."
     else
-        log INFO "Standard Pi Camera selected — no extra drivers required."
-        log INFO "libcamera support will be installed via apt in the app setup step."
+        _install_pkg "64mp_pi_hawk_eye_kernel_driver"
     fi
+    _patch_config
 
-    log SUCCESS "Camera setup complete."
+    log SUCCESS "ArduCam driver installation complete."
     log INFO "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
