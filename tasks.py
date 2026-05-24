@@ -1,10 +1,12 @@
 import shutil
 import threading
 import time
+from pathlib import Path
 
 import structlog
 
 import config
+import runtime_config
 
 logger = structlog.get_logger()
 
@@ -41,6 +43,41 @@ def _run_cleanup_loop() -> None:
             _cleanup_stale_tmp_dirs()
         except Exception:
             logger.exception("tmp_cleanup_error")
+
+
+def enforce_local_limits(save_dir: Path) -> None:
+    """Delete the oldest files in save_dir until both count and size limits are met.
+
+    Limits are read from runtime_config (live-updatable) with config.py as fallback,
+    so a PATCH /rpi/config takes effect on the very next triggered capture.
+    A limit of 0 means unlimited.
+    """
+    if not save_dir.exists():
+        return
+
+    max_files = runtime_config.get("hw_trigger.local_max_files", config.HW_TRIGGER_LOCAL_MAX_FILES)
+    max_mb = runtime_config.get("hw_trigger.local_max_mb", config.HW_TRIGGER_LOCAL_MAX_MB)
+
+    # Sort oldest-first so we always remove the least recent captures.
+    files = sorted(save_dir.glob("*.jpg"), key=lambda f: f.stat().st_mtime)
+
+    if max_files > 0:
+        while len(files) > max_files:
+            removed = files.pop(0)
+            removed.unlink(missing_ok=True)
+            logger.info("hw_capture_evicted_count", path=str(removed))
+
+    if max_mb > 0:
+        max_bytes = max_mb * 1024 * 1024
+        total = sum(f.stat().st_size for f in files if f.exists())
+        while total > max_bytes and files:
+            removed = files.pop(0)
+            try:
+                total -= removed.stat().st_size
+                removed.unlink(missing_ok=True)
+                logger.info("hw_capture_evicted_size", path=str(removed))
+            except OSError:
+                pass
 
 
 def start_cleanup_task() -> None:

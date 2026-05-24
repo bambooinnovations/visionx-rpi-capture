@@ -54,6 +54,16 @@ METRICS_DB_PATH: Path = Path(_get("metrics", "db_path", "/tmp/visionx_metrics.db
 CLEANUP_INTERVAL_SECONDS: int = _get("cleanup", "interval_seconds", 300)
 MAX_AGE_SECONDS: int = _get("cleanup", "max_age_seconds", 300)
 
+# Hardware trigger (MindVision only)
+HW_TRIGGER_DESTINATION_URL: str = _get("hw_trigger", "destination_url", "")
+HW_TRIGGER_DESTINATION_API_KEY: str = _get("hw_trigger", "destination_api_key", "")
+HW_TRIGGER_RETRY_ATTEMPTS: int = _get("hw_trigger", "retry_attempts", 3)
+HW_TRIGGER_TIMEOUT_SECONDS: int = _get("hw_trigger", "timeout_seconds", 10)
+HW_TRIGGER_SAVE_LOCAL: bool = _get("hw_trigger", "save_local", True)
+HW_TRIGGER_LOCAL_SAVE_DIR: Path = Path(_get("hw_trigger", "local_save_dir", "data/hw_captures"))
+HW_TRIGGER_LOCAL_MAX_FILES: int = _get("hw_trigger", "local_max_files", 200)
+HW_TRIGGER_LOCAL_MAX_MB: int = _get("hw_trigger", "local_max_mb", 500)
+
 
 def get_camera_profile(model: str) -> dict:
     """Return the camera_profiles entry for model, or {} if not listed."""

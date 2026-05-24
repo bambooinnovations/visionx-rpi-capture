@@ -7,10 +7,10 @@ from pathlib import Path
 
 import structlog
 
-import calibration
 import config
+import runtime_config
 from camera import create_camera
-from camera.mindvision import MindVisionCamera
+from camera.mindvision import CameraMode, MindVisionCamera
 from log_config import configure_logging
 from metrics import get_stats, init_db, record_capture
 from tasks import CAPTURE_TMP_DIR, start_cleanup_task
@@ -38,11 +38,18 @@ if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         logger.warning("camera_init_skipped", reason=str(e))
     atexit.register(camera.close)
 
+if isinstance(camera, MindVisionCamera):
+    from blueprints.mindvision import create_blueprint
+    app.register_blueprint(create_blueprint(camera))
+
 capture_lock = threading.Lock()
 
 
 @app.route("/rpi/stream")
 def stream():
+    if isinstance(camera, MindVisionCamera) and camera.mode != CameraMode.STREAM:
+        return Response("Camera is not in stream mode", status=409)
+
     def generate():
         for frame in camera.stream_frames():
             yield (
@@ -74,6 +81,9 @@ def metrics_stats():
 
 @app.route("/rpi/capture", methods=["POST"])
 def capture():
+    if isinstance(camera, MindVisionCamera) and camera.mode != CameraMode.CAPTURE:
+        return jsonify({"error": "Camera is not in capture mode"}), 409
+
     if not capture_lock.acquire(blocking=False):
         return jsonify({"error": "Capture already in progress"}), 429
     try:
@@ -121,26 +131,83 @@ def capture():
         capture_lock.release()
 
 
-@app.route("/rpi/camera/white-balance")
-def get_white_balance():
-    wb = calibration.load().get("white_balance")
-    if wb is None:
-        return jsonify({"calibrated": False})
-    return jsonify({"calibrated": True, **wb})
+def _effective_config() -> dict:
+    """Merge toml base values with runtime overrides. Masks sensitive keys."""
+    base = {
+        "camera.mv_exposure_us":          config.MV_EXPOSURE_US,
+        "camera.mv_auto_exposure":        config.MV_AUTO_EXPOSURE,
+        "stream.fps":                     config.STREAM_FPS,
+        "stream.quality":                 config.STREAM_QUALITY,
+        "hw_trigger.destination_url":     config.HW_TRIGGER_DESTINATION_URL,
+        "hw_trigger.destination_api_key": "***" if config.HW_TRIGGER_DESTINATION_API_KEY else "",
+        "hw_trigger.retry_attempts":      config.HW_TRIGGER_RETRY_ATTEMPTS,
+        "hw_trigger.timeout_seconds":     config.HW_TRIGGER_TIMEOUT_SECONDS,
+        "hw_trigger.save_local":          config.HW_TRIGGER_SAVE_LOCAL,
+        "hw_trigger.local_max_files":     config.HW_TRIGGER_LOCAL_MAX_FILES,
+        "hw_trigger.local_max_mb":        config.HW_TRIGGER_LOCAL_MAX_MB,
+    }
+    overrides = runtime_config.load()
+    for key, value in overrides.items():
+        if key in runtime_config.UPDATABLE:
+            base[key] = "***" if key in runtime_config.MASKED_KEYS and value else value
+    return base
 
 
-@app.route("/rpi/camera/calibrate-wb", methods=["POST"])
-def calibrate_wb():
-    if not isinstance(camera, MindVisionCamera):
-        return jsonify({"error": "White balance calibration is only supported for MindVision cameras"}), 400
-    try:
-        gains = camera.calibrate_white_balance()
-        return jsonify(gains)
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 503
-    except Exception:
-        logger.exception("calibrate_wb_failed")
-        return jsonify({"error": "Calibration failed"}), 500
+@app.route("/rpi/config", methods=["GET"])
+def get_config():
+    overrides = runtime_config.load()
+    return jsonify({
+        "config": _effective_config(),
+        "runtime_overrides": list(overrides.keys()),
+    })
+
+
+@app.route("/rpi/config", methods=["PATCH"])
+def patch_config():
+    body = request.get_json(silent=True) or {}
+    if not body:
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+
+    errors = {}
+    updates = {}
+    for key, value in body.items():
+        if key not in runtime_config.UPDATABLE:
+            errors[key] = f"not updatable at runtime"
+            continue
+        expected = runtime_config.UPDATABLE[key]
+        try:
+            if expected is bool:
+                if not isinstance(value, bool):
+                    raise ValueError("expected boolean")
+                coerced = value
+            else:
+                coerced = expected(value)
+        except (ValueError, TypeError):
+            errors[key] = f"expected {expected.__name__}"
+            continue
+        updates[key] = coerced
+
+    if errors:
+        return jsonify({"error": "invalid values", "details": errors}), 400
+
+    for key, value in updates.items():
+        runtime_config.update(key, value)
+        if isinstance(camera, MindVisionCamera):
+            camera.apply_config(key, value)
+
+    logger.info("runtime_config_updated", keys=list(updates.keys()))
+    return jsonify({"updated": list(updates.keys()), "config": _effective_config()})
+
+
+@app.route("/rpi/config/<string:key>", methods=["DELETE"])
+def delete_config(key: str):
+    if key not in runtime_config.UPDATABLE:
+        return jsonify({"error": f"'{key}' is not a runtime-updatable key"}), 400
+    existed = runtime_config.delete(key)
+    if not existed:
+        return jsonify({"error": f"No runtime override set for '{key}'"}), 404
+    logger.info("runtime_config_deleted", key=key)
+    return jsonify({"deleted": key, "config": _effective_config()})
 
 
 if __name__ == "__main__":

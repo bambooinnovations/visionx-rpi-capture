@@ -4,9 +4,16 @@ import io
 import threading
 import time
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 
 import structlog
+
+
+class CameraMode(str, Enum):
+    STREAM = "stream"
+    CAPTURE = "capture"
+    HARDWARE_TRIGGER = "hardware_trigger"
 
 try:
     import numpy as np
@@ -35,6 +42,7 @@ class MindVisionCamera(BaseCamera):
         # Held by stream_frames() per-frame and by capture_image() for the full
         # grab cycle, so they never pull from the SDK queue simultaneously.
         self._lock = threading.Lock()
+        self._mode: CameraMode = CameraMode.STREAM
 
     def open(self) -> None:
         if not _MVSDK_AVAILABLE:
@@ -84,6 +92,8 @@ class MindVisionCamera(BaseCamera):
         if not self._mono:
             self._apply_white_balance(h)
 
+        self._mode = CameraMode.STREAM
+
         channels = 1 if self._mono else 3
         buf_size = (
             cap.sResolutionRange.iWidthMax
@@ -100,6 +110,29 @@ class MindVisionCamera(BaseCamera):
             max_width=cap.sResolutionRange.iWidthMax,
             max_height=cap.sResolutionRange.iHeightMax,
         )
+
+    @property
+    def mode(self) -> CameraMode:
+        return self._mode
+
+    def set_mode(self, mode: CameraMode) -> None:
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        if mode in (CameraMode.STREAM, CameraMode.CAPTURE):
+            mvsdk.CameraSetTriggerMode(self._h_camera, 0)
+        elif mode == CameraMode.HARDWARE_TRIGGER:
+            mvsdk.CameraSetTriggerMode(self._h_camera, 2)
+        self._mode = mode
+        logger.info("camera_mode_changed", mode=mode.value)
+
+    def apply_config(self, key: str, value) -> None:
+        """Apply a runtime config change to the live camera hardware."""
+        if self._h_camera is None:
+            return
+        if key == "camera.mv_exposure_us":
+            mvsdk.CameraSetExposureTime(self._h_camera, int(value))
+        elif key == "camera.mv_auto_exposure":
+            mvsdk.CameraSetAeState(self._h_camera, 1 if value else 0)
 
     def _apply_white_balance(self, h: int) -> None:
         import calibration

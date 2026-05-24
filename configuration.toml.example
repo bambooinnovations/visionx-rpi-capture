@@ -44,6 +44,18 @@ tmp_dir = "/tmp/visionx_captures"
 [metrics]
 db_path = "/tmp/visionx_metrics.db"
 
+# Hardware trigger mode (MindVision only — used when POST /rpi/mindvision/mode {"mode":"hardware_trigger"}).
+# destination_url and destination_api_key can also be updated live via PATCH /rpi/config.
+[hw_trigger]
+# destination_url     = "https://yoursite.com/api/captures"  # where to POST triggered images
+# destination_api_key = ""       # sent as Authorization: Bearer <key>; leave blank if not needed
+# retry_attempts      = 3        # retry count on network failure
+# timeout_seconds     = 10       # HTTP timeout per attempt
+# save_local          = true     # also save a local copy in local_save_dir
+# local_save_dir      = "data/hw_captures"  # directory for local copies (created automatically)
+# local_max_files     = 200      # max number of files to keep; oldest deleted first (0 = unlimited)
+# local_max_mb        = 500      # max total size in MB; oldest deleted first (0 = unlimited)
+
 # Background task that removes stale capture temp directories.
 [cleanup]
 interval_seconds = 300   # How often the cleanup task runs
