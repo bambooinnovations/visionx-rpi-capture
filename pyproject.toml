@@ -17,6 +17,13 @@ rpi = [
     "picamera2; sys_platform == 'linux'",
 ]
 
+[dependency-groups]
+test-server = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+]
+
 # python-prctl is a C extension that only builds on Linux (a transitive dep of picamera2).
 # Stub its metadata so uv can resolve the lockfile on non-Linux dev machines without
 # attempting to compile it from source.
