@@ -150,6 +150,8 @@ Registered only when `camera.type = "mindvision"`. All routes are prefixed `/rpi
 | GET    | `/rpi/mindvision/white-balance`   | Return stored white balance calibration (from `calibration.json`) |
 | POST   | `/rpi/mindvision/calibrate-wb`    | Run one-shot white balance calibration and store gains         |
 | POST   | `/rpi/mindvision/capture-all`     | Capture from all cameras simultaneously; returns a ZIP archive |
+| GET    | `/rpi/mindvision/focus/stream`    | MJPEG stream with focus peaking overlay and sharpness score    |
+| GET    | `/rpi/mindvision/focus/score`     | Current sharpness score and trend as JSON (single frame)       |
 
 #### Camera modes
 
@@ -183,6 +185,108 @@ Returns `400` if only one dimension is provided, `429` if a capture is already i
 ### `GET /rpi/stream`
 
 Returns a continuous MJPEG stream. Frame rate and JPEG quality are configured in `configuration.toml` under `[stream]`.
+
+## Calibration
+
+### White balance (MindVision)
+
+Point the camera at a neutral white or grey surface under your working light, then run one-push calibration:
+
+```bash
+curl -X POST http://localhost:8080/rpi/mindvision/calibrate-wb
+# {"r_gain": 112, "g_gain": 100, "b_gain": 138, "calibrated_at": "..."}
+```
+
+Gains are stored in `calibration.json` and applied automatically on every subsequent camera open/stream start. To inspect stored gains:
+
+```bash
+curl http://localhost:8080/rpi/mindvision/white-balance
+```
+
+---
+
+### Focus (MindVision)
+
+MindVision lenses have a manual focus ring. The focus calibration tools let you dial in focus precisely without eyeballing — a live overlay shows which direction to turn and when you've hit peak sharpness.
+
+#### 1. Print the calibration target
+
+Generate a **Siemens star** — a radial spoke wheel that is the industry standard for focus and resolution testing. Run the generator script once, then print the result:
+
+```bash
+.venv/bin/python scripts/gen_siemens_star.py
+# Saved: siemens_star_letter.png  (2550×3300 px, 300 DPI, letter paper)
+```
+
+Print at 100% scale (no "fit to page") on letter paper. Place it flat on a surface, perpendicular to the camera, at your intended working distance.
+
+> The Siemens star has high-spatial-frequency content in every radial direction. When the camera is out of focus the spokes blur together near the centre into a grey disc. As you approach focus the spokes resolve all the way into the small white centre dot.
+
+#### 2. Open the focus stream
+
+Open this URL in a browser (or any MJPEG viewer):
+
+```
+http://<rpi-ip>:8080/rpi/mindvision/focus/stream
+```
+
+The stream runs at 2 FPS by default to keep CPU load low on the Pi. You will see:
+
+| Overlay element | What it means |
+| --------------- | ------------- |
+| **Magenta pixels** | Focus peaking — pixels with high edge contrast. More magenta = sharper in that area. When perfectly focused, magenta highlights fill the spokes all the way to the centre disc. |
+| **Yellow ROI box** | The centre-third region used for the sharpness score. Keep the star inside this box. |
+| **Score: N** (top-left) | Laplacian variance of the ROI — a dimensionless number; higher is sharper. |
+| **↑ / ↓ / ●** (top-left) | Trend arrow based on the rolling history of recent scores. |
+| **Sharpness bar** (bottom) | Relative score, normalized to the highest value seen since the stream started. |
+
+#### 3. Adjust focus
+
+Turn the focus ring slowly and watch the trend arrow:
+
+- **↑ keep going** — sharpness is improving; keep turning in the same direction
+- **↓ reverse direction** — you just passed peak focus; back off slightly
+- **● at or near peak** — you are at or very close to optimal focus
+
+When the trend stabilises at `●` with a full green bar and magenta peaking visible all the way to the centre dot, lock the focus ring.
+
+#### Query parameters
+
+| Parameter       | Default | Description |
+| --------------- | ------- | ----------- |
+| `camera_id`     | `0`     | Which camera to use |
+| `fps`           | `2`     | Stream frame rate (0.5–10) |
+| `peak_threshold`| `50`    | Gradient magnitude cutoff for peaking highlights (0–510). Lower = more pixels highlighted; raise if the whole image turns magenta. |
+| `max_width`     | `1280`  | Downscale frames to this width before computing and drawing the overlay. Reduces CPU load on high-resolution cameras. |
+
+Example with custom parameters:
+
+```
+http://<rpi-ip>:8080/rpi/mindvision/focus/stream?fps=3&peak_threshold=70&max_width=960
+```
+
+#### JSON score endpoint
+
+For scripted calibration or automation, poll the score endpoint instead of streaming:
+
+```bash
+curl http://localhost:8080/rpi/mindvision/focus/score
+```
+
+```json
+{
+  "camera_id": 0,
+  "score": 1842.3,
+  "trend": "increasing",
+  "suggestion": "keep going",
+  "history_length": 12,
+  "roi": {"x1": 427, "y1": 320, "x2": 853, "y2": 640}
+}
+```
+
+The `score` is the Laplacian variance of the centre ROI — an absolute number that depends on the scene, so use `trend` and `suggestion` for direction guidance rather than comparing scores across different scenes or cameras.
+
+---
 
 ## Configuration
 
