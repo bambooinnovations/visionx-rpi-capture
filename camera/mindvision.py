@@ -43,6 +43,9 @@ class MindVisionCamera(BaseCamera):
         # grab cycle, so they never pull from the SDK queue simultaneously.
         self._lock = threading.Lock()
         self._mode: CameraMode = CameraMode.STREAM
+        self._streaming: bool = False  # True while stream_frames() generator is running
+        # Keep a strong reference to the ctypes callback so it isn't GC'd.
+        self._connection_cb = None
 
     def open(self) -> None:
         if not _MVSDK_AVAILABLE:
@@ -52,6 +55,7 @@ class MindVisionCamera(BaseCamera):
         if self._h_camera is not None:
             return
 
+        mvsdk.CameraSdkInit(0)
         dev_list = mvsdk.CameraEnumerateDevice()
         if len(dev_list) <= self._camera_index:
             raise RuntimeError(
@@ -77,7 +81,7 @@ class MindVisionCamera(BaseCamera):
             h,
             mvsdk.CAMERA_MEDIA_TYPE_MONO8 if self._mono else mvsdk.CAMERA_MEDIA_TYPE_BGR8,
         )
-        mvsdk.CameraSetTriggerMode(h, 0)  # continuous
+        mvsdk.CameraSetTriggerMode(h, 1)  # software trigger; continuous only while streaming
 
         if config.MV_AUTO_EXPOSURE:
             mvsdk.CameraSetAeState(h, 1)
@@ -103,13 +107,55 @@ class MindVisionCamera(BaseCamera):
         self._frame_buffer = mvsdk.CameraAlignMalloc(buf_size, 16)
         self._h_camera = h
 
+        # Register connection-status callback so we get explicit log entries
+        # when USB drops rather than only seeing C++ bulk-transfer errors.
+        friendly = dev_info.GetFriendlyName()
+        sn = dev_info.GetSn()
+
+        def _on_connection(h_cam, msg, u_param, p_ctx):
+            if msg == 0:
+                logger.warning(
+                    "mindvision_camera_disconnected",
+                    device=friendly, sn=sn, camera_index=self._camera_index,
+                )
+            elif msg == 1:
+                logger.info(
+                    "mindvision_camera_reconnected",
+                    device=friendly, sn=sn, camera_index=self._camera_index,
+                )
+
+        self._connection_cb = mvsdk.CAMERA_CONNECTION_STATUS_CALLBACK(_on_connection)
+        mvsdk.CameraSetConnectionStatusCallback(h, self._connection_cb)
+
         logger.info(
             "mindvision_camera_initialized",
-            device=dev_info.GetFriendlyName(),
+            device=friendly, sn=sn,
             mono=self._mono,
             max_width=cap.sResolutionRange.iWidthMax,
             max_height=cap.sResolutionRange.iHeightMax,
         )
+
+        # Test grab: verify the camera is actually delivering frames after init.
+        # Uses a short timeout so it doesn't stall startup if the USB link is bad.
+        try:
+            mvsdk.CameraSoftTrigger(h)
+            raw, head = mvsdk.CameraGetImageBuffer(h, 800)
+            mvsdk.CameraReleaseImageBuffer(h, raw)
+            stat = mvsdk.CameraGetFrameStatistic(h)
+            logger.info(
+                "mindvision_camera_test_grab_ok",
+                device=friendly, sn=sn,
+                width=head.iWidth, height=head.iHeight,
+                frames_total=stat.iTotal, frames_lost=stat.iLost,
+            )
+        except mvsdk.CameraException as e:
+            stat = mvsdk.CameraGetFrameStatistic(h)
+            logger.warning(
+                "mindvision_camera_test_grab_failed",
+                device=friendly, sn=sn,
+                error_code=e.error_code, message=e.message,
+                frames_total=stat.iTotal, frames_lost=stat.iLost,
+            )
 
     @property
     def mode(self) -> CameraMode:
@@ -118,10 +164,12 @@ class MindVisionCamera(BaseCamera):
     def set_mode(self, mode: CameraMode) -> None:
         if self._h_camera is None:
             raise RuntimeError("Camera not open")
-        if mode in (CameraMode.STREAM, CameraMode.CAPTURE):
-            mvsdk.CameraSetTriggerMode(self._h_camera, 0)
-        elif mode == CameraMode.HARDWARE_TRIGGER:
+        if mode == CameraMode.HARDWARE_TRIGGER:
             mvsdk.CameraSetTriggerMode(self._h_camera, 2)
+        else:
+            # STREAM and CAPTURE both idle in software trigger; stream_frames()
+            # activates continuous mode automatically while a stream is active.
+            mvsdk.CameraSetTriggerMode(self._h_camera, 1)
         self._mode = mode
         logger.info("camera_mode_changed", mode=mode.value)
 
@@ -191,10 +239,13 @@ class MindVisionCamera(BaseCamera):
             return arr.copy()
         except mvsdk.CameraException as e:
             if e.error_code != mvsdk.CAMERA_STATUS_TIME_OUT:
+                stat = mvsdk.CameraGetFrameStatistic(self._h_camera)
                 logger.warning(
                     "mindvision_grab_failed",
                     error_code=e.error_code,
                     message=e.message,
+                    frames_total=stat.iTotal,
+                    frames_lost=stat.iLost,
                 )
             return None
 
@@ -209,31 +260,46 @@ class MindVisionCamera(BaseCamera):
 
     def stream_frames(self):
         frame_interval = 1.0 / config.STREAM_FPS
+        self._streaming = True
+        _continuous_active = False  # whether we've switched to continuous for this session
+        try:
+            while True:
+                if self._h_camera is None:
+                    _continuous_active = False
+                    try:
+                        self.open()
+                    except RuntimeError:
+                        logger.warning("mindvision_stream_waiting")
+                        time.sleep(2)
+                        continue
 
-        while True:
-            if self._h_camera is None:
+                if not _continuous_active and self._mode != CameraMode.HARDWARE_TRIGGER:
+                    mvsdk.CameraSetTriggerMode(self._h_camera, 0)  # continuous while streaming
+                    _continuous_active = True
+
+                start = time.monotonic()
+                frame_data = None
+
+                with self._lock:
+                    frame = self._grab_frame()
+                    if frame is not None:
+                        frame_data = self._encode_jpeg(frame, config.STREAM_QUALITY)
+
+                if frame_data:
+                    yield frame_data
+
+                elapsed = time.monotonic() - start
+                remaining = frame_interval - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
+        finally:
+            self._streaming = False
+            if self._h_camera is not None and self._mode != CameraMode.HARDWARE_TRIGGER:
                 try:
-                    self.open()
-                except RuntimeError:
-                    logger.warning("mindvision_stream_waiting")
-                    time.sleep(2)
-                    continue
-
-            start = time.monotonic()
-            frame_data = None
-
-            with self._lock:
-                frame = self._grab_frame()
-                if frame is not None:
-                    frame_data = self._encode_jpeg(frame, config.STREAM_QUALITY)
-
-            if frame_data:
-                yield frame_data
-
-            elapsed = time.monotonic() - start
-            remaining = frame_interval - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
+                    mvsdk.CameraSetTriggerMode(self._h_camera, 1)  # back to software trigger
+                    logger.info("stream_ended_reverted_to_software_trigger")
+                except Exception:
+                    logger.warning("mindvision_revert_trigger_failed")
 
     def capture_image(
         self,
@@ -250,6 +316,8 @@ class MindVisionCamera(BaseCamera):
         output_image = output_folder / f"{int(time.time())}.jpg"
 
         with self._lock:
+            if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
+                mvsdk.CameraSoftTrigger(self._h_camera)
             t0 = time.perf_counter()
             frame = self._grab_frame()
             capture_duration_ms = (time.perf_counter() - t0) * 1000
@@ -270,12 +338,23 @@ class MindVisionCamera(BaseCamera):
         )
         return output_image, metrics
 
+    @property
+    def camera_index(self) -> int:
+        return self._camera_index
+
+    @property
+    def serial_number(self) -> str | None:
+        return self._dev_info.GetSn() if self._dev_info is not None else None
+
     def camera_info(self) -> dict:
         if self._h_camera is None or self._dev_info is None:
-            return {"type": "mindvision", "status": "closed"}
+            return {"type": "mindvision", "camera_id": self._camera_index, "status": "closed"}
         return {
             "type": "mindvision",
+            "camera_id": self._camera_index,
+            "serial_number": self._dev_info.GetSn(),
             "model": self._dev_info.GetFriendlyName(),
+            "product_name": self._dev_info.GetProductName(),
             "port_type": self._dev_info.GetPortType(),
             "mono": self._mono,
             "max_width": self._cap.sResolutionRange.iWidthMax,

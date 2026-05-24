@@ -26,32 +26,89 @@ CORS(app)
 
 start_cleanup_task()
 init_db()
-camera = create_camera()
-# In Flask debug mode the stat reloader forks a child process; both the parent
-# and the child would hit CameraInit, causing the second to fail with -18
-# ("device already open"). Only open in the child (WERKZEUG_RUN_MAIN=true) or
-# when not in debug mode at all.
-if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+
+# Build camera registry.
+# For MindVision: enumerate all connected devices at startup — every camera
+# that's plugged in gets an instance. For all other types: single-camera factory.
+if config.CAMERA_TYPE == "mindvision":
+    _count = 0
     try:
-        camera.open()
-    except RuntimeError as e:
-        logger.warning("camera_init_skipped", reason=str(e))
-    atexit.register(camera.close)
+        import mvsdk as _mvsdk
+        _mvsdk.CameraSdkInit(0)  # must be called before any other SDK function (0 = English)
+        _count = len(_mvsdk.CameraEnumerateDevice())
+        logger.info("mindvision_cameras_detected", count=_count)
+    except Exception as _e:
+        logger.warning("mindvision_enumerate_failed", reason=str(_e))
+    if _count == 0:
+        _count = 1  # create one anyway so open() surfaces a clear error
+
+    cameras: dict[int, object] = {
+        i: MindVisionCamera(camera_index=i) for i in range(_count)
+    }
+else:
+    cameras = {0: create_camera()}
+
+# Convenience reference to camera 0 — used for isinstance checks that apply
+# to all cameras of the same type.
+camera = cameras[0]
+
+# Per-camera locks so concurrent single-camera captures don't block each other.
+capture_locks: dict[int, threading.Lock] = {
+    cam_id: threading.Lock() for cam_id in cameras
+}
+
+# In Werkzeug debug/reload mode the reloader parent forks a child
+# (WERKZEUG_RUN_MAIN=true) that actually serves requests. Only that child
+# should open cameras — the parent must not, or it wins the CameraInit race
+# and leaves the child with no camera.
+# app.debug is always False at module-import time when using `flask run --debug`
+# because Flask sets it after the CLI parses flags, so we check FLASK_DEBUG
+# from the environment instead.
+_debug_mode = os.environ.get("FLASK_DEBUG", "0").lower() in ("1", "true")
+if not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    for cam_id, cam in cameras.items():
+        try:
+            cam.open()
+        except RuntimeError as e:
+            logger.warning("camera_init_skipped", camera_id=cam_id, reason=str(e))
+        atexit.register(cam.close)
+
+    logger.info(
+        "cameras_ready",
+        count=len(cameras),
+        cameras=[
+            {
+                "camera_id": cam_id,
+                "model": cam.camera_info().get("model"),
+                "serial_number": cam.camera_info().get("serial_number"),
+                "status": "open" if cam.camera_info().get("status") != "closed" else "closed",
+            }
+            for cam_id, cam in sorted(cameras.items())
+        ],
+    )
 
 if isinstance(camera, MindVisionCamera):
     from blueprints.mindvision import create_blueprint
-    app.register_blueprint(create_blueprint(camera))
+    app.register_blueprint(create_blueprint(cameras))
 
-capture_lock = threading.Lock()
+
+def _resolve_camera(default_id: int = 0):
+    """Return (cam, cam_id) from the camera_id query param, or None on miss."""
+    cam_id = request.args.get("camera_id", default_id, type=int)
+    return cameras.get(cam_id), cam_id
 
 
 @app.route("/rpi/stream")
 def stream():
-    if isinstance(camera, MindVisionCamera) and camera.mode != CameraMode.STREAM:
+    cam, cam_id = _resolve_camera()
+    if cam is None:
+        return Response(f"Camera {cam_id} not found", status=404)
+
+    if isinstance(cam, MindVisionCamera) and cam.mode != CameraMode.STREAM:
         return Response("Camera is not in stream mode", status=409)
 
     def generate():
-        for frame in camera.stream_frames():
+        for frame in cam.stream_frames():
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n"
@@ -81,10 +138,15 @@ def metrics_stats():
 
 @app.route("/rpi/capture", methods=["POST"])
 def capture():
-    if isinstance(camera, MindVisionCamera) and camera.mode != CameraMode.CAPTURE:
-        return jsonify({"error": "Camera is not in capture mode"}), 409
+    cam, cam_id = _resolve_camera()
+    if cam is None:
+        return jsonify({"error": f"Camera {cam_id} not found"}), 404
 
-    if not capture_lock.acquire(blocking=False):
+    if isinstance(cam, MindVisionCamera) and cam.mode == CameraMode.HARDWARE_TRIGGER:
+        return jsonify({"error": "Camera is in hardware trigger mode; use hardware signal to capture"}), 409
+
+    lock = capture_locks[cam_id]
+    if not lock.acquire(blocking=False):
         return jsonify({"error": "Capture already in progress"}), 429
     try:
         width = request.args.get("width", type=int)
@@ -96,23 +158,22 @@ def capture():
         if width is not None and (width <= 0 or height <= 0):
             return jsonify({"error": "width and height must be positive integers"}), 400
 
-        # None → capture_image() uses the profile / auto-detected resolution.
         target_resolution = (width, height) if width is not None else None
 
         CAPTURE_TMP_DIR.mkdir(parents=True, exist_ok=True)
         tmp_path = Path(tempfile.mkdtemp(dir=CAPTURE_TMP_DIR))
         try:
-            image_path, capture_metrics = camera.capture_image(
+            image_path, capture_metrics = cam.capture_image(
                 resolution=target_resolution,
                 output_folder=tmp_path,
             )
         except RuntimeError as e:
             shutil.rmtree(tmp_path, ignore_errors=True)
-            logger.warning("capture_no_camera", reason=str(e))
+            logger.warning("capture_no_camera", camera_id=cam_id, reason=str(e))
             return jsonify({"error": "No camera detected"}), 503
         except Exception:
             shutil.rmtree(tmp_path, ignore_errors=True)
-            logger.exception("capture_failed")
+            logger.exception("capture_failed", camera_id=cam_id)
             return jsonify({"error": "Capture failed"}), 500
 
         try:
@@ -125,10 +186,10 @@ def capture():
             shutil.rmtree(tmp_path, ignore_errors=True)
             return response
 
-        logger.info("image_captured", resolution=target_resolution, file=image_path.name)
+        logger.info("image_captured", camera_id=cam_id, resolution=target_resolution, file=image_path.name)
         return send_file(image_path)
     finally:
-        capture_lock.release()
+        lock.release()
 
 
 def _effective_config() -> dict:
@@ -192,8 +253,9 @@ def patch_config():
 
     for key, value in updates.items():
         runtime_config.update(key, value)
-        if isinstance(camera, MindVisionCamera):
-            camera.apply_config(key, value)
+        for cam in cameras.values():
+            if isinstance(cam, MindVisionCamera):
+                cam.apply_config(key, value)
 
     logger.info("runtime_config_updated", keys=list(updates.keys()))
     return jsonify({"updated": list(updates.keys()), "config": _effective_config()})
