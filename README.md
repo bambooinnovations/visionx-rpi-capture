@@ -103,12 +103,69 @@ pkill -f chromium
 
 ## API Endpoints
 
+### Core
+
 | Method | Path             | Description                                         |
 | ------ | ---------------- | --------------------------------------------------- |
 | GET    | `/health`        | Health check — `{"status": "ok"}`                   |
 | POST   | `/rpi/capture`   | Capture and return an image (JPEG)                  |
 | GET    | `/rpi/stream`    | MJPEG live preview stream                           |
 | GET    | `/metrics/stats` | Capture performance stats (durations, sizes, ratio) |
+
+### Runtime configuration
+
+| Method | Path                    | Description                                         |
+| ------ | ----------------------- | --------------------------------------------------- |
+| GET    | `/rpi/config`           | Return effective config (toml + runtime overrides)  |
+| PATCH  | `/rpi/config`           | Update one or more values at runtime (no restart)   |
+| DELETE | `/rpi/config/<key>`     | Remove a runtime override, reverting to toml value  |
+
+PATCH body is a JSON object of `"section.key": value` pairs. Keys that can be updated at runtime:
+
+| Key                              | Type   |
+| -------------------------------- | ------ |
+| `camera.mv_exposure_us`          | int    |
+| `camera.mv_auto_exposure`        | bool   |
+| `stream.fps`                     | int    |
+| `stream.quality`                 | int    |
+| `hw_trigger.destination_url`     | string |
+| `hw_trigger.destination_api_key` | string |
+| `hw_trigger.retry_attempts`      | int    |
+| `hw_trigger.timeout_seconds`     | int    |
+| `hw_trigger.save_local`          | bool   |
+| `hw_trigger.local_max_files`     | int    |
+| `hw_trigger.local_max_mb`        | int    |
+
+Overrides are persisted to `runtime_config.json` (gitignored) and survive restarts.
+
+### MindVision-specific endpoints
+
+Registered only when `camera.type = "mindvision"`. All routes are prefixed `/rpi/mindvision`. Pass `?camera_id=N` to target a specific camera (default `0`).
+
+| Method | Path                              | Description                                                    |
+| ------ | --------------------------------- | -------------------------------------------------------------- |
+| GET    | `/rpi/mindvision/cameras`         | List all connected cameras (index, serial, model, port type)   |
+| GET    | `/rpi/mindvision/mode`            | Get the active mode for a camera                               |
+| POST   | `/rpi/mindvision/mode`            | Set the active mode (`stream`, `capture`, or `hardware_trigger`) |
+| GET    | `/rpi/mindvision/white-balance`   | Return stored white balance calibration (from `calibration.json`) |
+| POST   | `/rpi/mindvision/calibrate-wb`    | Run one-shot white balance calibration and store gains         |
+| POST   | `/rpi/mindvision/capture-all`     | Capture from all cameras simultaneously; returns a ZIP archive |
+
+#### Camera modes
+
+| Mode               | Behaviour                                                                         |
+| ------------------ | --------------------------------------------------------------------------------- |
+| `stream`           | Continuous grab loop; optimised for low-latency MJPEG preview                    |
+| `capture`          | Triggered grab; each `POST /rpi/capture` pulls one frame                          |
+| `hardware_trigger` | Camera waits for a physical signal; each trigger posts the image to `hw_trigger.destination_url` |
+
+Switch modes with:
+
+```bash
+curl -X POST http://localhost:8080/rpi/mindvision/mode \
+     -H 'Content-Type: application/json' \
+     -d '{"mode": "hardware_trigger"}'
+```
 
 ### `POST /rpi/capture`
 
@@ -151,6 +208,8 @@ lock_exposure = false      # Lock AE/AWB after startup for consistent captures (
 # mv_camera_index = 0      # Index into the enumerated MindVision device list
 # mv_exposure_us  = 30000  # Exposure time in microseconds (when auto-exposure is off)
 # mv_auto_exposure = false # Let the camera's AE algorithm control exposure
+# mv_auto_wb = true        # true = continuous auto-WB; false = leave camera hardware defaults
+                            # Use POST /rpi/mindvision/calibrate-wb to store fixed gains
 
 [stream]
 fps = 15                   # Max MJPEG stream frame rate
@@ -162,12 +221,25 @@ tmp_dir = "/tmp/visionx_captures"
 [metrics]
 db_path = "/tmp/visionx_metrics.db"
 
+# Hardware trigger (MindVision only — active when mode = "hardware_trigger")
+[hw_trigger]
+# destination_url     = "https://yoursite.com/api/captures"
+# destination_api_key = ""       # sent as Authorization: Bearer <key>
+# retry_attempts      = 3
+# timeout_seconds     = 10
+# save_local          = true     # also save a local copy
+# local_save_dir      = "data/hw_captures"
+# local_max_files     = 200      # oldest deleted first (0 = unlimited)
+# local_max_mb        = 500      # oldest deleted first (0 = unlimited)
+
 [cleanup]
 interval_seconds = 300     # How often stale temp dirs are cleaned up
 max_age_seconds  = 300     # Minimum age before removal
 ```
 
 Camera-specific capture and stream resolutions are defined under `[camera_profiles.*]` — see the file for per-model defaults. These profiles apply to `picamera2` only; MindVision cameras use their native sensor resolution.
+
+The `hw_trigger.destination_url` and `destination_api_key` can be changed without a restart using `PATCH /rpi/config`.
 
 ## Make Targets
 
@@ -202,23 +274,30 @@ rpi-capture-api/
 ├── Makefile                # All commands: setup, start, stop, dev, logs, calibrate
 ├── configuration.toml.example  # Template — copy to configuration.toml and edit locally
 ├── configuration.toml      # Runtime config — gitignored, not committed
+├── runtime_config.json     # Persisted runtime overrides — gitignored, managed via API
 ├── scripts/
 │   ├── lib/
 │   │   └── utils.sh        # Shared helpers: logging, OS detection, root check
 │   ├── modules/
 │   │   ├── camera.sh       # Camera selection, Arducam/MindVision driver install
+│   │   ├── mindvision.sh   # MindVision SDK library installation
 │   │   └── certs.sh        # TLS cert installation (system CA store + Chrome NSS)
+│   ├── sdk/mindvision/     # Bundled MindVision SDK libraries and headers
 │   ├── setup.sh            # Complete setup entry point (run as root)
 │   ├── start.sh            # Production server startup (Gunicorn)
 │   ├── dev.sh              # Development server (Flask debug mode)
 │   └── calibrate.sh        # Live camera preview for lens calibration
 ├── app.py                  # Flask application and route handlers
 ├── config.py               # TOML config loader — typed module-level constants
+├── runtime_config.py       # Runtime override persistence (GET/PATCH/DELETE /rpi/config)
+├── calibration.py          # Calibration data persistence (calibration.json)
 ├── camera/
 │   ├── __init__.py         # create_camera() factory — returns the right BaseCamera
 │   ├── base.py             # BaseCamera ABC: open, close, capture_image, stream_frames
 │   ├── picamera.py         # PiCamera — wraps picamera2 for CSI cameras
-│   └── mindvision.py       # MindVisionCamera — wraps mvsdk for MindVision USB/GigE cameras
+│   └── mindvision.py       # MindVisionCamera — wraps mvsdk; supports stream/capture/hardware_trigger modes
+├── blueprints/
+│   └── mindvision.py       # MindVision-specific routes (/rpi/mindvision/*); registered only for MindVision cameras
 ├── mvsdk.py                # MindVision SDK Python bindings
 ├── log_config.py           # structlog configuration
 ├── metrics.py              # SQLite-backed capture performance metrics
