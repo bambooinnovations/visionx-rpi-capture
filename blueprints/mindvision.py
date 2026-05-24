@@ -22,10 +22,10 @@ from flask import Blueprint, Response, after_this_request, jsonify, request, sen
 logger = structlog.get_logger()
 
 # Per-camera rolling sharpness history for trend detection (camera_id -> deque).
-_focus_history: dict[int, deque] = {}
+_calibration_history: dict[int, deque] = {}
 
 
-def _render_focus_overlay(
+def _render_calibration_overlay(
     frame: "np.ndarray",
     history: "deque[float]",
     peak_threshold: int,
@@ -83,6 +83,22 @@ def _render_focus_overlay(
     else:
         trend_char, trend_color, suggestion = "~", (180, 180, 180), "measuring..."
 
+    # Exposure analysis: fraction of pixels with any channel clipped (≥ 250).
+    clip_mask = np.any(rgb >= 250, axis=2)
+    clipped_pct = 100.0 * float(clip_mask.sum()) / (h * w)
+    mean_brightness = float(gray.mean())
+
+    if clipped_pct > 5.0:
+        exp_char, exp_color, exp_suggestion = "▲", (220, 60, 60),  "Close aperture"
+    elif clipped_pct > 0.5:
+        exp_char, exp_color, exp_suggestion = "▲", (220, 160, 40), "Slightly overexposed"
+    elif mean_brightness < 30:
+        exp_char, exp_color, exp_suggestion = "▼", (80, 160, 220),  "Open aperture"
+    elif mean_brightness < 60:
+        exp_char, exp_color, exp_suggestion = "▼", (140, 200, 240), "Slightly underexposed"
+    else:
+        exp_char, exp_color, exp_suggestion = "●", (80, 220, 80),  "Exposure OK"
+
     # Focus peaking: highlight pixels where |gradient| > threshold in magenta.
     gi = gray.astype(np.int32)
     gx = np.abs(gi[1:-1, 2:] - gi[1:-1, :-2])
@@ -93,6 +109,8 @@ def _render_focus_overlay(
 
     rgb_out = rgb.copy()
     rgb_out[peak_mask] = [255, 0, 255]
+    # Clipped pixels painted red on top — more critical than focus-peak markers.
+    rgb_out[clip_mask] = [255, 40, 40]
 
     pil_out = PilImage.fromarray(rgb_out)
     draw = ImageDraw.Draw(pil_out)
@@ -121,6 +139,15 @@ def _render_focus_overlay(
         fill=trend_color,
         font=font,
     )
+
+    # Exposure status (top-right corner).
+    exp_line1 = f"Clipped: {clipped_pct:.1f}%"
+    exp_line2 = f"{exp_char}  {exp_suggestion}"
+    bbox1 = draw.textbbox((0, 0), exp_line1, font=font)
+    bbox2 = draw.textbbox((0, 0), exp_line2, font=font)
+    exp_x1 = w - pad - max(bbox1[2], bbox2[2])
+    draw.text((exp_x1, pad), exp_line1, fill=(255, 255, 255), font=font)
+    draw.text((exp_x1, pad + font_size + 4), exp_line2, fill=exp_color, font=font)
 
     # Sharpness bar (bottom-left), normalized to the highest score seen so far.
     max_score = max(list(history) + [1.0])
@@ -301,11 +328,11 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             logger.exception("capture_all_zip_failed")
             return jsonify({"error": "Failed to build capture archive"}), 500
 
-    # ── Focus calibration ─────────────────────────────────────────────────────
+    # ── Calibration stream ────────────────────────────────────────────────────
 
-    @bp.route("/focus/stream")
-    def focus_stream():
-        """MJPEG stream with focus peaking and sharpness score overlaid.
+    @bp.route("/calibration/stream")
+    def calibration_stream():
+        """MJPEG stream with focus peaking, sharpness score, and exposure overlay.
 
         Query params:
           camera_id       int   Camera index (default 0)
@@ -321,9 +348,9 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         peak_threshold = request.args.get("peak_threshold", 50, type=int)
         max_width = request.args.get("max_width", 1280, type=int)
 
-        if cam_id not in _focus_history:
-            _focus_history[cam_id] = deque(maxlen=30)
-        history = _focus_history[cam_id]
+        if cam_id not in _calibration_history:
+            _calibration_history[cam_id] = deque(maxlen=30)
+        history = _calibration_history[cam_id]
 
         frame_interval = 1.0 / fps
 
@@ -353,7 +380,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                         frame = cam._grab_frame()
 
                     if frame is not None:
-                        jpeg = _render_focus_overlay(frame, history, peak_threshold, max_width)
+                        jpeg = _render_calibration_overlay(frame, history, peak_threshold, max_width)
                         yield (
                             b"--frame\r\n"
                             b"Content-Type: image/jpeg\r\n\r\n"
@@ -382,12 +409,12 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
 
-    @bp.route("/focus/score")
-    def focus_score():
+    @bp.route("/calibration/score")
+    def calibration_score():
         """Return the current sharpness score and trend as JSON (single frame).
 
         Useful for scripted calibration loops. Uses the same rolling history as
-        the focus stream, so calling both simultaneously gives consistent trends.
+        the calibration stream, so calling both simultaneously gives consistent trends.
 
         Query params:
           camera_id  int  Camera index (default 0)
@@ -396,9 +423,9 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         if cam is None:
             return jsonify({"error": f"Camera {cam_id} not found"}), 404
 
-        if cam_id not in _focus_history:
-            _focus_history[cam_id] = deque(maxlen=30)
-        history = _focus_history[cam_id]
+        if cam_id not in _calibration_history:
+            _calibration_history[cam_id] = deque(maxlen=30)
+        history = _calibration_history[cam_id]
 
         try:
             import mvsdk

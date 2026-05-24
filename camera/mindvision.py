@@ -34,6 +34,7 @@ logger = structlog.get_logger()
 class MindVisionCamera(BaseCamera):
     def __init__(self, camera_index: int = 0) -> None:
         self._camera_index = camera_index
+        self._project_root = Path(__file__).parent.parent
         self._h_camera: int | None = None
         self._frame_buffer: int = 0  # aligned C buffer; 0 means not yet allocated
         self._mono: bool = False
@@ -57,11 +58,10 @@ class MindVisionCamera(BaseCamera):
 
         mvsdk.CameraSdkInit(0)
 
-        # Tell the SDK where to find .mvdat / .config files (Camera/Data/<serial>.mvdat).
+        # Tell the SDK where to find .mvdat files and where to write runtime data.
         # Must be called before CameraInit; defaults to CWD which breaks when the app
         # is started from a directory other than the project root.
-        data_dir = Path(__file__).parent.parent
-        mvsdk.CameraSetDataDirectory(str(data_dir))
+        mvsdk.CameraSetDataDirectory(str(self._project_root / "MindVisionCamera"))
 
         dev_list = mvsdk.CameraEnumerateDevice()
         if len(dev_list) <= self._camera_index:
@@ -74,7 +74,7 @@ class MindVisionCamera(BaseCamera):
         self._dev_info = dev_info
 
         try:
-            # PARAM_MODE_BY_SN (2) loads Camera/Configs/<serial>.config if it exists,
+            # PARAM_MODE_BY_SN (2) loads Configs/<serial>-Group0.config if it exists,
             # falling back to defaults on first run. PARAMETER_TEAM_A (0) is where
             # CameraSaveParameter writes after WB calibration.
             h = mvsdk.CameraInit(dev_info, 2, 0)
@@ -206,7 +206,7 @@ class MindVisionCamera(BaseCamera):
         r, g, b = mvsdk.CameraGetGain(self._h_camera)
         mvsdk.CameraSetGain(self._h_camera, r, g, b)
 
-        mvsdk.CameraSaveParameter(self._h_camera, 0)  # persist to Camera/Configs/<sn>.config
+        mvsdk.CameraSaveParameter(self._h_camera, 0)  # persist to Configs/<sn>-Group0.config
         logger.info("white_balance_calibrated", r=r, g=g, b=b)
 
         return {"r_gain": r, "g_gain": g, "b_gain": b}

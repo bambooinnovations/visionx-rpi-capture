@@ -48,5 +48,5 @@ logs/
 # Gunicorn PID
 .gunicorn.pid
 
-# MindVision Camera data
-Camera/
+# MindVision SDK runtime data (device-specific, not committed)
+MindVisionCamera/
