@@ -48,5 +48,5 @@ logs/
 # Gunicorn PID
 .gunicorn.pid
 
-
+# MindVision Camera data
 Camera/

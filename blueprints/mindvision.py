@@ -14,7 +14,6 @@ import zipfile
 from collections import deque
 from pathlib import Path
 
-import calibration
 import config
 import structlog
 from camera.mindvision import CameraMode, MindVisionCamera
@@ -213,10 +212,13 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
 
     @bp.route("/white-balance", methods=["GET"])
     def get_white_balance():
-        wb = calibration.load().get("white_balance")
-        if wb is None:
+        import mvsdk
+        cam, cam_id = _resolve_camera()
+        if cam is None or cam._h_camera is None:
             return jsonify({"calibrated": False})
-        return jsonify({"calibrated": True, **wb})
+        auto = mvsdk.CameraGetWbMode(cam._h_camera)
+        r, g, b = mvsdk.CameraGetGain(cam._h_camera)
+        return jsonify({"calibrated": True, "auto": bool(auto), "r_gain": r, "g_gain": g, "b_gain": b})
 
     @bp.route("/calibrate-wb", methods=["POST"])
     def calibrate_wb():

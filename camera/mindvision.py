@@ -56,6 +56,13 @@ class MindVisionCamera(BaseCamera):
             return
 
         mvsdk.CameraSdkInit(0)
+
+        # Tell the SDK where to find .mvdat / .config files (Camera/Data/<serial>.mvdat).
+        # Must be called before CameraInit; defaults to CWD which breaks when the app
+        # is started from a directory other than the project root.
+        data_dir = Path(__file__).parent.parent
+        mvsdk.CameraSetDataDirectory(str(data_dir))
+
         dev_list = mvsdk.CameraEnumerateDevice()
         if len(dev_list) <= self._camera_index:
             raise RuntimeError(
@@ -67,7 +74,10 @@ class MindVisionCamera(BaseCamera):
         self._dev_info = dev_info
 
         try:
-            h = mvsdk.CameraInit(dev_info, -1, -1)
+            # PARAM_MODE_BY_SN (2) loads Camera/Configs/<serial>.config if it exists,
+            # falling back to defaults on first run. PARAMETER_TEAM_A (0) is where
+            # CameraSaveParameter writes after WB calibration.
+            h = mvsdk.CameraInit(dev_info, 2, 0)
         except mvsdk.CameraException as e:
             raise RuntimeError(
                 f"CameraInit failed ({e.error_code}): {e.message}"
@@ -145,10 +155,6 @@ class MindVisionCamera(BaseCamera):
                 width=head.iWidth, height=head.iHeight,
                 frames_total=stat.iTotal, frames_lost=stat.iLost,
             )
-            # A frame has been processed — safe to apply WB now so gains take
-            # effect on the very next frame regardless of whether streaming starts.
-            if not self._mono:
-                self._apply_white_balance(h)
         except mvsdk.CameraException as e:
             stat = mvsdk.CameraGetFrameStatistic(h)
             logger.warning(
@@ -183,18 +189,6 @@ class MindVisionCamera(BaseCamera):
         elif key == "camera.mv_auto_exposure":
             mvsdk.CameraSetAeState(self._h_camera, 1 if value else 0)
 
-    def _apply_white_balance(self, h: int) -> None:
-        """Apply saved WB gains. Call only while frames are flowing (continuous mode)."""
-        import calibration
-        wb = calibration.load().get("white_balance")
-        if wb:
-            mvsdk.CameraSetWbMode(h, False)  # stop auto-WB so gains aren't overridden
-            mvsdk.CameraSetGain(h, wb["r_gain"], wb["g_gain"], wb["b_gain"])
-            logger.info("white_balance_applied", r=wb["r_gain"], g=wb["g_gain"], b=wb["b_gain"])
-        elif config.MV_AUTO_WB:
-            mvsdk.CameraSetWbMode(h, True)
-            logger.info("white_balance_auto")
-
     def calibrate_white_balance(self) -> dict:
         """One-push WB calibration: match QT5 demo sequence exactly."""
         if self._h_camera is None:
@@ -212,8 +206,7 @@ class MindVisionCamera(BaseCamera):
         r, g, b = mvsdk.CameraGetGain(self._h_camera)
         mvsdk.CameraSetGain(self._h_camera, r, g, b)
 
-        import calibration
-        calibration.save("white_balance", {"r_gain": r, "g_gain": g, "b_gain": b})
+        mvsdk.CameraSaveParameter(self._h_camera, 0)  # persist to Camera/Configs/<sn>.config
         logger.info("white_balance_calibrated", r=r, g=g, b=b)
 
         return {"r_gain": r, "g_gain": g, "b_gain": b}
@@ -286,8 +279,6 @@ class MindVisionCamera(BaseCamera):
                     assert h is not None
                     mvsdk.CameraSetTriggerMode(h, 0)  # continuous while streaming
                     _continuous_active = True
-                    if not self._mono:
-                        self._apply_white_balance(h)
 
                 start = time.monotonic()
                 frame_data = None
