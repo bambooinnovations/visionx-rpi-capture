@@ -1,15 +1,15 @@
 # rpi-capture-api
 
-Flask API that captures images from a Raspberry Pi CSI camera and serves them over HTTP on port **8080**. Supports the Arducam 64MP Hawkeye and standard Pi Cameras (v2, v3, HQ).
+Flask API that captures images from a camera and serves them over HTTP on port **8080**. Supports the Arducam 64MP Hawkeye, standard Pi Cameras (v2, v3, HQ), and MindVision USB/GigE cameras.
 
 ## Requirements
 
-| Requirement  | Detail                                                                    |
-| ------------ | ------------------------------------------------------------------------- |
-| **Hardware** | Raspberry Pi 5, 4B, 3B+, 3A+, Zero, Zero 2W, CM3/CM3+/CM4               |
-| **Camera**   | Arducam 64MP Hawkeye **or** standard Pi Camera v2 / v3 / HQ (MIPI CSI-2) |
-| **OS**       | Raspberry Pi OS — Bullseye, Bookworm, or Trixie (64-bit recommended)      |
-| **Internet** | Required during setup (driver downloads, uv installer, TLS certificates)  |
+| Requirement  | Detail                                                                                              |
+| ------------ | --------------------------------------------------------------------------------------------------- |
+| **Hardware** | Raspberry Pi 5, 4B, 3B+, 3A+, Zero, Zero 2W, CM3/CM3+/CM4                                         |
+| **Camera**   | Arducam 64MP Hawkeye **or** standard Pi Camera v2 / v3 / HQ (MIPI CSI-2) **or** MindVision camera |
+| **OS**       | Raspberry Pi OS — Bullseye, Bookworm, or Trixie (64-bit recommended)                               |
+| **Internet** | Required during setup (driver downloads, uv installer, TLS certificates)                           |
 
 ## Installation
 
@@ -18,19 +18,16 @@ cd rpi-capture-api
 make setup        # or: sudo bash scripts/setup.sh
 ```
 
-The setup script handles everything in one run:
+The setup script presents a menu with four options:
 
-1. Detects OS version and sets the correct boot config path
-2. Installs TLS certificates (see [TLS Certificates](#tls-certificates) below)
-3. Prompts for camera type — Arducam 64MP Hawkeye or standard Pi Camera
-4. *Arducam only:* prompts for CSI port, downloads Pivariety drivers, patches boot config
-5. Installs system packages (`python3-libcamera`, `python3-kms++`, `libcap-dev`)
-6. Installs [uv](https://docs.astral.sh/uv/) and creates a venv with system site-packages
-7. Installs Python dependencies (including `picamera2`)
-8. Installs and enables the `rpi-capture` systemd service
-9. Prompts to reboot
+| Option | Action |
+| ------ | ------ |
+| 1 | Check installation status |
+| 2 | Install ArduCam (downloads Pivariety drivers, patches boot config, installs app + systemd) |
+| 3 | Install MindVision (installs MindVision SDK libraries and installs app + systemd) |
+| 4 | Setup TLS certificates (can be run independently at any time) |
 
-After reboot the service starts automatically.
+After installation the service starts automatically on reboot.
 
 ### Verify
 
@@ -54,7 +51,13 @@ The cert module (`scripts/modules/certs.sh`) runs automatically as part of `make
 
 ### Manual re-run
 
-To re-install certificates without running the full setup:
+To re-install certificates without running the full setup, use option 4 in the setup menu:
+
+```bash
+make setup   # then choose option 4
+```
+
+Or invoke the cert module directly:
 
 ```bash
 sudo bash -c '
@@ -126,6 +129,12 @@ Returns a continuous MJPEG stream. Frame rate and JPEG quality are configured in
 
 ## Configuration
 
+`configuration.toml` is gitignored — each deployment keeps its own copy. On a fresh checkout, create yours from the example:
+
+```bash
+cp configuration.toml.example configuration.toml
+```
+
 All settings live in `configuration.toml`:
 
 ```toml
@@ -133,8 +142,15 @@ All settings live in `configuration.toml`:
 env = "dev"                # "dev" = coloured console logs, "prod" = JSON
 
 [camera]
-sharpness = 1.0            # ISP sharpness; 0 = off (recommended for ML pipelines)
-lock_exposure = false       # Lock AE/AWB after startup for consistent captures
+type = "picamera2"         # "picamera2" (CSI cameras) or "mindvision" (MindVision USB/GigE)
+sharpness = 1.0            # ISP sharpness; 0 = off (picamera2 only)
+lock_exposure = false      # Lock AE/AWB after startup for consistent captures (picamera2 only)
+# lens_position = 2.0      # Manual focus in dioptres; omit for continuous autofocus (picamera2 only)
+
+# MindVision-specific (only used when type = "mindvision")
+# mv_camera_index = 0      # Index into the enumerated MindVision device list
+# mv_exposure_us  = 30000  # Exposure time in microseconds (when auto-exposure is off)
+# mv_auto_exposure = false # Let the camera's AE algorithm control exposure
 
 [stream]
 fps = 15                   # Max MJPEG stream frame rate
@@ -151,7 +167,7 @@ interval_seconds = 300     # How often stale temp dirs are cleaned up
 max_age_seconds  = 300     # Minimum age before removal
 ```
 
-Camera-specific capture and stream resolutions are defined under `[camera_profiles.*]` — see the file for per-model defaults.
+Camera-specific capture and stream resolutions are defined under `[camera_profiles.*]` — see the file for per-model defaults. These profiles apply to `picamera2` only; MindVision cameras use their native sensor resolution.
 
 ## Make Targets
 
@@ -184,12 +200,13 @@ To change after installation, edit the `dtoverlay` line in `/boot/firmware/confi
 ```
 rpi-capture-api/
 ├── Makefile                # All commands: setup, start, stop, dev, logs, calibrate
-├── configuration.toml      # Runtime config (camera, stream, capture, metrics)
+├── configuration.toml.example  # Template — copy to configuration.toml and edit locally
+├── configuration.toml      # Runtime config — gitignored, not committed
 ├── scripts/
 │   ├── lib/
 │   │   └── utils.sh        # Shared helpers: logging, OS detection, root check
 │   ├── modules/
-│   │   ├── camera.sh       # Camera selection, Arducam driver install + config patching
+│   │   ├── camera.sh       # Camera selection, Arducam/MindVision driver install
 │   │   └── certs.sh        # TLS cert installation (system CA store + Chrome NSS)
 │   ├── setup.sh            # Complete setup entry point (run as root)
 │   ├── start.sh            # Production server startup (Gunicorn)
@@ -197,7 +214,12 @@ rpi-capture-api/
 │   └── calibrate.sh        # Live camera preview for lens calibration
 ├── app.py                  # Flask application and route handlers
 ├── config.py               # TOML config loader — typed module-level constants
-├── imageCapture.py         # picamera2 camera init, capture, and streaming
+├── camera/
+│   ├── __init__.py         # create_camera() factory — returns the right BaseCamera
+│   ├── base.py             # BaseCamera ABC: open, close, capture_image, stream_frames
+│   ├── picamera.py         # PiCamera — wraps picamera2 for CSI cameras
+│   └── mindvision.py       # MindVisionCamera — wraps mvsdk for MindVision USB/GigE cameras
+├── mvsdk.py                # MindVision SDK Python bindings
 ├── log_config.py           # structlog configuration
 ├── metrics.py              # SQLite-backed capture performance metrics
 ├── tasks.py                # Background cleanup for stale temp files
@@ -212,10 +234,11 @@ uv sync
 make dev
 ```
 
-`picamera2` is only available on Raspberry Pi. Without it the `/rpi/capture` endpoint returns `503`, but all other endpoints work normally.
+`picamera2` is only available on Raspberry Pi, and `mvsdk` requires the MindVision SDK to be installed. Without a working camera driver the `/rpi/capture` and `/rpi/stream` endpoints return `503`, but all other endpoints work normally.
 
 ## References
 
 - [Arducam 64MP Hawkeye — Documentation](https://docs.arducam.com/Raspberry-Pi-Camera/Native-camera/64MP-Hawkeye/)
 - [Arducam Pivariety V4L2 Driver](https://github.com/ArduCAM/Arducam-Pivariety-V4L2-Driver)
 - [Raspberry Pi Camera Documentation](https://www.raspberrypi.com/documentation/computers/camera_software.html)
+- [MindVision Camera SDK](http://www.mindvision.com.cn/)

@@ -178,6 +178,7 @@ main() {
         echo "    1.  Check installation status"
         echo "    2.  Install ArduCam"
         echo "    3.  Install MindVision"
+        echo "    4.  Setup TLS certificates"
         echo "    0.  Exit"
         echo ""
         read -rp "  Enter choice: " choice
@@ -187,7 +188,6 @@ main() {
                 _menu_check_status
                 ;;
             2)
-                setup_certs
                 install_arducam
                 _setup_app
                 _prompt_reboot
@@ -195,6 +195,10 @@ main() {
             3)
                 install_mindvision
                 _prompt_reboot
+                ;;
+            4)
+                setup_certs
+                _pause
                 ;;
             0)
                 log INFO "Exiting."

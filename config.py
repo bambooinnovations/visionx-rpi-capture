@@ -26,10 +26,19 @@ def _get(section: str, key: str, default):
 ENV: str = _get("server", "env", "dev")
 
 # Camera
+CAMERA_TYPE: str = _get("camera", "type", "picamera2")
 CAMERA_SHARPNESS: float = _get("camera", "sharpness", 1.0)
 LOCK_EXPOSURE: bool = _get("camera", "lock_exposure", False)
 # None = use continuous autofocus; a float value = lock to that LensPosition.
 LENS_POSITION: float | None = _get("camera", "lens_position", None)
+
+# MindVision-specific
+MV_CAMERA_INDEX: int = _get("camera", "mv_camera_index", 0)
+MV_EXPOSURE_US: int = _get("camera", "mv_exposure_us", 30_000)
+MV_AUTO_EXPOSURE: bool = _get("camera", "mv_auto_exposure", False)
+# White balance fallback when no calibration.json entry exists.
+# True = continuous auto-WB; False = leave camera hardware defaults.
+MV_AUTO_WB: bool = _get("camera", "mv_auto_wb", True)
 
 # Stream
 STREAM_FPS: int = _get("stream", "fps", 15)
