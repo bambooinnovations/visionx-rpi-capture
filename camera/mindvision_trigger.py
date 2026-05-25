@@ -262,18 +262,11 @@ class SerialTriggerListener:
             trigger=event.get("trigger"),
         )
 
-        # Capture from all cameras concurrently.
-        capture_threads = []
+        # Frames are pre-buffered by the camera hardware when the trigger fires,
+        # so sequential grabs are safe and avoid potential SDK concurrency issues.
+        # Switch back to concurrent if the SDK is confirmed thread-safe across handles.
         for cam_id, cam in self._cameras.items():
-            t = threading.Thread(
-                target=self._capture_one,
-                args=(cam_id, cam, event),
-                daemon=True,
-            )
-            t.start()
-            capture_threads.append(t)
-        for t in capture_threads:
-            t.join(timeout=30)
+            self._capture_one(cam_id, cam, event)
 
     def _capture_one(self, cam_id: int, cam: "MindVisionCamera", event: dict) -> None:
         try:

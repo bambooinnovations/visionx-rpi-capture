@@ -24,6 +24,10 @@ try:
 except (ImportError, OSError):
     _MVSDK_AVAILABLE = False
 
+# Guards so CameraSdkInit / CameraSetDataDirectory are only called once
+# regardless of how many MindVisionCamera instances are opened.
+_sdk_initialized = False
+
 import config
 from camera.base import BaseCamera
 from metrics import CaptureMetrics
@@ -49,6 +53,7 @@ class MindVisionCamera(BaseCamera):
         self._connection_cb = None
 
     def open(self) -> None:
+        global _sdk_initialized
         if not _MVSDK_AVAILABLE:
             raise RuntimeError(
                 "MindVision SDK (mvsdk) or its dependencies are not available."
@@ -56,12 +61,13 @@ class MindVisionCamera(BaseCamera):
         if self._h_camera is not None:
             return
 
-        mvsdk.CameraSdkInit(0)
-
-        # Tell the SDK where to find .mvdat files and where to write runtime data.
-        # Must be called before CameraInit; defaults to CWD which breaks when the app
-        # is started from a directory other than the project root.
-        mvsdk.CameraSetDataDirectory(str(self._project_root / "MindVisionCamera"))
+        if not _sdk_initialized:
+            mvsdk.CameraSdkInit(0)
+            # Tell the SDK where to find .mvdat files and where to write runtime data.
+            # Must be called before CameraInit; defaults to CWD which breaks when the app
+            # is started from a directory other than the project root.
+            mvsdk.CameraSetDataDirectory(str(self._project_root / "MindVisionCamera"))
+            _sdk_initialized = True
 
         dev_list = mvsdk.CameraEnumerateDevice()
         if len(dev_list) <= self._camera_index:
@@ -226,7 +232,7 @@ class MindVisionCamera(BaseCamera):
     def _grab_frame(self) -> "np.ndarray | None":
         """Grab one processed frame as a numpy array. Caller must hold self._lock."""
         try:
-            raw, head = mvsdk.CameraGetImageBuffer(self._h_camera, 200)
+            raw, head = mvsdk.CameraGetImageBuffer(self._h_camera, 1000)
             mvsdk.CameraImageProcess(self._h_camera, raw, self._frame_buffer, head)
             mvsdk.CameraReleaseImageBuffer(self._h_camera, raw)
 
@@ -239,15 +245,15 @@ class MindVisionCamera(BaseCamera):
             # must copy into a new numpy array before releasing the lock.
             return arr.copy()
         except mvsdk.CameraException as e:
-            if e.error_code != mvsdk.CAMERA_STATUS_TIME_OUT:
-                stat = mvsdk.CameraGetFrameStatistic(self._h_camera)
-                logger.warning(
-                    "mindvision_grab_failed",
-                    error_code=e.error_code,
-                    message=e.message,
-                    frames_total=stat.iTotal,
-                    frames_lost=stat.iLost,
-                )
+            stat = mvsdk.CameraGetFrameStatistic(self._h_camera)
+            logger.warning(
+                "mindvision_grab_failed",
+                error_code=e.error_code,
+                message=e.message,
+                timed_out=(e.error_code == mvsdk.CAMERA_STATUS_TIME_OUT),
+                frames_total=stat.iTotal,
+                frames_lost=stat.iLost,
+            )
             return None
 
     def _encode_jpeg(self, frame: "np.ndarray", quality: int) -> bytes:

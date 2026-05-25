@@ -30,6 +30,7 @@ def _render_calibration_overlay(
     history: "deque[float]",
     peak_threshold: int,
     max_width: int,
+    camera_id: int = 0,
 ) -> bytes:
     """Return a JPEG with focus peaking + sharpness score overlaid."""
     import numpy as np
@@ -112,7 +113,7 @@ def _render_calibration_overlay(
     # Clipped pixels painted red on top — more critical than focus-peak markers.
     rgb_out[clip_mask] = [255, 40, 40]
 
-    pil_out = PilImage.fromarray(rgb_out)
+    pil_out = PilImage.fromarray(rgb_out).convert("RGBA")
     draw = ImageDraw.Draw(pil_out)
 
     font_size = max(16, w // 48)
@@ -172,8 +173,21 @@ def _render_calibration_overlay(
         font=font_sm,
     )
 
+    # Camera ID badge (bottom-right corner).
+    cam_label = f"cam{camera_id}"
+    cam_bbox = draw.textbbox((0, 0), cam_label, font=font)
+    cam_w = cam_bbox[2] - cam_bbox[0]
+    cam_h = cam_bbox[3] - cam_bbox[1]
+    cam_x = w - pad - cam_w
+    cam_y = h - pad - cam_h
+    draw.rectangle(
+        [cam_x - 4, cam_y - 2, cam_x + cam_w + 4, cam_y + cam_h + 2],
+        fill=(0, 0, 0, 160),
+    )
+    draw.text((cam_x, cam_y), cam_label, fill=(255, 255, 255), font=font)
+
     buf = io.BytesIO()
-    pil_out.save(buf, format="JPEG", quality=75)
+    pil_out.convert("RGB").save(buf, format="JPEG", quality=75)
     return buf.getvalue()
 
 
@@ -383,7 +397,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                         frame = cam._grab_frame()
 
                     if frame is not None:
-                        jpeg = _render_calibration_overlay(frame, history, peak_threshold, max_width)
+                        jpeg = _render_calibration_overlay(frame, history, peak_threshold, max_width, cam_id)
                         yield (
                             b"--frame\r\n"
                             b"Content-Type: image/jpeg\r\n\r\n"
@@ -483,6 +497,44 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
     def serial_trigger_status():
         """Return the current status and statistics of the serial trigger listener."""
         return jsonify(_serial_listener.status())
+
+    @bp.route("/hw-trigger/diag", methods=["GET"])
+    def hw_trigger_diag():
+        """Diagnostic: report trigger mode and frame stats for every camera.
+
+        Also fires a software trigger on each camera (regardless of current mode)
+        and reports whether a frame was received.  Use this to confirm the cameras
+        are alive and the SDK can grab frames independently of the hardware pin.
+        """
+        import mvsdk as _mvsdk
+        results = {}
+        for cam_id, cam in sorted(cameras.items()):
+            if cam._h_camera is None:
+                results[cam_id] = {"error": "camera not open"}
+                continue
+            try:
+                trigger_mode = _mvsdk.CameraGetTriggerMode(cam._h_camera)
+            except Exception as exc:
+                trigger_mode = f"error: {exc}"
+            stat = _mvsdk.CameraGetFrameStatistic(cam._h_camera)
+            # Fire a software trigger and attempt a grab to confirm camera health.
+            sw_ok = False
+            sw_error = None
+            try:
+                _mvsdk.CameraSoftTrigger(cam._h_camera)
+                raw, head = _mvsdk.CameraGetImageBuffer(cam._h_camera, 2000)
+                _mvsdk.CameraReleaseImageBuffer(cam._h_camera, raw)
+                sw_ok = True
+            except Exception as exc:
+                sw_error = str(exc)
+            results[cam_id] = {
+                "trigger_mode": trigger_mode,
+                "frames_total": stat.iTotal,
+                "frames_lost": stat.iLost,
+                "sw_trigger_ok": sw_ok,
+                "sw_trigger_error": sw_error,
+            }
+        return jsonify(results)
 
     @bp.route("/hw-trigger/server-health", methods=["GET"])
     def hw_trigger_server_health():
