@@ -195,6 +195,36 @@ class MindVisionCamera(BaseCamera):
         elif key == "camera.mv_auto_exposure":
             mvsdk.CameraSetAeState(self._h_camera, 1 if value else 0)
 
+    def get_orientation(self) -> dict:
+        """Return current rotation and mirror settings from the SDK."""
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        rotation = mvsdk.CameraGetRotate(self._h_camera)
+        h_mirror = bool(mvsdk.CameraGetMirror(self._h_camera, 0))
+        v_mirror = bool(mvsdk.CameraGetMirror(self._h_camera, 1))
+        return {"rotation": rotation, "h_mirror": h_mirror, "v_mirror": v_mirror}
+
+    def set_rotation(self, rotation: int) -> None:
+        """Set SDK-level rotation (0=0°, 1=90°CCW, 2=180°, 3=270°CCW) and persist."""
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        if rotation not in (0, 1, 2, 3):
+            raise ValueError(f"rotation must be 0-3, got {rotation}")
+        mvsdk.CameraSetRotate(self._h_camera, rotation)
+        mvsdk.CameraSaveParameter(self._h_camera, 0)
+        logger.info("camera_rotation_set", rotation=rotation)
+
+    def set_mirror(self, direction: int, enable: bool) -> None:
+        """Set SDK-level mirror (direction: 0=horizontal, 1=vertical) and persist."""
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        if direction not in (0, 1):
+            raise ValueError(f"direction must be 0 (horizontal) or 1 (vertical), got {direction}")
+        mvsdk.CameraSetMirror(self._h_camera, direction, int(enable))
+        mvsdk.CameraSaveParameter(self._h_camera, 0)
+        label = "horizontal" if direction == 0 else "vertical"
+        logger.info("camera_mirror_set", direction=label, enabled=enable)
+
     def calibrate_white_balance(self) -> dict:
         """One-push WB calibration: match QT5 demo sequence exactly."""
         if self._h_camera is None:

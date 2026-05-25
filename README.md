@@ -142,16 +142,21 @@ Overrides are persisted to `runtime_config.json` (gitignored) and survive restar
 
 Registered only when `camera.type = "mindvision"`. All routes are prefixed `/rpi/mindvision`. Pass `?camera_id=N` to target a specific camera (default `0`).
 
-| Method | Path                              | Description                                                    |
-| ------ | --------------------------------- | -------------------------------------------------------------- |
-| GET    | `/rpi/mindvision/cameras`         | List all connected cameras (index, serial, model, port type)   |
-| GET    | `/rpi/mindvision/mode`            | Get the active mode for a camera                               |
-| POST   | `/rpi/mindvision/mode`            | Set the active mode (`stream`, `capture`, or `hardware_trigger`) |
-| GET    | `/rpi/mindvision/white-balance`   | Return stored white balance calibration (from `calibration.json`) |
-| POST   | `/rpi/mindvision/calibrate-wb`    | Run one-shot white balance calibration and store gains         |
-| POST   | `/rpi/mindvision/capture-all`     | Capture from all cameras simultaneously; returns a ZIP archive |
-| GET    | `/rpi/mindvision/focus/stream`    | MJPEG stream with focus peaking overlay and sharpness score    |
-| GET    | `/rpi/mindvision/focus/score`     | Current sharpness score and trend as JSON (single frame)       |
+| Method | Path                                       | Description                                                         |
+| ------ | ------------------------------------------ | ------------------------------------------------------------------- |
+| GET    | `/rpi/mindvision/cameras`                  | List all connected cameras (index, serial, model, port type)        |
+| GET    | `/rpi/mindvision/mode`                     | Get the active mode for a camera                                    |
+| POST   | `/rpi/mindvision/mode`                     | Set the active mode (`stream`, `capture`, or `hardware_trigger`)    |
+| GET    | `/rpi/mindvision/white-balance`            | Return current white balance gains                                  |
+| POST   | `/rpi/mindvision/calibrate-wb`             | Run one-shot white balance calibration and persist gains            |
+| POST   | `/rpi/mindvision/capture-all`              | Capture from all cameras simultaneously; returns a ZIP archive      |
+| GET    | `/rpi/mindvision/orientation`              | Get current rotation and mirror state                               |
+| POST   | `/rpi/mindvision/rotation`                 | Set SDK rotation (0°/90°/180°/270°) and persist                    |
+| POST   | `/rpi/mindvision/mirror`                   | Set SDK horizontal or vertical mirror and persist                   |
+| GET    | `/rpi/mindvision/calibration/stream`       | MJPEG stream with focus peaking overlay and sharpness score         |
+| GET    | `/rpi/mindvision/calibration/score`        | Current sharpness score and trend as JSON (single frame)            |
+| GET    | `/rpi/mindvision/edge-detection/stream`    | MJPEG stream with live edge detection overlay (tunable via params)  |
+| GET    | `/rpi/mindvision/edge-detection/frame`     | Single JPEG with edge detection applied                             |
 
 #### Camera modes
 
@@ -227,7 +232,7 @@ Print at 100% scale (no "fit to page") on letter paper. Place it flat on a surfa
 Open this URL in a browser (or any MJPEG viewer):
 
 ```
-http://<rpi-ip>:8080/rpi/mindvision/focus/stream
+http://<rpi-ip>:8080/rpi/mindvision/calibration/stream
 ```
 
 The stream runs at 2 FPS by default to keep CPU load low on the Pi. You will see:
@@ -262,7 +267,7 @@ When the trend stabilises at `●` with a full green bar and magenta peaking vis
 Example with custom parameters:
 
 ```
-http://<rpi-ip>:8080/rpi/mindvision/focus/stream?fps=3&peak_threshold=70&max_width=960
+http://<rpi-ip>:8080/rpi/mindvision/calibration/stream?fps=3&peak_threshold=70&max_width=960
 ```
 
 #### JSON score endpoint
@@ -270,7 +275,7 @@ http://<rpi-ip>:8080/rpi/mindvision/focus/stream?fps=3&peak_threshold=70&max_wid
 For scripted calibration or automation, poll the score endpoint instead of streaming:
 
 ```bash
-curl http://localhost:8080/rpi/mindvision/focus/score
+curl http://localhost:8080/rpi/mindvision/calibration/score
 ```
 
 ```json
@@ -285,6 +290,95 @@ curl http://localhost:8080/rpi/mindvision/focus/score
 ```
 
 The `score` is the Laplacian variance of the centre ROI — an absolute number that depends on the scene, so use `trend` and `suggestion` for direction guidance rather than comparing scores across different scenes or cameras.
+
+---
+
+### Camera orientation (MindVision)
+
+If a camera is mounted upside-down or sideways, use the rotation and mirror endpoints to correct the output. Settings are applied at the SDK ISP level (no software overhead) and persisted to the per-camera config file so they survive restarts.
+
+#### Get current orientation
+
+```bash
+curl http://localhost:8080/rpi/mindvision/orientation
+# {"camera_id": 0, "rotation": 0, "h_mirror": false, "v_mirror": false}
+```
+
+#### Set rotation
+
+```bash
+curl -X POST http://localhost:8080/rpi/mindvision/rotation \
+     -H 'Content-Type: application/json' \
+     -d '{"rotation": 2}'
+```
+
+| `rotation` value | Effect |
+| ---------------- | ------ |
+| `0` | No rotation (default) |
+| `1` | 90° counter-clockwise |
+| `2` | 180° |
+| `3` | 270° counter-clockwise |
+
+#### Set mirror
+
+```bash
+curl -X POST http://localhost:8080/rpi/mindvision/mirror \
+     -H 'Content-Type: application/json' \
+     -d '{"direction": "horizontal", "enable": true}'
+```
+
+| `direction` | Effect |
+| ----------- | ------ |
+| `"horizontal"` | Flip left ↔ right |
+| `"vertical"` | Flip top ↔ bottom |
+
+Both endpoints accept `?camera_id=N` to target a specific camera.
+
+---
+
+### Edge detection (MindVision)
+
+Two endpoints for live parameter tuning and single-frame inspection. All parameters are passed as query strings so you can adjust and reload without reconnecting.
+
+#### Live stream
+
+Open in a browser or any MJPEG viewer:
+
+```
+http://<rpi-ip>:8080/rpi/mindvision/edge-detection/stream
+```
+
+Current parameter values are overlaid on each frame in green text.
+
+| Parameter | Default | Description |
+| --------- | ------- | ----------- |
+| `camera_id` | `0` | Camera index |
+| `method` | `canny` | `canny`, `sobel`, or `laplacian` |
+| `fps` | `2` | Stream frame rate (0.5–10) |
+| `max_width` | `1280` | Downscale before processing |
+| **Canny** | | |
+| `low_threshold` | `50` | Lower hysteresis threshold (0–255) |
+| `high_threshold` | `150` | Upper hysteresis threshold (0–255) |
+| `aperture` | `3` | Sobel aperture inside Canny: `3`, `5`, or `7` |
+| `blur_kernel` | `3` | Gaussian pre-blur: `1` (none), `3`, `5`, or `7` |
+| **Sobel / Laplacian** | | |
+| `ksize` | `3` | Kernel size: `1`, `3`, `5`, or `7` |
+| `scale` | `1.0` | Gradient magnitude multiplier |
+
+Example — Canny with tighter thresholds and more blur:
+
+```
+http://<rpi-ip>:8080/rpi/mindvision/edge-detection/stream?method=canny&low_threshold=30&high_threshold=80&blur_kernel=5&fps=5
+```
+
+#### Single frame
+
+Returns a JPEG with edge detection applied. Accepts the same query params as the stream (minus `fps` and `max_width`):
+
+```bash
+curl "http://localhost:8080/rpi/mindvision/edge-detection/frame?method=sobel&ksize=5&scale=2.0" \
+     --output edges.jpg
+```
 
 ---
 

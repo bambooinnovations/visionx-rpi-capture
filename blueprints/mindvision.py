@@ -278,6 +278,82 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             logger.exception("calibrate_wb_failed", camera_id=cam_id)
             return jsonify({"error": "Calibration failed"}), 500
 
+    # ── Rotation / mirror ─────────────────────────────────────────────────────
+
+    @bp.route("/orientation", methods=["GET"])
+    def get_orientation():
+        """Return current rotation and mirror state for a camera.
+
+        Query params:
+          camera_id  int  Camera index (default 0)
+
+        Response:
+          rotation   int   0=0°, 1=90°CCW, 2=180°, 3=270°CCW
+          h_mirror   bool  Horizontal mirror enabled
+          v_mirror   bool  Vertical mirror enabled
+        """
+        cam, cam_id = _resolve_camera()
+        if cam is None or cam._h_camera is None:
+            return jsonify({"error": f"Camera {cam_id} not found or not open"}), 404
+        try:
+            orientation = cam.get_orientation()
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 503
+        return jsonify({"camera_id": cam_id, **orientation})
+
+    @bp.route("/rotation", methods=["POST"])
+    def set_rotation():
+        """Set SDK rotation for a camera and persist to device config.
+
+        JSON body:
+          rotation  int  0=0°, 1=90°CCW, 2=180°, 3=270°CCW
+
+        Query params:
+          camera_id  int  Camera index (default 0)
+        """
+        cam, cam_id = _resolve_camera()
+        if cam is None:
+            return jsonify({"error": f"Camera {cam_id} not found"}), 404
+        body = request.get_json(silent=True) or {}
+        rotation = body.get("rotation")
+        if rotation is None or rotation not in (0, 1, 2, 3):
+            return jsonify({"error": "rotation must be 0, 1, 2, or 3"}), 400
+        try:
+            cam.set_rotation(rotation)
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 503
+        logger.info("rotation_set", camera_id=cam_id, rotation=rotation)
+        return jsonify({"camera_id": cam_id, "rotation": rotation})
+
+    @bp.route("/mirror", methods=["POST"])
+    def set_mirror():
+        """Set SDK mirror for a camera and persist to device config.
+
+        JSON body:
+          direction  str  "horizontal" or "vertical"
+          enable     bool
+
+        Query params:
+          camera_id  int  Camera index (default 0)
+        """
+        cam, cam_id = _resolve_camera()
+        if cam is None:
+            return jsonify({"error": f"Camera {cam_id} not found"}), 404
+        body = request.get_json(silent=True) or {}
+        direction_str = body.get("direction", "")
+        enable = body.get("enable")
+        if direction_str not in ("horizontal", "vertical"):
+            return jsonify({"error": "direction must be 'horizontal' or 'vertical'"}), 400
+        if not isinstance(enable, bool):
+            return jsonify({"error": "enable must be a boolean"}), 400
+        direction = 0 if direction_str == "horizontal" else 1
+        try:
+            cam.set_mirror(direction, enable)
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 503
+        logger.info("mirror_set", camera_id=cam_id, direction=direction_str, enabled=enable)
+        return jsonify({"camera_id": cam_id, "direction": direction_str, "enable": enable})
+
     # ── Multi-camera capture ───────────────────────────────────────────────────
 
     @bp.route("/capture-all", methods=["POST"])
@@ -546,6 +622,246 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         """
         result = check_server_health()
         return jsonify({"reachable": None} if result is None else result)
+
+    # ── Edge detection ────────────────────────────────────────────────────────
+
+    @bp.route("/edge-detection/stream")
+    def edge_detection_stream():
+        """MJPEG stream with edge detection overlay for live parameter tuning.
+
+        Query params:
+          camera_id      int    Camera index (default 0)
+          method         str    "canny" (default), "sobel", or "laplacian"
+          fps            float  Stream frame rate (default 2, max 10)
+          max_width      int    Downscale before processing (default 1280)
+
+          Canny params (method=canny):
+            low_threshold   int  Lower hysteresis threshold (default 50)
+            high_threshold  int  Upper hysteresis threshold (default 150)
+            aperture        int  Sobel aperture: 3, 5, or 7 (default 3)
+            blur_kernel     int  Gaussian pre-blur kernel: 1 (none), 3, 5, 7 (default 3)
+
+          Sobel params (method=sobel):
+            ksize           int  Kernel size: 1, 3, 5, or 7 (default 3)
+            scale           float Multiplier for gradient magnitude (default 1)
+
+          Laplacian params (method=laplacian):
+            ksize           int  Kernel size: 1, 3, 5, or 7 (default 3)
+            scale           float Multiplier (default 1)
+        """
+        import cv2
+        import numpy as np
+        from PIL import Image as PilImage, ImageDraw, ImageFont
+
+        cam, cam_id = _resolve_camera()
+        if cam is None:
+            return jsonify({"error": f"Camera {cam_id} not found"}), 404
+
+        method = request.args.get("method", "canny").lower()
+        if method not in ("canny", "sobel", "laplacian"):
+            return jsonify({"error": "method must be 'canny', 'sobel', or 'laplacian'"}), 400
+
+        fps = max(0.5, min(request.args.get("fps", 2.0, type=float), 10.0))
+        max_width = request.args.get("max_width", 1280, type=int)
+
+        # Canny
+        low_thresh = request.args.get("low_threshold", 50, type=int)
+        high_thresh = request.args.get("high_threshold", 150, type=int)
+        aperture = request.args.get("aperture", 3, type=int)
+        if aperture not in (3, 5, 7):
+            aperture = 3
+        blur_k = request.args.get("blur_kernel", 3, type=int)
+        if blur_k not in (1, 3, 5, 7):
+            blur_k = 3
+
+        # Sobel / Laplacian
+        ksize = request.args.get("ksize", 3, type=int)
+        if ksize not in (1, 3, 5, 7):
+            ksize = 3
+        scale = max(0.1, request.args.get("scale", 1.0, type=float))
+
+        frame_interval = 1.0 / fps
+
+        def _to_gray(frame):
+            if frame.ndim == 3 and frame.shape[2] == 3:
+                return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            return frame[:, :, 0] if frame.ndim == 3 else frame
+
+        def _apply_edges(gray):
+            if method == "canny":
+                blurred = cv2.GaussianBlur(gray, (blur_k, blur_k), 0) if blur_k > 1 else gray
+                return cv2.Canny(blurred, low_thresh, high_thresh, apertureSize=aperture)
+            elif method == "sobel":
+                sx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=ksize)
+                sy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=ksize)
+                mag = np.sqrt(sx ** 2 + sy ** 2) * scale
+                return np.clip(mag, 0, 255).astype(np.uint8)
+            else:  # laplacian
+                lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=ksize)
+                mag = np.abs(lap) * scale
+                return np.clip(mag, 0, 255).astype(np.uint8)
+
+        def _render(edges, orig_shape):
+            """Overlay param text on the edge image and return JPEG bytes."""
+            h, w = edges.shape[:2]
+            rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+            pil_img = PilImage.fromarray(rgb)
+            draw = ImageDraw.Draw(pil_img)
+            font_size = max(14, w // 60)
+            try:
+                font = ImageFont.truetype(
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size
+                )
+            except Exception:
+                font = ImageFont.load_default()
+
+            if method == "canny":
+                lines = [
+                    f"method: canny",
+                    f"low_threshold: {low_thresh}",
+                    f"high_threshold: {high_thresh}",
+                    f"aperture: {aperture}",
+                    f"blur_kernel: {blur_k}",
+                ]
+            elif method == "sobel":
+                lines = [f"method: sobel", f"ksize: {ksize}", f"scale: {scale:.2f}"]
+            else:
+                lines = [f"method: laplacian", f"ksize: {ksize}", f"scale: {scale:.2f}"]
+
+            lines.append(f"cam{cam_id}  src {orig_shape[1]}x{orig_shape[0]}")
+
+            pad = max(6, w // 90)
+            y = pad
+            for line in lines:
+                bbox = draw.textbbox((0, 0), line, font=font)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
+                draw.rectangle([pad - 2, y - 1, pad + tw + 2, y + th + 1], fill=(0, 0, 0))
+                draw.text((pad, y), line, fill=(0, 255, 0), font=font)
+                y += th + 4
+
+            import io
+            buf = io.BytesIO()
+            pil_img.save(buf, format="JPEG", quality=80)
+            return buf.getvalue()
+
+        def generate():
+            import mvsdk as _mvsdk
+            _continuous_started = False
+            try:
+                while True:
+                    loop_start = time.monotonic()
+
+                    if cam._h_camera is None:
+                        time.sleep(1.0)
+                        continue
+
+                    if (
+                        not cam._streaming
+                        and not _continuous_started
+                        and cam.mode != CameraMode.HARDWARE_TRIGGER
+                    ):
+                        _mvsdk.CameraSetTriggerMode(cam._h_camera, 0)
+                        _continuous_started = True
+                        time.sleep(0.1)
+
+                    with cam._lock:
+                        frame = cam._grab_frame()
+
+                    if frame is not None:
+                        orig_shape = frame.shape
+                        if frame.shape[1] > max_width:
+                            scale_f = max_width / frame.shape[1]
+                            new_h = int(frame.shape[0] * scale_f)
+                            frame = cv2.resize(frame, (max_width, new_h), interpolation=cv2.INTER_LINEAR)
+                        gray = _to_gray(frame)
+                        edges = _apply_edges(gray)
+                        jpeg = _render(edges, orig_shape)
+                        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+
+                    elapsed = time.monotonic() - loop_start
+                    remaining = frame_interval - elapsed
+                    if remaining > 0:
+                        time.sleep(remaining)
+            finally:
+                if (
+                    _continuous_started
+                    and cam._h_camera is not None
+                    and not cam._streaming
+                ):
+                    try:
+                        import mvsdk as _mvsdk
+                        _mvsdk.CameraSetTriggerMode(cam._h_camera, 1)
+                    except Exception:
+                        pass
+
+        return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+    @bp.route("/edge-detection/frame")
+    def edge_detection_frame():
+        """Capture one frame, apply edge detection, and return a JPEG.
+
+        Accepts the same query params as /edge-detection/stream (minus fps/max_width).
+        """
+        import cv2
+        import numpy as np
+        import io
+
+        cam, cam_id = _resolve_camera()
+        if cam is None or cam._h_camera is None:
+            return jsonify({"error": f"Camera {cam_id} not found or not open"}), 404
+
+        method = request.args.get("method", "canny").lower()
+        if method not in ("canny", "sobel", "laplacian"):
+            return jsonify({"error": "method must be 'canny', 'sobel', or 'laplacian'"}), 400
+
+        low_thresh = request.args.get("low_threshold", 50, type=int)
+        high_thresh = request.args.get("high_threshold", 150, type=int)
+        aperture = request.args.get("aperture", 3, type=int)
+        if aperture not in (3, 5, 7):
+            aperture = 3
+        blur_k = request.args.get("blur_kernel", 3, type=int)
+        if blur_k not in (1, 3, 5, 7):
+            blur_k = 3
+        ksize = request.args.get("ksize", 3, type=int)
+        if ksize not in (1, 3, 5, 7):
+            ksize = 3
+        scale = max(0.1, request.args.get("scale", 1.0, type=float))
+
+        try:
+            with cam._lock:
+                if not cam._streaming:
+                    import mvsdk as _mvsdk
+                    _mvsdk.CameraSoftTrigger(cam._h_camera)
+                frame = cam._grab_frame()
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 503
+
+        if frame is None:
+            return jsonify({"error": "No frame available"}), 503
+
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = frame[:, :, 0] if frame.ndim == 3 else frame
+
+        if method == "canny":
+            blurred = cv2.GaussianBlur(gray, (blur_k, blur_k), 0) if blur_k > 1 else gray
+            edges = cv2.Canny(blurred, low_thresh, high_thresh, apertureSize=aperture)
+        elif method == "sobel":
+            sx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=ksize)
+            sy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=ksize)
+            edges = np.clip(np.sqrt(sx ** 2 + sy ** 2) * scale, 0, 255).astype(np.uint8)
+        else:
+            lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=ksize)
+            edges = np.clip(np.abs(lap) * scale, 0, 255).astype(np.uint8)
+
+        from PIL import Image as PilImage
+        pil_img = PilImage.fromarray(edges, mode="L")
+        buf = io.BytesIO()
+        pil_img.save(buf, format="JPEG", quality=90)
+        buf.seek(0)
+        return send_file(buf, mimetype="image/jpeg")
 
     @bp.route("/calibration/score")
     def calibration_score():
