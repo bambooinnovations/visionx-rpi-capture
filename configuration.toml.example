@@ -44,9 +44,14 @@ tmp_dir = "/tmp/visionx_captures"
 [metrics]
 db_path = "/tmp/visionx_metrics.db"
 
-# Hardware trigger mode (MindVision only — used when POST /rpi/mindvision/mode {"mode":"hardware_trigger"}).
+# Hardware trigger mode (MindVision only).
+# Serial trigger: POST /rpi/mindvision/serial-trigger/start to begin listening.
+# The listener reads JSON lines from the Arduino decoder_trigger.ino sketch and
+# captures + uploads an image on each trigger event.
 # destination_url and destination_api_key can also be updated live via PATCH /rpi/config.
 [hw_trigger]
+# serial_port         = "/dev/ttyUSB0"   # serial port the Arduino is connected to
+# serial_baud         = 115200           # must match the Arduino sketch (default 115200)
 # destination_url     = "https://yoursite.com/api/captures"  # where to POST triggered images
 # destination_api_key = ""       # sent as Authorization: Bearer <key>; leave blank if not needed
 # retry_attempts      = 3        # retry count on network failure

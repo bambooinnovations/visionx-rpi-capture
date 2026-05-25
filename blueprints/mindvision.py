@@ -180,6 +180,9 @@ def _render_calibration_overlay(
 def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
     bp = Blueprint("mindvision", __name__, url_prefix="/rpi/mindvision")
 
+    from hw_trigger import SerialTriggerListener
+    _serial_listener = SerialTriggerListener(cameras)
+
     def _resolve_camera():
         cam_id = request.args.get("camera_id", 0, type=int)
         cam = cameras.get(cam_id)
@@ -408,6 +411,77 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             generate(),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
+
+    # ── Serial trigger (Arduino encoder) ─────────────────────────────────────
+
+    @bp.route("/serial-trigger/start", methods=["POST"])
+    def serial_trigger_start():
+        """Start listening for Arduino encoder trigger events over serial.
+
+        Reads JSON lines from the configured serial port and captures + uploads
+        an image on each trigger event.  All cameras are switched to
+        hardware_trigger mode so the SDK waits for the physical trigger signal
+        from the Arduino (D9) rather than issuing a software trigger.
+
+        Optional JSON body:
+          port  str  Serial device path (default: hw_trigger.serial_port from config)
+          baud  int  Baud rate (default: hw_trigger.serial_baud from config)
+        """
+        if _serial_listener.running:
+            return jsonify({"error": "Serial trigger listener is already running"}), 409
+
+        body = request.get_json(silent=True) or {}
+        port = body.get("port", config.HW_TRIGGER_SERIAL_PORT)
+        baud = body.get("baud", config.HW_TRIGGER_SERIAL_BAUD)
+
+        # Switch every camera to hardware trigger mode before opening serial.
+        mode_errors = {}
+        for cam_id, cam in cameras.items():
+            try:
+                cam.set_mode(CameraMode.HARDWARE_TRIGGER)
+            except Exception as exc:
+                mode_errors[cam_id] = str(exc)
+
+        if mode_errors:
+            return jsonify({"error": "Failed to set hardware trigger mode", "details": {str(k): v for k, v in mode_errors.items()}}), 503
+
+        try:
+            _serial_listener.start(port=port, baud=int(baud))
+        except Exception as exc:
+            # Revert cameras if the serial port failed to open.
+            for cam in cameras.values():
+                try:
+                    cam.set_mode(CameraMode.CAPTURE)
+                except Exception:
+                    pass
+            logger.exception("serial_trigger_start_failed")
+            return jsonify({"error": str(exc)}), 500
+
+        logger.info("serial_trigger_started", port=port, baud=baud, cameras=list(cameras.keys()))
+        return jsonify({"running": True, "port": port, "baud": baud, "camera_mode": CameraMode.HARDWARE_TRIGGER.value})
+
+    @bp.route("/serial-trigger/stop", methods=["POST"])
+    def serial_trigger_stop():
+        """Stop the serial trigger listener and revert cameras to capture mode."""
+        if not _serial_listener.running:
+            return jsonify({"error": "Serial trigger listener is not running"}), 409
+
+        _serial_listener.stop()
+
+        # Revert all cameras back to capture (software trigger) mode.
+        for cam_id, cam in cameras.items():
+            try:
+                cam.set_mode(CameraMode.CAPTURE)
+            except Exception as exc:
+                logger.warning("serial_trigger_mode_revert_failed", camera_id=cam_id, error=str(exc))
+
+        logger.info("serial_trigger_stopped")
+        return jsonify({"running": False, "camera_mode": CameraMode.CAPTURE.value})
+
+    @bp.route("/serial-trigger/status", methods=["GET"])
+    def serial_trigger_status():
+        """Return the current status and statistics of the serial trigger listener."""
+        return jsonify(_serial_listener.status())
 
     @bp.route("/calibration/score")
     def calibration_score():

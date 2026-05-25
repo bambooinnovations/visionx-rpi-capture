@@ -52,6 +52,8 @@ CLEANUP_INTERVAL_SECONDS: int = _get("cleanup", "interval_seconds", 300)
 MAX_AGE_SECONDS: int = _get("cleanup", "max_age_seconds", 300)
 
 # Hardware trigger (MindVision only)
+HW_TRIGGER_SERIAL_PORT: str = _get("hw_trigger", "serial_port", "/dev/ttyUSB0")
+HW_TRIGGER_SERIAL_BAUD: int = _get("hw_trigger", "serial_baud", 115200)
 HW_TRIGGER_DESTINATION_URL: str = _get("hw_trigger", "destination_url", "")
 HW_TRIGGER_DESTINATION_API_KEY: str = _get("hw_trigger", "destination_api_key", "")
 HW_TRIGGER_RETRY_ATTEMPTS: int = _get("hw_trigger", "retry_attempts", 3)
