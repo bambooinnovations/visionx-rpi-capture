@@ -51,6 +51,32 @@ def _get_save_local() -> bool:
     return bool(runtime_config.get("hw_trigger.save_local", config.HW_TRIGGER_SAVE_LOCAL))
 
 
+def _get_health_check_url() -> str:
+    return config.HW_TRIGGER_HEALTH_CHECK_URL
+
+
+def check_server_health() -> dict:
+    """GET the configured health_check_url and return reachability result.
+
+    Returns {"reachable": True} on any HTTP response (even 4xx — the server
+    answered), or {"reachable": False, "error": "<message>"} on network/timeout
+    failure. Returns None if no health_check_url is configured.
+    """
+    url = _get_health_check_url()
+    if not url:
+        return None
+
+    import requests
+
+    try:
+        resp = requests.get(url, timeout=5)
+        logger.info("hw_trigger_health_check_ok", url=url, status=resp.status_code)
+        return {"reachable": True, "status_code": resp.status_code}
+    except Exception as exc:
+        logger.warning("hw_trigger_health_check_failed", url=url, error=str(exc))
+        return {"reachable": False, "error": str(exc)}
+
+
 def _upload_image(jpeg_bytes: bytes, trigger_event: dict) -> bool:
     """POST jpeg_bytes to the destination URL. Returns True on success."""
     import requests

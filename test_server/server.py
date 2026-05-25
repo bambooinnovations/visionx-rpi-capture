@@ -77,6 +77,11 @@ async def upload(request: Request):
     return {"status": "received", **payload}
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 @app.get("/images/{filename}")
 async def serve_image(filename: str):
     path = SAVE_DIR / filename

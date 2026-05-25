@@ -180,7 +180,7 @@ def _render_calibration_overlay(
 def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
     bp = Blueprint("mindvision", __name__, url_prefix="/rpi/mindvision")
 
-    from hw_trigger import SerialTriggerListener
+    from camera.mindvision_trigger import SerialTriggerListener, check_server_health
     _serial_listener = SerialTriggerListener(cameras)
 
     def _resolve_camera():
@@ -457,8 +457,9 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             logger.exception("serial_trigger_start_failed")
             return jsonify({"error": str(exc)}), 500
 
+        health = check_server_health()
         logger.info("serial_trigger_started", port=port, baud=baud, cameras=list(cameras.keys()))
-        return jsonify({"running": True, "port": port, "baud": baud, "camera_mode": CameraMode.HARDWARE_TRIGGER.value})
+        return jsonify({"running": True, "port": port, "baud": baud, "camera_mode": CameraMode.HARDWARE_TRIGGER.value, "server_health": health})
 
     @bp.route("/serial-trigger/stop", methods=["POST"])
     def serial_trigger_stop():
@@ -482,6 +483,17 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
     def serial_trigger_status():
         """Return the current status and statistics of the serial trigger listener."""
         return jsonify(_serial_listener.status())
+
+    @bp.route("/hw-trigger/server-health", methods=["GET"])
+    def hw_trigger_server_health():
+        """Check reachability of the hw_trigger upload server via health_check_url.
+
+        Returns {"reachable": true, "status_code": 200} on success,
+        {"reachable": false, "error": "..."} on failure, or
+        {"reachable": null} if no health_check_url is configured.
+        """
+        result = check_server_health()
+        return jsonify({"reachable": None} if result is None else result)
 
     @bp.route("/calibration/score")
     def calibration_score():

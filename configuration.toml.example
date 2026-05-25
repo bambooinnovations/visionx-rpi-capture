@@ -50,7 +50,7 @@ db_path = "/tmp/visionx_metrics.db"
 # captures + uploads an image on each trigger event.
 # destination_url and destination_api_key can also be updated live via PATCH /rpi/config.
 [hw_trigger]
-# serial_port         = "/dev/ttyUSB0"   # serial port the Arduino is connected to
+# serial_port         = "/dev/ttyACM0"   # serial port the Arduino is connected to
 # serial_baud         = 115200           # must match the Arduino sketch (default 115200)
 # destination_url     = "https://yoursite.com/api/captures"  # where to POST triggered images
 # destination_api_key = ""       # sent as Authorization: Bearer <key>; leave blank if not needed
@@ -60,6 +60,7 @@ db_path = "/tmp/visionx_metrics.db"
 # local_save_dir      = "data/hw_captures"  # directory for local copies (created automatically)
 # local_max_files     = 200      # max number of files to keep; oldest deleted first (0 = unlimited)
 # local_max_mb        = 500      # max total size in MB; oldest deleted first (0 = unlimited)
+# health_check_url    = "https://yoursite.com/health"  # GET this before starting; omit to skip check
 
 # Background task that removes stale capture temp directories.
 [cleanup]
