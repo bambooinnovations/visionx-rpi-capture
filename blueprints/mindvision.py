@@ -24,6 +24,10 @@ logger = structlog.get_logger()
 # Per-camera rolling sharpness history for trend detection (camera_id -> deque).
 _calibration_history: dict[int, deque] = {}
 
+# Per-camera session peak score — never decreases within a session.
+# Gives the bar a fixed ceiling so the user sees a real drop when they overshoot.
+_peak_scores: dict[int, float] = {}
+
 # Count of active calibration stream generators per camera. Used to avoid
 # reverting the trigger mode while another calibration stream is still running.
 _calibration_stream_count: dict[int, int] = {}
@@ -96,7 +100,13 @@ def _render_calibration_overlay(
     score = float(np.var(lap))
     history.append(score)
 
+    # Session peak — never decreases so the bar has a fixed ceiling.
+    session_peak = max(_peak_scores.get(camera_id, 0.0), score)
+    _peak_scores[camera_id] = session_peak
+    pct_of_peak = score / max(session_peak, 1.0)
+
     # Trend: compare first half vs. second half of rolling window.
+    rel = 0.0
     if len(history) >= 6:
         arr = list(history)
         mid = len(arr) // 2
@@ -104,13 +114,33 @@ def _render_calibration_overlay(
         last_mean = float(np.mean(arr[mid:]))
         rel = (last_mean - first_mean) / max(abs(first_mean), 1.0)
         if rel > 0.05:
-            trend_char, trend_color, suggestion = "↑", (80, 220, 80), "keep going"
+            trend_char, trend_color = "↑", (80, 220, 80)
         elif rel < -0.05:
-            trend_char, trend_color, suggestion = "↓", (220, 80, 80), "reverse direction"
+            trend_char, trend_color = "↓", (220, 80, 80)
         else:
-            trend_char, trend_color, suggestion = "●", (220, 220, 80), "at or near peak"
+            trend_char, trend_color = "●", (220, 220, 80)
+        have_trend = True
     else:
-        trend_char, trend_color, suggestion = "~", (180, 180, 180), "measuring..."
+        trend_char, trend_color = "~", (180, 180, 180)
+        have_trend = False
+
+    # Large instruction for the operator — one clear action at a time.
+    if not have_trend or session_peak < 5.0:
+        instr_text = "ADJUSTING..."
+        instr_bg = (50, 50, 50)
+        instr_fg = (180, 180, 180)
+    elif pct_of_peak >= 0.93:
+        instr_text = "BEST FOCUS"
+        instr_bg = (20, 150, 40)
+        instr_fg = (255, 255, 255)
+    elif rel > 0.05:
+        instr_text = "KEEP TURNING"
+        instr_bg = (140, 100, 0)
+        instr_fg = (255, 255, 255)
+    else:
+        instr_text = "TURN BACK"
+        instr_bg = (180, 30, 30)
+        instr_fg = (255, 255, 255)
 
     # Exposure analysis: fraction of pixels with any channel clipped (≥ 250).
     clip_mask = np.any(rgb >= 250, axis=2)
@@ -193,7 +223,7 @@ def _render_calibration_overlay(
 
     lines = [
         (f"cam{camera_id}", (255, 255, 255)),
-        (f"Score: {score:.0f}  {trend_char} {suggestion}", trend_color),
+        (f"Score: {score:.0f}  {trend_char}  ({pct_of_peak * 100:.0f}% of best)", trend_color),
         (f"Clipped: {clipped_pct:.1f}%  {exp_char} {exp_suggestion}", exp_color),
         *(([(charuco_text, charuco_color)]) if charuco_text else []),
     ]
@@ -201,13 +231,36 @@ def _render_calibration_overlay(
         draw.text((pad, y), text, fill=color, font=font)
         y += line_gap
 
-    # ── Sharpness bar (bottom) ────────────────────────────────────────────────
-    max_score = max(list(history) + [1.0])
+    # ── Large instruction banner (bottom-center) ──────────────────────────────
+    banner_font_size = max(28, w // 22)
+    try:
+        banner_font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", banner_font_size
+        )
+    except Exception:
+        banner_font = font
+
+    banner_pad_x = w // 4
+    banner_h = banner_font_size + pad * 3
+    banner_y1 = h - banner_h - pad
+    banner_y2 = h - pad
+    banner_x1 = banner_pad_x
+    banner_x2 = w - banner_pad_x
+    draw.rectangle([banner_x1, banner_y1, banner_x2, banner_y2], fill=instr_bg)
+    bbox = draw.textbbox((0, 0), instr_text, font=banner_font)
+    txt_w = bbox[2] - bbox[0]
+    txt_h = bbox[3] - bbox[1]
+    txt_x = (w - txt_w) // 2
+    txt_y = banner_y1 + (banner_h - txt_h) // 2
+    draw.text((txt_x, txt_y), instr_text, fill=instr_fg, font=banner_font)
+
+    # ── Sharpness bar (above the instruction banner) ──────────────────────────
+    # Scale is fixed to session_peak so a drop is immediately visible.
     bar_total = w // 3
     bar_x1 = pad
-    bar_y2 = h - pad
+    bar_y2 = banner_y1 - pad
     bar_y1 = bar_y2 - max(14, font_size // 2)
-    fill_frac = min(score / max_score, 1.0)
+    fill_frac = min(pct_of_peak, 1.0)
     fill_x2 = bar_x1 + int(fill_frac * bar_total)
     bar_fill = (
         (80, 200, 80) if fill_frac > 0.8 else
@@ -217,9 +270,12 @@ def _render_calibration_overlay(
     draw.rectangle([bar_x1, bar_y1, bar_x1 + bar_total, bar_y2], outline=(200, 200, 200), width=1)
     if fill_x2 > bar_x1:
         draw.rectangle([bar_x1 + 1, bar_y1 + 1, fill_x2, bar_y2 - 1], fill=bar_fill)
+    # Peak tick at 100%.
+    peak_x = bar_x1 + bar_total
+    draw.line([peak_x, bar_y1 - 4, peak_x, bar_y2 + 4], fill=(255, 255, 255), width=2)
     draw.text(
         (bar_x1, bar_y1 - font_size - 2),
-        "Sharpness (relative to max seen)",
+        "Sharpness  (|  = session best)",
         fill=(200, 200, 200),
         font=font_sm,
     )
@@ -467,10 +523,10 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
 
         Query params:
           camera_id       int   Camera index (default 0)
-          fps             float Frames per second for the overlay stream (default 2, max 10)
-          peak_threshold  int   Gradient magnitude threshold for peaking highlights (default 50)
-          max_width       int   Downscale frames to this width before overlay (default 1280)
-          charuco         int   Set to 1 to enable ChArUco board detection overlay (default 0)
+          fps             float Frames per second (default 2, max 10)
+          peak_threshold  int   Gradient threshold for peaking highlights (default 50)
+          max_width       int   Downscale width before overlay (default 1280)
+          charuco         int   1 to enable ChArUco overlay (default 0)
         """
         cam, cam_id = _resolve_camera()
         if cam is None:
@@ -484,6 +540,10 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         if cam_id not in _calibration_history:
             _calibration_history[cam_id] = deque(maxlen=30)
         history = _calibration_history[cam_id]
+
+        # Each new connection = fresh session: clear peak so the bar restarts.
+        _peak_scores.pop(cam_id, None)
+        history.clear()
 
         _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 0) + 1
 
@@ -529,8 +589,6 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                         time.sleep(remaining)
             finally:
                 _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 1) - 1
-                # Only revert to software trigger when the last calibration stream exits
-                # and the main stream isn't running — mirrors the logic in stream_frames().
                 if (
                     _continuous_started
                     and _calibration_stream_count.get(cam_id, 0) == 0
@@ -733,9 +791,15 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             else:
                 trend, suggestion = "stable", "at or near peak focus"
 
+        session_peak = max(_peak_scores.get(cam_id, 0.0), score)
+        _peak_scores[cam_id] = session_peak
+        pct_of_peak = round(score / max(session_peak, 1.0) * 100, 1)
+
         return jsonify({
             "camera_id": cam_id,
             "score": round(score, 2),
+            "session_peak": round(session_peak, 2),
+            "pct_of_peak": pct_of_peak,
             "trend": trend,
             "suggestion": suggestion,
             "history_length": len(history),
