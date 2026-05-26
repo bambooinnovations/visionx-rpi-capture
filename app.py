@@ -15,7 +15,7 @@ from log_config import configure_logging
 from metrics import get_stats, init_db, record_capture
 from tasks import CAPTURE_TMP_DIR, start_cleanup_task
 
-from flask import Flask, Response, after_this_request, jsonify, request, send_file
+from flask import Flask, Response, after_this_request, jsonify, redirect, request, send_file, render_template
 from flask_cors import CORS
 
 configure_logging(env=config.ENV)
@@ -161,6 +161,35 @@ def stream():
     )
 
 
+@app.route("/")
+def portal_home():
+    return render_template("index.html")
+
+
+@app.route("/calibrate")
+def calibrate_ui():
+    return render_template("calibrate.html")
+
+
+@app.route("/stitch")
+def stitch_ui():
+    return render_template("stitch.html")
+
+
+@app.route("/focus")
+def focus_ui():
+    return render_template("focus.html")
+
+
+@app.route("/mindvision/<int:camera_id>/settings")
+def mindvision_settings_page(camera_id):
+    if not isinstance(camera, MindVisionCamera):
+        return redirect("/")
+    if cameras.get(camera_id) is None:
+        return redirect("/")
+    return render_template("mindvision_settings.html", camera_id=camera_id)
+
+
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
@@ -234,8 +263,6 @@ def capture():
 def _effective_config() -> dict:
     """Merge toml base values with runtime overrides. Masks sensitive keys."""
     base = {
-        "camera.mv_exposure_us":          config.MV_EXPOSURE_US,
-        "camera.mv_auto_exposure":        config.MV_AUTO_EXPOSURE,
         "stream.fps":                     config.STREAM_FPS,
         "stream.quality":                 config.STREAM_QUALITY,
         "hw_trigger.destination_url":     config.HW_TRIGGER_DESTINATION_URL,

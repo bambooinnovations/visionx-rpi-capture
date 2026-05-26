@@ -1,0 +1,130 @@
+body { overflow: hidden; }
+
+.focus-layout {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--nav-h, 52px));
+}
+
+/* ── Header ──────────────────────────────────────────────────────────── */
+.focus-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.focus-header h1 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+}
+
+.btn-back {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.btn-back:hover { color: var(--primary); border-color: var(--primary); }
+
+/* ── Stream ───────────────────────────────────────────────────────────── */
+.stream-wrap {
+  flex: 1;
+  background: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+}
+
+.stream-img {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.stream-placeholder {
+  position: absolute;
+  color: #64748b;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+/* ── Controls ─────────────────────────────────────────────────────────── */
+.focus-controls {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 24px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.control-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.fps-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.fps-btn {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.fps-btn:hover { background: var(--bg); }
+.fps-btn.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+/* ── Instructions ─────────────────────────────────────────────────────── */
+.focus-instructions {
+  padding: 12px 24px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: #f8fafc;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.focus-instructions p { margin-bottom: 4px; }
+.focus-instructions p:last-child { margin-bottom: 0; }
+.focus-instructions ul { padding-left: 18px; margin: 2px 0 6px; }
+.focus-instructions li { margin-bottom: 2px; }
+.focus-instructions strong { color: var(--text); }
+
+.hidden { display: none !important; }

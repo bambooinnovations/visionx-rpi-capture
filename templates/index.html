@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX Portal</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/portal/index.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link active" href="/">Home</a>
+  <a class="nav-link" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<main class="page-content">
+
+  <!-- ── Cameras ──────────────────────────────────────────────────────── -->
+  <section class="section">
+    <div class="section-header">
+      <h2>Connected Cameras</h2>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="camera-count" class="pill pill-info">Loading…</span>
+        <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↺ Refresh</button>
+        <button class="btn btn-secondary btn-sm" onclick="downloadAllConfig()" id="btn-download-config">Download Config</button>
+      </div>
+    </div>
+    <div id="camera-grid" class="camera-grid">
+      <div class="loading-placeholder">Loading cameras…</div>
+    </div>
+  </section>
+
+  <!-- ── Quick Links ───────────────────────────────────────────────────── -->
+  <section class="section quick-links">
+    <a href="/calibrate" class="quick-card">
+      <div class="quick-icon">⚙</div>
+      <div>
+        <div class="quick-title">Calibration Wizard</div>
+        <div class="quick-desc">White balance, focus, lens distortion — per camera</div>
+      </div>
+    </a>
+    <a href="/stitch" class="quick-card">
+      <div class="quick-icon">⊞</div>
+      <div>
+        <div class="quick-title">Stitch Setup</div>
+        <div class="quick-desc">Side-by-side streams with overlap overlay for camera placement</div>
+      </div>
+    </a>
+  </section>
+
+</main>
+
+<!-- ── Camera Config Modal ──────────────────────────────────────────── -->
+<div id="config-modal-overlay" class="modal-overlay hidden" onclick="closeConfigModal(event)">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-header">
+      <div>
+        <h2 id="modal-title">Camera Config</h2>
+        <p id="modal-subtitle" class="modal-subtitle"></p>
+      </div>
+      <button class="modal-close" onclick="closeConfigModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body">
+      <div class="modal-loading">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/portal/index.js"></script>
+</body>
+</html>

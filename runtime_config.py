@@ -13,8 +13,6 @@ PATH = Path(__file__).parent / "runtime_config.json"
 # Keys that can be changed at runtime without restarting the service.
 # Maps dotted "section.key" → expected Python type.
 UPDATABLE: dict[str, type] = {
-    "camera.mv_exposure_us":          int,
-    "camera.mv_auto_exposure":        bool,
     "stream.fps":                     int,
     "stream.quality":                 int,
     "hw_trigger.destination_url":     str,

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX — Focus</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/focus/focus.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link active" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<div class="focus-layout">
+
+  <div class="focus-header">
+    <a href="/calibrate" id="back-link" class="btn-back">← Back to Calibration</a>
+    <h1 id="focus-title">Focus Stream</h1>
+  </div>
+
+  <div class="stream-wrap" id="stream-wrap">
+    <img id="focus-stream-img" class="stream-img" alt="Focus stream">
+    <div id="stream-placeholder" class="stream-placeholder">Starting stream…</div>
+  </div>
+
+  <div class="focus-controls">
+    <div class="control-group">
+      <span class="control-label">FPS</span>
+      <div class="fps-btns">
+        <button class="fps-btn" data-fps="1" onclick="setFps(1)">1</button>
+        <button class="fps-btn active" data-fps="2" onclick="setFps(2)">2</button>
+        <button class="fps-btn" data-fps="4" onclick="setFps(4)">4</button>
+      </div>
+    </div>
+    <div class="control-group hidden" id="camera-control">
+      <span class="control-label">Camera</span>
+      <div id="cam-btns" class="fps-btns"></div>
+    </div>
+  </div>
+
+  <div class="focus-instructions">
+    <p>Turn the <strong>focus ring</strong> slowly and watch the overlay. The stream shows:</p>
+    <ul>
+      <li>Coloured edge highlights — focus peaking (brighter = sharper edges)</li>
+      <li>Score bar — higher is sharper; bar fills as you improve</li>
+      <li>Arrow indicator — <strong>↑ KEEP TURNING</strong> improving · <strong>↓ TURN BACK</strong> dropping · <strong>● BEST FOCUS</strong> at peak</li>
+    </ul>
+    <p>When the indicator shows <strong>BEST FOCUS</strong>, lock the focus ring and return to calibration.</p>
+  </div>
+
+</div>
+
+<script src="/static/focus/focus.js"></script>
+</body>
+</html>

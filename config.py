@@ -32,10 +32,6 @@ LOCK_EXPOSURE: bool = _get("camera", "lock_exposure", False)
 # None = use continuous autofocus; a float value = lock to that LensPosition.
 LENS_POSITION: float | None = _get("camera", "lens_position", None)
 
-# MindVision-specific
-MV_CAMERA_INDEX: int = _get("camera", "mv_camera_index", 0)
-MV_EXPOSURE_US: int = _get("camera", "mv_exposure_us", 30_000)
-MV_AUTO_EXPOSURE: bool = _get("camera", "mv_auto_exposure", False)
 
 # Stream
 STREAM_FPS: int = _get("stream", "fps", 15)

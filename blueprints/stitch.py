@@ -74,6 +74,7 @@ _CONFIG_PATH = Path("data/stitch_config.json")
 
 _DEFAULT_CONFIG = {
     "min_corners": 40,
+    "camera_order": None,  # null = auto (sorted by ID); list[int] = explicit left→right order
 }
 
 
@@ -252,21 +253,34 @@ _MAX_CANVAS_PX = 16_000  # guard against degenerate homographies
 def _stitch_frames(
     frames: dict[int, np.ndarray],
     calibration: dict,
+    camera_order: list[int] | None = None,
+    max_width: int | None = None,
 ) -> np.ndarray | None:
     """Warp all cameras into the reference camera's pixel space and blend.
 
-    The reference camera is the lowest-ID calibrated camera that has a frame.
-    Each other camera's relative homography is derived as:
+    The reference camera is camera_order[0] when specified, otherwise the
+    lowest-ID calibrated camera.  Each other camera's relative homography is:
         H_rel = inv(H_ref) @ H_i
     which maps cam_i pixels directly into the reference camera pixel space.
     The canvas is sized to encompass every camera's full field of view.
+
+    max_width caps the reference camera's width before warping.  All frames are
+    scaled by the same factor s = max_width / ref_w so the homographies remain
+    consistent: H_rel_scaled = S @ H_rel @ S_inv where S = diag(s, s, 1).
     """
     cam_data = calibration["cameras"]
 
-    # Collect cameras that have both a frame and calibration data.
-    available = sorted(
-        cid for cid in frames if str(cid) in cam_data
-    )
+    available_set = {cid for cid in frames if str(cid) in cam_data}
+    if not available_set:
+        return None
+
+    if camera_order:
+        # Honour the configured order; append any unconfigured cameras at the end.
+        available = [cid for cid in camera_order if cid in available_set]
+        available += sorted(cid for cid in available_set if cid not in set(available))
+    else:
+        available = sorted(available_set)
+
     if not available:
         return None
 
@@ -284,7 +298,36 @@ def _stitch_frames(
         else:
             undistorted[cam_id] = frames[cam_id]
 
+    # Apply per-camera colour correction if calibrated.
+    color_correction = calibration.get("color_correction", {})
+    if color_correction:
+        for cam_id in available:
+            cc = color_correction.get(str(cam_id))
+            f = undistorted[cam_id]
+            if cc and f.ndim == 3 and f.shape[2] == 3:
+                f = f.astype(np.float32)
+                f[:, :, 0] *= cc["b"]
+                f[:, :, 1] *= cc["g"]
+                f[:, :, 2] *= cc["r"]
+                undistorted[cam_id] = np.clip(f, 0, 255).astype(np.uint8)
+
+    # Downscale all frames uniformly so the warp operates on smaller images.
+    # All H_rel are adjusted: H_rel_scaled = S @ H_rel @ S_inv.
     ref_h, ref_w = undistorted[ref_id].shape[:2]
+    scale = (max_width / ref_w) if (max_width and max_width > 0 and ref_w > max_width) else 1.0
+
+    if scale < 1.0:
+        for cam_id in available:
+            h, w = undistorted[cam_id].shape[:2]
+            undistorted[cam_id] = cv2.resize(
+                undistorted[cam_id],
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+        ref_h, ref_w = undistorted[ref_id].shape[:2]
+
+    S = np.array([[scale, 0, 0], [0, scale, 0], [0, 0, 1]], dtype=np.float64)
+    S_inv = np.diag([1.0 / scale, 1.0 / scale, 1.0]).astype(np.float64)
 
     # Build per-camera relative homographies (cam_i → ref space) and collect
     # all projected corner points to size the canvas.
@@ -297,7 +340,7 @@ def _stitch_frames(
         if cam_id == ref_id:
             continue
         H_i = np.array(cam_data[str(cam_id)]["homography"], dtype=np.float64)
-        H_rel = H_ref_inv @ H_i
+        H_rel = S @ (H_ref_inv @ H_i) @ S_inv
         rel_homographies[cam_id] = H_rel
 
         h_i, w_i = undistorted[cam_id].shape[:2]
@@ -415,6 +458,15 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             if val < 6:
                 return jsonify({"error": "min_corners must be at least 6"}), 400
             config["min_corners"] = val
+
+        if "camera_order" in body:
+            val = body["camera_order"]
+            if val is not None:
+                if not isinstance(val, list) or not all(isinstance(i, int) for i in val):
+                    return jsonify({"error": "camera_order must be a list of integer camera IDs or null"}), 400
+                if len(val) != len(set(val)):
+                    return jsonify({"error": "camera_order must not contain duplicate IDs"}), 400
+            config["camera_order"] = val
 
         unknown = [k for k in body if k not in _DEFAULT_CONFIG]
         if unknown:
@@ -592,6 +644,10 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                 }
                 for cam_id, v in cal.get("cameras", {}).items()
             },
+            "color_correction": {
+                "calibrated": "color_correction" in cal,
+                "calibrated_at": cal.get("color_correction_calibrated_at"),
+            },
         })
 
     @bp.route("/calibrate", methods=["DELETE"])
@@ -603,6 +659,92 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             return jsonify({"cleared": True})
         except FileNotFoundError:
             return jsonify({"error": "No calibration file found"}), 404
+
+    # ── Colour calibration ─────────────────────────────────────────────────────
+
+    @bp.route("/calibrate-color", methods=["GET"])
+    def color_calibration_status():
+        """Return current per-camera colour correction status."""
+        cal = _load_calibration()
+        if cal is None or "color_correction" not in cal:
+            return jsonify({"calibrated": False})
+        return jsonify({
+            "calibrated": True,
+            "calibrated_at": cal.get("color_correction_calibrated_at"),
+            "reference_camera": min(int(k) for k in cal["color_correction"]),
+            "corrections": cal["color_correction"],
+        })
+
+    @bp.route("/calibrate-color", methods=["POST"])
+    def calibrate_color():
+        """Capture frames from all cameras pointed at a neutral reference and compute
+        per-camera BGR correction multipliers relative to the lowest-ID camera.
+
+        Requires stitch calibration to already be complete.
+        Point all cameras at the same white/grey surface before calling this.
+        """
+        cal, err_resp = _calibration_preflight()
+        if err_resp is not None:
+            return err_resp
+
+        cam_ids = sorted(int(k) for k in cal["cameras"])
+        frames, grab_errors = _grab_frames(cam_ids)
+
+        if len(frames) < 2:
+            return jsonify({
+                "error": "Need frames from at least 2 cameras to calibrate",
+                "grab_errors": {str(k): v for k, v in grab_errors.items()},
+            }), 422
+
+        means: dict[int, np.ndarray] = {}
+        for cam_id, frame in frames.items():
+            bgr = _to_bgr(frame).astype(np.float32)
+            gray = bgr.mean(axis=2)
+            # Exclude near-black and near-saturated pixels for a cleaner mean.
+            mask = (gray > 20) & (gray < 235)
+            if mask.sum() < 100:
+                mask = np.ones(gray.shape, dtype=bool)
+            means[cam_id] = bgr[mask].mean(axis=0)  # [mean_B, mean_G, mean_R]
+
+        ref_id = cam_ids[0]
+        if ref_id not in means:
+            return jsonify({"error": f"Could not grab frame from reference camera {ref_id}"}), 422
+
+        ref_mean = means[ref_id]
+        corrections: dict[str, dict] = {}
+        for cam_id in cam_ids:
+            if cam_id not in means:
+                continue
+            m = means[cam_id]
+            corrections[str(cam_id)] = {
+                "b": round(float(np.clip(ref_mean[0] / max(m[0], 1.0), 0.5, 2.0)), 4),
+                "g": round(float(np.clip(ref_mean[1] / max(m[1], 1.0), 0.5, 2.0)), 4),
+                "r": round(float(np.clip(ref_mean[2] / max(m[2], 1.0), 0.5, 2.0)), 4),
+            }
+
+        cal["color_correction"] = corrections
+        cal["color_correction_calibrated_at"] = datetime.now(timezone.utc).isoformat()
+        _save_calibration(cal)
+        logger.info("stitch_color_calibrated", cameras=list(corrections.keys()), reference=ref_id)
+
+        return jsonify({
+            "calibrated": True,
+            "reference_camera": ref_id,
+            "corrections": corrections,
+            "grab_errors": {str(k): v for k, v in grab_errors.items()},
+        })
+
+    @bp.route("/calibrate-color", methods=["DELETE"])
+    def clear_color_calibration():
+        """Remove colour correction data without touching the stitch calibration."""
+        cal = _load_calibration()
+        if cal is None or "color_correction" not in cal:
+            return jsonify({"error": "No colour calibration found"}), 404
+        cal.pop("color_correction", None)
+        cal.pop("color_correction_calibrated_at", None)
+        _save_calibration(cal)
+        logger.info("stitch_color_calibration_cleared")
+        return jsonify({"cleared": True})
 
     # ── Shared pre-flight check ────────────────────────────────────────────────
 
@@ -648,6 +790,9 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             return err_resp
 
         quality = max(1, min(request.args.get("quality", 85, type=int), 100))
+        max_width = request.args.get("max_width", 1280, type=int)
+        cfg = _load_config()
+        camera_order = cfg.get("camera_order") or None
 
         frames, grab_errors = _grab_frames(sorted(cameras.keys()))
         if not frames:
@@ -656,7 +801,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                 "details": {str(k): v for k, v in grab_errors.items()},
             }), 503
 
-        result = _stitch_frames(frames, cal)  # type: ignore[arg-type]
+        result = _stitch_frames(frames, cal, camera_order=camera_order, max_width=max_width)  # type: ignore[arg-type]
         if result is None:
             return jsonify({"error": "Stitching produced empty output"}), 500
 
@@ -675,6 +820,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         Query params:
           fps        float  Frames per second (default 1, max 5)
           quality    int    JPEG quality 1–100 (default 75)
+          max_width  int    Cap each input frame width before warping (default 640, 0 = no limit)
           camera_id  int    Fallback camera when not calibrated (default 0)
         """
         cal = _load_calibration()
@@ -684,15 +830,19 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
 
         fps = max(0.1, min(request.args.get("fps", 1.0, type=float), 5.0))
         quality = max(1, min(request.args.get("quality", 75, type=int), 100))
+        max_width = request.args.get("max_width", 640, type=int)
         frame_interval = 1.0 / fps
 
         if is_fully_calibrated:
+            stream_cfg = _load_config()
+            stream_camera_order = stream_cfg.get("camera_order") or None
+
             def generate():
                 while True:
                     t0 = time.monotonic()
                     frames, _ = _grab_frames(all_ids)
                     if frames:
-                        result = _stitch_frames(frames, cal)  # type: ignore[arg-type]
+                        result = _stitch_frames(frames, cal, camera_order=stream_camera_order, max_width=max_width)  # type: ignore[arg-type]
                         if result is not None:
                             ok, buf = cv2.imencode(".jpg", result, [cv2.IMWRITE_JPEG_QUALITY, quality])
                             if ok:

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX — Stitch Setup</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/stitch/stitch.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link" href="/calibrate">Calibration</a>
+  <a class="nav-link active" href="/stitch">Stitch</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<main class="stitch-layout">
+
+  <!-- ── Stream area ──────────────────────────────────────────────────── -->
+  <section class="streams-section">
+    <div class="stream-tab-bar">
+      <button id="tab-btn-cameras" class="stream-tab active" onclick="switchStreamTab('cameras')">Camera Feeds</button>
+      <button id="tab-btn-stitch"  class="stream-tab"        onclick="switchStreamTab('stitch')">Stitched Stream</button>
+      <span id="stream-status" class="stream-status"></span>
+    </div>
+
+    <!-- Camera feeds -->
+    <div id="stream-panel-cameras">
+      <div id="stream-row" class="stream-row">
+        <div class="stream-empty">Select cameras below to start streams.</div>
+      </div>
+    </div>
+
+    <!-- Stitched stream -->
+    <div id="stream-panel-stitch" class="hidden">
+      <div class="stitch-view-row">
+        <div class="stream-loading" id="stitch-view-loading">
+          <div class="stream-spinner"></div>
+          <span>Connecting…</span>
+        </div>
+        <img id="stitch-view-img" class="stitch-view-img" alt="Stitched stream">
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Controls ─────────────────────────────────────────────────────── -->
+  <section class="controls-section card">
+
+    <div class="control-group">
+      <div class="control-label">
+        Cameras
+        <span class="control-hint">Select up to 2 to preview</span>
+      </div>
+      <div id="camera-checks" class="camera-checks">
+        <span class="text-muted">Loading…</span>
+      </div>
+    </div>
+
+    <div class="control-divider"></div>
+
+    <div class="control-group">
+      <div class="control-label">
+        Overlap zone
+        <span class="control-hint">Highlighted region each camera should share with its neighbour</span>
+      </div>
+      <div class="overlap-row">
+        <input id="overlap-slider" type="range" min="5" max="50" step="1" value="10"
+               oninput="updateOverlap(this.value)">
+        <span id="overlap-val" class="overlap-val">10%</span>
+        <label class="toggle-label">
+          <input id="overlay-toggle" type="checkbox" checked onchange="updateOverlay()">
+          Show overlay
+        </label>
+      </div>
+    </div>
+
+    <div class="control-divider"></div>
+
+    <div class="control-group">
+      <div class="control-label">Stream FPS</div>
+      <div class="fps-btns">
+        <button class="fps-btn" onclick="setFps(1)">1</button>
+        <button class="fps-btn active" onclick="setFps(2)">2</button>
+        <button class="fps-btn" onclick="setFps(3)">3</button>
+      </div>
+    </div>
+
+    <div class="control-divider"></div>
+
+    <div class="control-group">
+      <div class="control-label">
+        Camera layout
+        <span class="control-hint">Drag to set left → right order</span>
+      </div>
+      <div id="layout-chips" class="layout-chips">
+        <span class="text-muted">Loading…</span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ── Stitch Calibration ───────────────────────────────────────────── -->
+  <section class="cal-section card">
+
+    <!-- Status view (default) -->
+    <div id="cal-status-view">
+      <div class="card-header">
+        <h2>Stitch Calibration</h2>
+        <span id="pill-cal-status" class="pill pill-unknown">Unknown</span>
+      </div>
+      <div id="cal-status-body" class="cal-status-body">
+        <span class="text-muted">Loading…</span>
+      </div>
+      <div class="cal-actions">
+        <button id="btn-cal-start" class="btn btn-primary" onclick="calWizard.start()">Calibrate</button>
+      </div>
+    </div>
+
+    <!-- Wizard view (shown while calibrating) -->
+    <div id="cal-wizard-view" class="hidden">
+      <div class="cal-wizard-header">
+        <h2>Stitch Calibration</h2>
+        <div id="cal-step-dots" class="step-dots"></div>
+      </div>
+
+      <!-- Step 0: Setup -->
+      <div class="cal-step" id="cal-step-0">
+        <h3>Setup</h3>
+        <div id="cal-setup-info" class="cal-instruction-box"></div>
+        <div id="cal-current-status" class="cal-info-box"></div>
+        <div class="cal-step-actions">
+          <button id="btn-cal-clear" class="btn btn-danger hidden" onclick="calWizard.confirmClear()">Clear Existing Data</button>
+          <button class="btn btn-secondary" onclick="calWizard.cancel()">Cancel</button>
+          <button class="btn btn-primary" onclick="calWizard.beginPasses()">Begin →</button>
+        </div>
+      </div>
+
+      <!-- Step 1: Position board -->
+      <div class="cal-step hidden" id="cal-step-1">
+        <h3 id="cal-pass-title">Pass 1 — Position Board</h3>
+        <div id="cal-pass-instruction" class="cal-instruction-box"></div>
+        <div id="cal-pass-cameras" class="cal-camera-tags"></div>
+        <div class="cal-detect-container">
+          <img id="cal-detect-img" class="cal-detect-img" alt="Click Check Detection to preview">
+        </div>
+        <div class="cal-step-actions">
+          <button class="btn btn-secondary" onclick="calWizard.checkDetection()">Check Detection</button>
+          <button class="btn btn-primary" onclick="calWizard.runPass()">Run Pass</button>
+          <button class="btn btn-secondary" onclick="calWizard.cancel()">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Pass result -->
+      <div class="cal-step hidden" id="cal-step-2">
+        <h3>Pass Result</h3>
+        <div id="cal-pass-result"></div>
+        <div class="cal-step-actions">
+          <button id="btn-cal-next" class="btn btn-primary" onclick="calWizard.nextPass()">Next Pass →</button>
+          <button id="btn-cal-preview" class="btn btn-primary hidden" onclick="calWizard.showPreview()">View Preview →</button>
+          <button class="btn btn-danger" onclick="calWizard.restart()">Restart</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Preview -->
+      <div class="cal-step hidden" id="cal-step-3">
+        <h3>Preview</h3>
+        <p class="cal-step-hint">Verify the cameras are aligned in the composite.</p>
+        <div class="cal-detect-container">
+          <img id="cal-preview-img" class="cal-detect-img" alt="Loading preview…">
+        </div>
+        <div class="cal-step-actions">
+          <button class="btn btn-danger" onclick="calWizard.restart()">Something wrong — Restart</button>
+          <button class="btn btn-primary" onclick="calWizard.complete()">Looks Good →</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Complete -->
+      <div class="cal-step hidden" id="cal-step-4">
+        <h3>Complete</h3>
+        <div id="cal-complete-info"></div>
+        <div class="cal-step-actions">
+          <button class="btn btn-primary" onclick="calWizard.done()">Done</button>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── White Balance Calibration ───────────────────────────────────── -->
+  <section class="cal-section card" id="wb-cal-section">
+
+    <div class="card-header">
+      <h2>White Balance Calibration</h2>
+      <span id="pill-wb-status" class="pill pill-unknown">Unknown</span>
+    </div>
+
+    <div class="cal-instruction-box">
+      <p><strong>How to calibrate white balance across cameras:</strong></p>
+      <ol style="padding-left:18px;margin-top:6px">
+        <li>Complete stitch calibration first (above).</li>
+        <li>Place a <strong>white or neutral grey card</strong> in front of all cameras so each camera can clearly see it.</li>
+        <li>Use the same lighting you use during actual captures — don't calibrate under different lights.</li>
+        <li>Click <strong>Calibrate WB</strong>. All cameras capture simultaneously and colour correction gains are computed relative to Camera 0 (the reference).</li>
+        <li>Re-calibrate if you change the lighting setup, replace a camera, or notice colour seams in stitched output.</li>
+      </ol>
+      <p style="margin-top:8px;font-size:13px;color:#64748b">Individual camera WB settings are locked while group calibration is active. Use this section to adjust white balance instead.</p>
+    </div>
+
+    <div id="wb-cal-status-body" class="cal-status-body">
+      <span class="text-muted">Loading…</span>
+    </div>
+
+    <div class="cal-actions">
+      <button id="btn-wb-cal" class="btn btn-primary" onclick="wbCal.calibrate()">Calibrate WB</button>
+      <button id="btn-wb-clear" class="btn btn-danger hidden" onclick="wbCal.clear()">Clear WB Calibration</button>
+    </div>
+
+  </section>
+
+</main>
+
+<script src="/static/stitch/stitch.js"></script>
+</body>
+</html>

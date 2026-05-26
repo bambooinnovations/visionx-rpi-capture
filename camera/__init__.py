@@ -10,5 +10,5 @@ def create_camera() -> BaseCamera:
     if t == "picamera2":
         return PiCamera()
     if t == "mindvision":
-        return MindVisionCamera(camera_index=config.MV_CAMERA_INDEX)
+        return MindVisionCamera()
     raise ValueError(f"Unknown camera type: {t!r}. Expected 'picamera2' or 'mindvision'.")

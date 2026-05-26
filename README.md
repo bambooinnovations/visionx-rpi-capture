@@ -126,8 +126,6 @@ PATCH body is a JSON object of `"section.key": value` pairs. Keys that can be up
 
 | Key                              | Type   |
 | -------------------------------- | ------ |
-| `camera.mv_exposure_us`          | int    |
-| `camera.mv_auto_exposure`        | bool   |
 | `stream.fps`                     | int    |
 | `stream.quality`                 | int    |
 | `hw_trigger.destination_url`     | string |
@@ -328,12 +326,6 @@ sharpness = 1.0            # ISP sharpness; 0 = off (picamera2 only)
 lock_exposure = false      # Lock AE/AWB after startup for consistent captures (picamera2 only)
 # lens_position = 2.0      # Manual focus in dioptres; omit for continuous autofocus (picamera2 only)
 
-# MindVision-specific (only used when type = "mindvision")
-# mv_camera_index = 0      # Index into the enumerated MindVision device list
-# mv_exposure_us  = 30000  # Exposure time in microseconds (when auto-exposure is off)
-# mv_auto_exposure = false # Let the camera's AE algorithm control exposure
-# mv_auto_wb = true        # true = continuous auto-WB; false = leave camera hardware defaults
-                            # Use POST /rpi/mindvision/calibrate-wb to store fixed gains
 
 [stream]
 fps = 15                   # Max MJPEG stream frame rate

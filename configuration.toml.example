@@ -22,13 +22,7 @@ lock_exposure = false  # Lock AE/AWB after startup — set true for stable rig l
 #                      # Run scripts/focus_calibration.py to find your value.
 #                      # Uncomment to enable; comment out to use continuous autofocus.
 
-# MindVision-specific settings (only used when type = "mindvision").
-# mv_camera_index = 0      # Index into the enumerated MindVision device list (0 = first camera)
-# mv_exposure_us  = 30000  # Exposure time in microseconds; ignored when mv_auto_exposure = true
-# mv_auto_exposure = false # Let the camera's built-in AE algorithm control exposure
-# mv_auto_wb = true        # Fallback white balance when calibration.json has no WB entry.
-#                          # true = continuous auto-WB; false = leave camera hardware defaults.
-#                          # Run POST /rpi/camera/calibrate-wb to store fixed gains in calibration.json.
+
 
 # Live preview stream (GET /rpi/stream).
 [stream]

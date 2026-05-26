@@ -41,6 +41,31 @@ from metrics import CaptureMetrics
 logger = structlog.get_logger()
 
 
+def _parse_exposure_config(config_file: Path) -> tuple[int, int, float]:
+    """Parse ae_enable, ae_target, and exp_time from a MindVision .config file.
+
+    Returns (ae_state, ae_target, exp_time_us) with safe defaults if parsing fails.
+    """
+    ae_state = 1
+    ae_target = 100
+    exp_time = 30000.0
+    try:
+        import re
+        text = config_file.read_text(errors="replace")
+        m = re.search(r'\bae_enable\s*=\s*(true|false)', text)
+        if m:
+            ae_state = 1 if m.group(1) == "true" else 0
+        m = re.search(r'\bae_target\s*=\s*(\d+)', text)
+        if m:
+            ae_target = int(m.group(1))
+        m = re.search(r'\bexp_time\s*=\s*([0-9.eE+\-]+)', text)
+        if m:
+            exp_time = float(m.group(1))
+    except Exception:
+        pass
+    return ae_state, ae_target, exp_time
+
+
 class MindVisionCamera(BaseCamera):
     def __init__(self, camera_index: int = 0) -> None:
         self._camera_index = camera_index
@@ -94,6 +119,15 @@ class MindVisionCamera(BaseCamera):
         dev_info = dev_list[self._camera_index]
         self._dev_info = dev_info
 
+        # Detect first run before CameraInit: if no per-serial config file exists the
+        # SDK will use hardware defaults (which may have AE disabled). We seed sensible
+        # defaults once and save them so all subsequent starts load from the SDK config.
+        _sn_pre = dev_info.GetSn()
+        _config_file = (
+            self._project_root / "MindVisionCamera" / "Configs" / f"{_sn_pre}-Group0.config"
+        )
+        _first_run = not _config_file.exists()
+
         try:
             # PARAM_MODE_BY_SN (2) loads Configs/<serial>-Group0.config if it exists,
             # falling back to defaults on first run. PARAMETER_TEAM_A (0) is where
@@ -112,13 +146,26 @@ class MindVisionCamera(BaseCamera):
             h,
             mvsdk.CAMERA_MEDIA_TYPE_MONO8 if self._mono else mvsdk.CAMERA_MEDIA_TYPE_BGR8,
         )
+
         mvsdk.CameraSetTriggerMode(h, 1)  # software trigger; continuous only while streaming
 
-        if config.MV_AUTO_EXPOSURE:
+        if _first_run:
             mvsdk.CameraSetAeState(h, 1)
+            mvsdk.CameraSetAeTarget(h, 100)
+            mvsdk.CameraSaveParameter(h, 0)
         else:
-            mvsdk.CameraSetAeState(h, 0)
-            mvsdk.CameraSetExposureTime(h, config.MV_EXPOSURE_US)
+            # CameraSetTriggerMode can reset parameters loaded by CameraInit.
+            # Explicitly reload Team A config, then force-apply AE from the
+            # parsed file as a second-level guard against SDK non-compliance.
+            try:
+                mvsdk.CameraLoadParameter(h, 0)
+            except Exception:
+                pass
+            _ae_state, _ae_target, _exp_time = _parse_exposure_config(_config_file)
+            mvsdk.CameraSetAeState(h, _ae_state)
+            mvsdk.CameraSetAeTarget(h, _ae_target)
+            if not _ae_state:
+                mvsdk.CameraSetExposureTime(h, _exp_time)
 
         # CameraPlay starts the SDK's internal grab thread; subsequent
         # CameraGetImageBuffer calls pull from its ring buffer.
@@ -203,12 +250,6 @@ class MindVisionCamera(BaseCamera):
 
     def apply_config(self, key: str, value) -> None:
         """Apply a runtime config change to the live camera hardware."""
-        if self._h_camera is None:
-            return
-        if key == "camera.mv_exposure_us":
-            mvsdk.CameraSetExposureTime(self._h_camera, int(value))
-        elif key == "camera.mv_auto_exposure":
-            mvsdk.CameraSetAeState(self._h_camera, 1 if value else 0)
 
     def get_orientation(self) -> dict:
         """Return current rotation and mirror settings from the SDK."""
@@ -274,10 +315,10 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CameraAlignFree(self._frame_buffer)
             self._frame_buffer = 0
 
-    def _grab_frame(self) -> "np.ndarray | None":
+    def _grab_frame(self, timeout_ms: int = 1000) -> "np.ndarray | None":
         """Grab one processed frame as a numpy array. Caller must hold self._lock."""
         try:
-            raw, head = mvsdk.CameraGetImageBuffer(self._h_camera, 1000)
+            raw, head = mvsdk.CameraGetImageBuffer(self._h_camera, timeout_ms)
             mvsdk.CameraImageProcess(self._h_camera, raw, self._frame_buffer, head)
             mvsdk.CameraReleaseImageBuffer(self._h_camera, raw)
 

@@ -40,6 +40,10 @@ _DEFAULT_SQUARE_MM = 10.0
 _DEFAULT_MARKER_MM = 8.0
 _DEFAULT_ARUCO_DICT = "DICT_4X4_250"
 
+# How many frames are needed before compute is allowed / considered complete.
+FRAMES_MIN = 10     # compute button unlocks
+FRAMES_TARGET = 15  # progress bar turns green / "ready" state
+
 _ARUCO_DICT_MAP: dict[str, int] = {
     "DICT_4X4_50": cv2.aruco.DICT_4X4_50,
     "DICT_4X4_100": cv2.aruco.DICT_4X4_100,
@@ -122,7 +126,7 @@ def _board_params_from_body(body: dict) -> dict:
         "rows": int(body.get("board_rows", _DEFAULT_BOARD_ROWS)),
         "square_mm": float(body.get("square_mm", _DEFAULT_SQUARE_MM)),
         "marker_mm": float(body.get("marker_mm", _DEFAULT_MARKER_MM)),
-        "aruco_dict": body.get("aruco_dict", _DEFAULT_ARUCO_DICT),
+        "aruco_dict_name": body.get("aruco_dict", _DEFAULT_ARUCO_DICT),
     }
 
 
@@ -182,6 +186,8 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                 "frames_used": entry.get("frames_used") if entry else None,
                 "calibrated_at": entry.get("calibrated_at") if entry else None,
                 "buffered_frames": len(buf.get(str(cid), [])),
+                "frames_min": FRAMES_MIN,
+                "frames_target": FRAMES_TARGET,
             }
         return jsonify(result)
 
@@ -241,8 +247,8 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             "corners_detected": n,
             "buffered_frames": total,
             "hint": (
-                f"Need {max(0, 15 - total)} more frames — keep collecting"
-                if total < 15
+                f"Need {max(0, FRAMES_TARGET - total)} more frames — keep collecting"
+                if total < FRAMES_TARGET
                 else "Ready — call POST /rpi/mindvision/lens/compute"
             ),
         })
@@ -265,9 +271,9 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
 
         buf = _load_buffer()
         cam_buf = buf.get(str(cam_id), [])
-        if len(cam_buf) < 10:
+        if len(cam_buf) < FRAMES_MIN:
             return jsonify({
-                "error": f"Only {len(cam_buf)} frames buffered — need at least 10",
+                "error": f"Only {len(cam_buf)} frames buffered — need at least {FRAMES_MIN}",
                 "hint": "Call POST /rpi/mindvision/lens/collect from more board positions",
             }), 422
 
@@ -317,6 +323,33 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             "rms": float(rms),
             "frames_used": len(cam_buf),
             "hint": "Re-run POST /rpi/mindvision/stitch/calibrate to refit homographies on undistorted images",
+        })
+
+    @bp.route("/last", methods=["DELETE"])
+    def remove_last():
+        """Remove the most recently collected frame from the buffer.
+
+        JSON body (all fields optional):
+          camera_id  int  Camera index (default 0).
+        """
+        body = request.get_json(silent=True) or {}
+        cam_id = int(body.get("camera_id", 0))
+        if cam_id not in cameras:
+            return jsonify({"error": f"Camera {cam_id} not found"}), 404
+
+        buf = _load_buffer()
+        cam_buf = buf.get(str(cam_id), [])
+        if not cam_buf:
+            return jsonify({"error": "No frames in buffer to remove"}), 422
+
+        cam_buf.pop()
+        buf[str(cam_id)] = cam_buf
+        _save_buffer(buf)
+
+        total = len(cam_buf)
+        return jsonify({
+            "removed": True,
+            "buffered_frames": total,
         })
 
     @bp.route("", methods=["DELETE"])

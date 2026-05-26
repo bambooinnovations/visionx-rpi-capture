@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX Calibration</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/calibrate/calibrate.css">
+</head>
+<body>
+
+<!-- ── Site Nav ──────────────────────────────────────────────────────── -->
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link active" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<!-- ── Sub-header ────────────────────────────────────────────────────── -->
+<header>
+  <div class="header-left">
+    <button id="btn-back" class="btn-back hidden" onclick="goToDashboard()">← Dashboard</button>
+    <h1 id="header-title">Calibration</h1>
+  </div>
+  <div class="header-right">
+    <span id="camera-count-badge" class="badge"></span>
+  </div>
+</header>
+
+<!-- ── Camera Tab Bar ────────────────────────────────────────────────── -->
+<div id="camera-tab-bar" class="camera-tab-bar hidden">
+  <!-- Tabs injected by JS -->
+</div>
+
+<!-- ── DASHBOARD ──────────────────────────────────────────────────────── -->
+<div id="view-dashboard" class="view">
+
+  <!-- Camera calibration cards (shown when a camera tab is active) -->
+  <div id="camera-cards-section">
+    <p class="subtitle" id="dashboard-subtitle">Select a calibration to run or check current status.</p>
+    <div class="card-grid" id="camera-card-grid">
+
+      <div class="card" id="card-wb">
+        <div class="card-header">
+          <h2>White Balance</h2>
+          <span id="pill-wb" class="pill pill-unknown">Unknown</span>
+        </div>
+        <p class="card-desc">One-push correction for colour cast under working lights.</p>
+        <div id="wb-details" class="card-details"></div>
+        <button id="btn-wb-start" class="btn btn-primary" onclick="wb.start()">Calibrate</button>
+      </div>
+
+      <div class="card" id="card-focus">
+        <div class="card-header">
+          <h2>Focus</h2>
+          <span class="pill pill-info">Manual</span>
+        </div>
+        <p class="card-desc">Live focus-peaking stream to guide lens ring adjustment.</p>
+        <div id="focus-details" class="card-details"></div>
+        <button class="btn btn-primary" id="btn-focus-start" onclick="openFocusStream()">Open Focus Stream</button>
+      </div>
+
+      <div class="card" id="card-lens">
+        <div class="card-header">
+          <h2>Lens Distortion</h2>
+          <span id="pill-lens" class="pill pill-unknown">Unknown</span>
+        </div>
+        <p class="card-desc">Computes camera matrix and distortion coefficients from ChArUco board frames.</p>
+        <div id="lens-details" class="card-details"></div>
+        <button id="btn-lens-start" class="btn btn-primary" onclick="lens.start()">Calibrate</button>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="dashboard-footer">
+    <button class="btn btn-secondary" onclick="refreshDashboard()">↺ Refresh Status</button>
+  </div>
+</div>
+
+<!-- ── WHITE BALANCE WIZARD ────────────────────────────────────────────── -->
+<div id="view-wb" class="view hidden">
+  <div class="wizard-header">
+    <h2>White Balance — <span id="wb-cam-label" class="wizard-cam-label"></span></h2>
+    <div class="step-dots" id="wb-step-dots"></div>
+  </div>
+
+  <div class="step" id="wb-step-0">
+    <h3>Step 1 — Prepare</h3>
+    <div class="instruction-box">
+      <p>Point the camera at a <strong>neutral white or grey surface</strong> under your normal working light conditions.</p>
+      <p>Avoid coloured backgrounds, shadows, or direct lamp glare.</p>
+    </div>
+    <div id="wb-current-gains" class="info-box hidden"></div>
+    <div class="step-actions">
+      <button class="btn btn-primary" onclick="wb.run()">Run Calibration</button>
+    </div>
+  </div>
+
+  <div class="step hidden" id="wb-step-1">
+    <h3>Step 2 — Result</h3>
+    <div id="wb-result"></div>
+    <div class="step-actions">
+      <button class="btn btn-secondary" onclick="wb.start()">Calibrate Again</button>
+      <button class="btn btn-primary" onclick="goToDashboard()">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── LENS DISTORTION WIZARD ──────────────────────────────────────────── -->
+<div id="view-lens" class="view hidden">
+  <div class="wizard-header">
+    <h2>Lens Distortion — <span id="lens-cam-label" class="wizard-cam-label"></span></h2>
+    <div class="step-dots" id="lens-step-dots"></div>
+  </div>
+
+  <div class="step" id="lens-step-0">
+    <h3>Step 1 — Setup</h3>
+    <div class="instruction-box">
+      <p>You will collect <strong>15–20 frames</strong> of the ChArUco board from varied angles, distances, and positions across the frame. More variety = better calibration.</p>
+      <p>Board: <code>charuco/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png</code></p>
+    </div>
+    <div id="lens-current-status" class="info-box"></div>
+    <div class="step-actions">
+      <button id="btn-lens-clear" class="btn btn-danger" onclick="lens.confirmClear()">Clear Calibration</button>
+      <button class="btn btn-primary" onclick="lens.startCollecting()">Start Collecting →</button>
+    </div>
+  </div>
+
+  <div class="step hidden" id="lens-step-1">
+    <h3>Step 2 — Collect Frames</h3>
+    <p class="step-hint">Adjust the slider until the guide box matches the size you plan to hold the board, then follow the on-screen feedback. Click <strong>Collect Frame</strong> when the board is in position.</p>
+    <div class="stream-container">
+      <img id="lens-stream-img" class="stream-img" alt="Loading calibration stream...">
+    </div>
+    <div class="guide-size-control">
+      <label for="lens-guide-size">Guide box size</label>
+      <input type="range" id="lens-guide-size" min="15" max="75" value="40" step="5">
+      <span id="lens-guide-size-value">40%</span>
+    </div>
+    <div class="collect-bar">
+      <div class="progress-row">
+        <span id="lens-frame-count">0 frames</span>
+        <span id="lens-frame-hint" class="hint-text"></span>
+      </div>
+      <div class="progress-track">
+        <div id="lens-progress-fill" class="progress-fill" style="width:0%"></div>
+      </div>
+    </div>
+    <div id="lens-collect-feedback" class="feedback-line"></div>
+    <div class="step-actions">
+      <button id="btn-lens-collect" class="btn btn-primary" onclick="lens.collectFrame()">Collect Frame</button>
+      <button id="btn-lens-undo" class="btn btn-secondary" disabled onclick="lens.undoLast()">↩ Undo Last</button>
+      <button id="btn-lens-skip" class="btn btn-secondary" onclick="lens.skipPosition()">Skip →</button>
+      <button id="btn-lens-compute" class="btn btn-success" disabled onclick="lens.compute()">Compute Calibration</button>
+    </div>
+  </div>
+
+  <div class="step hidden" id="lens-step-2">
+    <h3>Step 3 — Computing…</h3>
+    <div class="spinner-container">
+      <div class="spinner"></div>
+      <p>Running calibration — this may take a few seconds…</p>
+    </div>
+  </div>
+
+  <div class="step hidden" id="lens-step-3">
+    <h3>Step 4 — Result</h3>
+    <div id="lens-result"></div>
+    <div class="step-actions">
+      <button class="btn btn-primary" onclick="goToDashboard()">Done</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/calibrate/calibrate.js"></script>
+</body>
+</html>
