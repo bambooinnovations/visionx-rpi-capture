@@ -28,6 +28,12 @@ except (ImportError, OSError):
 # regardless of how many MindVisionCamera instances are opened.
 _sdk_initialized = False
 
+# Cached device list from the first CameraEnumerateDevice call.
+# Re-enumerating after some cameras are already initialized can return a
+# different ordering or omit initialized devices, causing camera_index to
+# map to the wrong physical camera or fail with "not found".
+_dev_list_cache: list | None = None
+
 import config
 from camera.base import BaseCamera
 from metrics import CaptureMetrics
@@ -47,13 +53,16 @@ class MindVisionCamera(BaseCamera):
         # Held by stream_frames() per-frame and by capture_image() for the full
         # grab cycle, so they never pull from the SDK queue simultaneously.
         self._lock = threading.Lock()
+        self._stream_lock = threading.Lock()  # held for the lifetime of each active stream
+        self._stream_cancel = threading.Event()  # set to signal the active stream to stop
         self._mode: CameraMode = CameraMode.STREAM
         self._streaming: bool = False  # True while stream_frames() generator is running
+        self._stream_count: int = 0  # number of active stream_frames() generators
         # Keep a strong reference to the ctypes callback so it isn't GC'd.
         self._connection_cb = None
 
     def open(self) -> None:
-        global _sdk_initialized
+        global _sdk_initialized, _dev_list_cache
         if not _MVSDK_AVAILABLE:
             raise RuntimeError(
                 "MindVision SDK (mvsdk) or its dependencies are not available."
@@ -69,7 +78,13 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CameraSetDataDirectory(str(self._project_root / "MindVisionCamera"))
             _sdk_initialized = True
 
-        dev_list = mvsdk.CameraEnumerateDevice()
+        # Enumerate once and cache. Re-enumerating after some cameras are
+        # already initialized can return a different order or omit initialized
+        # devices, causing this index to map to the wrong physical camera.
+        if _dev_list_cache is None:
+            _dev_list_cache = mvsdk.CameraEnumerateDevice()
+
+        dev_list = _dev_list_cache
         if len(dev_list) <= self._camera_index:
             raise RuntimeError(
                 f"MindVision camera index {self._camera_index} not found "
@@ -295,14 +310,23 @@ class MindVisionCamera(BaseCamera):
         img.save(buf, format="JPEG", quality=quality)
         return buf.getvalue()
 
-    def stream_frames(self):
-        frame_interval = 1.0 / config.STREAM_FPS
+    def stream_frames(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        fps: float | None = None,
+    ):
+        frame_interval = 1.0 / (fps if fps is not None else config.STREAM_FPS)
+        self._stream_count += 1
         self._streaming = True
+        self._stream_cancel.clear()
         _continuous_active = False  # whether we've switched to continuous for this session
+        _saved_resolution: object = None  # original resolution when override is active
         try:
-            while True:
+            while not self._stream_cancel.is_set():
                 if self._h_camera is None:
                     _continuous_active = False
+                    _saved_resolution = None
                     try:
                         self.open()
                     except RuntimeError:
@@ -310,9 +334,25 @@ class MindVisionCamera(BaseCamera):
                         time.sleep(2)
                         continue
 
+                h = self._h_camera
+                assert h is not None
+
+                if _saved_resolution is None and (width is not None or height is not None):
+                    _saved_resolution = mvsdk.CameraGetImageResolution(h)
+                    override = mvsdk.tSdkImageResolution()
+                    override.iIndex = 0xFF  # custom resolution index
+                    override.iWidth = width if width is not None else _saved_resolution.iWidth
+                    override.iHeight = height if height is not None else _saved_resolution.iHeight
+                    override.iWidthFOV = override.iWidth
+                    override.iHeightFOV = override.iHeight
+                    mvsdk.CameraSetImageResolution(h, override)
+                    logger.info(
+                        "stream_resolution_override",
+                        width=override.iWidth,
+                        height=override.iHeight,
+                    )
+
                 if not _continuous_active and self._mode != CameraMode.HARDWARE_TRIGGER:
-                    h = self._h_camera
-                    assert h is not None
                     mvsdk.CameraSetTriggerMode(h, 0)  # continuous while streaming
                     _continuous_active = True
 
@@ -332,8 +372,18 @@ class MindVisionCamera(BaseCamera):
                 if remaining > 0:
                     time.sleep(remaining)
         finally:
-            self._streaming = False
-            if self._h_camera is not None and self._mode != CameraMode.HARDWARE_TRIGGER:
+            self._stream_count -= 1
+            self._streaming = self._stream_count > 0
+            if _saved_resolution is not None and self._h_camera is not None:
+                try:
+                    mvsdk.CameraSetImageResolution(self._h_camera, _saved_resolution)
+                    logger.info("stream_resolution_restored")
+                except Exception:
+                    logger.warning("mindvision_restore_resolution_failed")
+            # Only revert trigger mode when the last active generator exits.
+            # If another generator is still running it already set continuous mode
+            # and reverting here would break it.
+            if self._stream_count == 0 and self._h_camera is not None and self._mode != CameraMode.HARDWARE_TRIGGER:
                 try:
                     mvsdk.CameraSetTriggerMode(self._h_camera, 1)  # back to software trigger
                     logger.info("stream_ended_reverted_to_software_trigger")

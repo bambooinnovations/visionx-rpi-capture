@@ -34,8 +34,18 @@ if config.CAMERA_TYPE == "mindvision":
     _count = 0
     try:
         import mvsdk as _mvsdk
+        import camera.mindvision as _mv_mod
+
         _mvsdk.CameraSdkInit(0)  # must be called before any other SDK function (0 = English)
-        _count = len(_mvsdk.CameraEnumerateDevice())
+        _mvsdk.CameraSetDataDirectory(str(Path(__file__).parent / "MindVisionCamera"))
+        # Mark the SDK as initialized and seed the device list cache so that
+        # MindVisionCamera.open() does not call CameraSdkInit a second time and
+        # does not re-enumerate (which may return a different order or omit
+        # already-initialized cameras).
+        _mv_mod._sdk_initialized = True
+        _dev_list = _mvsdk.CameraEnumerateDevice()
+        _mv_mod._dev_list_cache = _dev_list
+        _count = len(_dev_list)
         logger.info("mindvision_cameras_detected", count=_count)
     except Exception as _e:
         logger.warning("mindvision_enumerate_failed", reason=str(_e))
@@ -89,7 +99,11 @@ if not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
 
 if isinstance(camera, MindVisionCamera):
     from blueprints.mindvision import create_blueprint
+    from blueprints.stitch import create_blueprint as create_stitch_blueprint
+    from blueprints.lens import create_blueprint as create_lens_blueprint
     app.register_blueprint(create_blueprint(cameras))
+    app.register_blueprint(create_stitch_blueprint(cameras))
+    app.register_blueprint(create_lens_blueprint(cameras))
 
 
 def _resolve_camera(default_id: int = 0):
@@ -107,14 +121,39 @@ def stream():
     if isinstance(cam, MindVisionCamera) and cam.mode != CameraMode.STREAM:
         return Response("Camera is not in stream mode", status=409)
 
+    width = request.args.get("width", None, type=int)
+    height = request.args.get("height", None, type=int)
+    fps = request.args.get("fps", None, type=float)
+
+    if isinstance(cam, MindVisionCamera):
+        if not cam._stream_lock.acquire(blocking=False):
+            # Lock is held — signal the active stream to exit cleanly, then
+            # wait for it to release the lock. The old stream will stop within
+            # one frame interval once it sees the cancel event.
+            cam._stream_cancel.set()
+            if not cam._stream_lock.acquire(timeout=5):
+                return jsonify({"error": f"Camera {cam_id} stream already in use"}), 409
+
     def generate():
-        for frame in cam.stream_frames():
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n"
-                + frame
-                + b"\r\n"
-            )
+        try:
+            stream_kwargs = {}
+            if isinstance(cam, MindVisionCamera):
+                if width is not None:
+                    stream_kwargs["width"] = width
+                if height is not None:
+                    stream_kwargs["height"] = height
+                if fps is not None:
+                    stream_kwargs["fps"] = fps
+            for frame in cam.stream_frames(**stream_kwargs):
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n"
+                    + frame
+                    + b"\r\n"
+                )
+        finally:
+            if isinstance(cam, MindVisionCamera):
+                cam._stream_lock.release()
 
     return Response(
         generate(),

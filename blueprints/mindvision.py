@@ -24,6 +24,23 @@ logger = structlog.get_logger()
 # Per-camera rolling sharpness history for trend detection (camera_id -> deque).
 _calibration_history: dict[int, deque] = {}
 
+# Count of active calibration stream generators per camera. Used to avoid
+# reverting the trigger mode while another calibration stream is still running.
+_calibration_stream_count: dict[int, int] = {}
+
+# ChArUco board for calibration stream detection overlay (lazy-initialised).
+_charuco_board = None
+_charuco_dict = None
+
+
+def _get_charuco_board():
+    global _charuco_board, _charuco_dict
+    if _charuco_board is None:
+        import cv2
+        _charuco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+        _charuco_board = cv2.aruco.CharucoBoard((20, 14), 10.0, 8.0, _charuco_dict)
+    return _charuco_board, _charuco_dict
+
 
 def _render_calibration_overlay(
     frame: "np.ndarray",
@@ -31,8 +48,18 @@ def _render_calibration_overlay(
     peak_threshold: int,
     max_width: int,
     camera_id: int = 0,
+    detect_charuco: bool = False,
 ) -> bytes:
-    """Return a JPEG with focus peaking + sharpness score overlaid."""
+    """Return a JPEG with focus peaking + info overlay.
+
+    All text is stacked in the top-left corner.  The sharpness bar stays
+    at the bottom.  Overlay lines (top to bottom):
+      cam{id}
+      Score: {n}  {trend arrow} {suggestion}
+      Clipped: {n}%  {arrow} {exposure suggestion}
+      ChArUco: {n} corners — {ready / too few / not detected}
+    """
+    import cv2 as _cv2
     import numpy as np
     from PIL import Image as PilImage, ImageDraw, ImageFont
 
@@ -52,10 +79,11 @@ def _render_calibration_overlay(
     w, h = pil_img.size
     rgb = np.array(pil_img, dtype=np.uint8)
 
-    # Grayscale for gradient computation.
+    # Grayscale for gradient computation and ChArUco detection.
     gray = (
         0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
     ).astype(np.float32)
+    gray_u8 = gray.astype(np.uint8)
 
     # Laplacian variance on the center third — standard single-frame sharpness metric.
     roi_y1, roi_y2 = h // 3, 2 * h // 3
@@ -90,15 +118,42 @@ def _render_calibration_overlay(
     mean_brightness = float(gray.mean())
 
     if clipped_pct > 5.0:
-        exp_char, exp_color, exp_suggestion = "▲", (220, 60, 60),  "Close aperture"
+        exp_char, exp_color, exp_suggestion = "▲", (220, 60, 60), "Close aperture"
     elif clipped_pct > 0.5:
         exp_char, exp_color, exp_suggestion = "▲", (220, 160, 40), "Slightly overexposed"
     elif mean_brightness < 30:
-        exp_char, exp_color, exp_suggestion = "▼", (80, 160, 220),  "Open aperture"
+        exp_char, exp_color, exp_suggestion = "▼", (80, 160, 220), "Open aperture"
     elif mean_brightness < 60:
         exp_char, exp_color, exp_suggestion = "▼", (140, 200, 240), "Slightly underexposed"
     else:
-        exp_char, exp_color, exp_suggestion = "●", (80, 220, 80),  "Exposure OK"
+        exp_char, exp_color, exp_suggestion = "●", (80, 220, 80), "Exposure OK"
+
+    # ChArUco detection — only when explicitly requested.
+    if detect_charuco:
+        try:
+            board, aruco_dict = _get_charuco_board()
+            detector = _cv2.aruco.ArucoDetector(aruco_dict)
+            marker_corners, marker_ids, _ = detector.detectMarkers(gray_u8)
+            n_charuco = 0
+            if marker_ids is not None and len(marker_ids) >= 4:
+                _, charuco_corners, _ = _cv2.aruco.interpolateCornersCharuco(
+                    marker_corners, marker_ids, gray_u8, board
+                )
+                if charuco_corners is not None:
+                    n_charuco = len(charuco_corners)
+        except Exception:
+            n_charuco = -1
+
+        if n_charuco < 0:
+            charuco_text, charuco_color = "ChArUco: unavailable", (180, 180, 180)
+        elif n_charuco >= 8:
+            charuco_text, charuco_color = f"ChArUco: {n_charuco} corners — ready", (80, 220, 80)
+        elif n_charuco > 0:
+            charuco_text, charuco_color = f"ChArUco: {n_charuco} corners — too few", (220, 160, 40)
+        else:
+            charuco_text, charuco_color = "ChArUco: not detected", (220, 80, 80)
+    else:
+        charuco_text, charuco_color = None, None
 
     # Focus peaking: highlight pixels where |gradient| > threshold in magenta.
     gi = gray.astype(np.int32)
@@ -131,26 +186,22 @@ def _render_calibration_overlay(
     # ROI box.
     draw.rectangle([roi_x1, roi_y1, roi_x2, roi_y2], outline=(255, 255, 0), width=2)
 
-    # Score and trend arrow (top-left corner).
+    # ── Top-left info stack ───────────────────────────────────────────────────
     pad = max(8, w // 80)
-    draw.text((pad, pad), f"Score: {score:.0f}", fill=(255, 255, 255), font=font)
-    draw.text(
-        (pad, pad + font_size + 4),
-        f"{trend_char}  {suggestion}",
-        fill=trend_color,
-        font=font,
-    )
+    line_gap = font_size + 6
+    y = pad
 
-    # Exposure status (top-right corner).
-    exp_line1 = f"Clipped: {clipped_pct:.1f}%"
-    exp_line2 = f"{exp_char}  {exp_suggestion}"
-    bbox1 = draw.textbbox((0, 0), exp_line1, font=font)
-    bbox2 = draw.textbbox((0, 0), exp_line2, font=font)
-    exp_x1 = w - pad - max(bbox1[2], bbox2[2])
-    draw.text((exp_x1, pad), exp_line1, fill=(255, 255, 255), font=font)
-    draw.text((exp_x1, pad + font_size + 4), exp_line2, fill=exp_color, font=font)
+    lines = [
+        (f"cam{camera_id}", (255, 255, 255)),
+        (f"Score: {score:.0f}  {trend_char} {suggestion}", trend_color),
+        (f"Clipped: {clipped_pct:.1f}%  {exp_char} {exp_suggestion}", exp_color),
+        *(([(charuco_text, charuco_color)]) if charuco_text else []),
+    ]
+    for text, color in lines:
+        draw.text((pad, y), text, fill=color, font=font)
+        y += line_gap
 
-    # Sharpness bar (bottom-left), normalized to the highest score seen so far.
+    # ── Sharpness bar (bottom) ────────────────────────────────────────────────
     max_score = max(list(history) + [1.0])
     bar_total = w // 3
     bar_x1 = pad
@@ -172,19 +223,6 @@ def _render_calibration_overlay(
         fill=(200, 200, 200),
         font=font_sm,
     )
-
-    # Camera ID badge (bottom-right corner).
-    cam_label = f"cam{camera_id}"
-    cam_bbox = draw.textbbox((0, 0), cam_label, font=font)
-    cam_w = cam_bbox[2] - cam_bbox[0]
-    cam_h = cam_bbox[3] - cam_bbox[1]
-    cam_x = w - pad - cam_w
-    cam_y = h - pad - cam_h
-    draw.rectangle(
-        [cam_x - 4, cam_y - 2, cam_x + cam_w + 4, cam_y + cam_h + 2],
-        fill=(0, 0, 0, 160),
-    )
-    draw.text((cam_x, cam_y), cam_label, fill=(255, 255, 255), font=font)
 
     buf = io.BytesIO()
     pil_out.convert("RGB").save(buf, format="JPEG", quality=75)
@@ -432,6 +470,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
           fps             float Frames per second for the overlay stream (default 2, max 10)
           peak_threshold  int   Gradient magnitude threshold for peaking highlights (default 50)
           max_width       int   Downscale frames to this width before overlay (default 1280)
+          charuco         int   Set to 1 to enable ChArUco board detection overlay (default 0)
         """
         cam, cam_id = _resolve_camera()
         if cam is None:
@@ -440,10 +479,13 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         fps = max(0.5, min(request.args.get("fps", 2.0, type=float), 10.0))
         peak_threshold = request.args.get("peak_threshold", 50, type=int)
         max_width = request.args.get("max_width", 1280, type=int)
+        detect_charuco = request.args.get("charuco", 0, type=int) == 1
 
         if cam_id not in _calibration_history:
             _calibration_history[cam_id] = deque(maxlen=30)
         history = _calibration_history[cam_id]
+
+        _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 0) + 1
 
         frame_interval = 1.0 / fps
 
@@ -473,7 +515,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                         frame = cam._grab_frame()
 
                     if frame is not None:
-                        jpeg = _render_calibration_overlay(frame, history, peak_threshold, max_width, cam_id)
+                        jpeg = _render_calibration_overlay(frame, history, peak_threshold, max_width, cam_id, detect_charuco)
                         yield (
                             b"--frame\r\n"
                             b"Content-Type: image/jpeg\r\n\r\n"
@@ -486,9 +528,12 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                     if remaining > 0:
                         time.sleep(remaining)
             finally:
-                # Revert to software trigger only if we enabled continuous ourselves.
+                _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 1) - 1
+                # Only revert to software trigger when the last calibration stream exits
+                # and the main stream isn't running — mirrors the logic in stream_frames().
                 if (
                     _continuous_started
+                    and _calibration_stream_count.get(cam_id, 0) == 0
                     and cam._h_camera is not None
                     and not cam._streaming
                 ):
@@ -622,246 +667,6 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         """
         result = check_server_health()
         return jsonify({"reachable": None} if result is None else result)
-
-    # ── Edge detection ────────────────────────────────────────────────────────
-
-    @bp.route("/edge-detection/stream")
-    def edge_detection_stream():
-        """MJPEG stream with edge detection overlay for live parameter tuning.
-
-        Query params:
-          camera_id      int    Camera index (default 0)
-          method         str    "canny" (default), "sobel", or "laplacian"
-          fps            float  Stream frame rate (default 2, max 10)
-          max_width      int    Downscale before processing (default 1280)
-
-          Canny params (method=canny):
-            low_threshold   int  Lower hysteresis threshold (default 50)
-            high_threshold  int  Upper hysteresis threshold (default 150)
-            aperture        int  Sobel aperture: 3, 5, or 7 (default 3)
-            blur_kernel     int  Gaussian pre-blur kernel: 1 (none), 3, 5, 7 (default 3)
-
-          Sobel params (method=sobel):
-            ksize           int  Kernel size: 1, 3, 5, or 7 (default 3)
-            scale           float Multiplier for gradient magnitude (default 1)
-
-          Laplacian params (method=laplacian):
-            ksize           int  Kernel size: 1, 3, 5, or 7 (default 3)
-            scale           float Multiplier (default 1)
-        """
-        import cv2
-        import numpy as np
-        from PIL import Image as PilImage, ImageDraw, ImageFont
-
-        cam, cam_id = _resolve_camera()
-        if cam is None:
-            return jsonify({"error": f"Camera {cam_id} not found"}), 404
-
-        method = request.args.get("method", "canny").lower()
-        if method not in ("canny", "sobel", "laplacian"):
-            return jsonify({"error": "method must be 'canny', 'sobel', or 'laplacian'"}), 400
-
-        fps = max(0.5, min(request.args.get("fps", 2.0, type=float), 10.0))
-        max_width = request.args.get("max_width", 1280, type=int)
-
-        # Canny
-        low_thresh = request.args.get("low_threshold", 50, type=int)
-        high_thresh = request.args.get("high_threshold", 150, type=int)
-        aperture = request.args.get("aperture", 3, type=int)
-        if aperture not in (3, 5, 7):
-            aperture = 3
-        blur_k = request.args.get("blur_kernel", 3, type=int)
-        if blur_k not in (1, 3, 5, 7):
-            blur_k = 3
-
-        # Sobel / Laplacian
-        ksize = request.args.get("ksize", 3, type=int)
-        if ksize not in (1, 3, 5, 7):
-            ksize = 3
-        scale = max(0.1, request.args.get("scale", 1.0, type=float))
-
-        frame_interval = 1.0 / fps
-
-        def _to_gray(frame):
-            if frame.ndim == 3 and frame.shape[2] == 3:
-                return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            return frame[:, :, 0] if frame.ndim == 3 else frame
-
-        def _apply_edges(gray):
-            if method == "canny":
-                blurred = cv2.GaussianBlur(gray, (blur_k, blur_k), 0) if blur_k > 1 else gray
-                return cv2.Canny(blurred, low_thresh, high_thresh, apertureSize=aperture)
-            elif method == "sobel":
-                sx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=ksize)
-                sy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=ksize)
-                mag = np.sqrt(sx ** 2 + sy ** 2) * scale
-                return np.clip(mag, 0, 255).astype(np.uint8)
-            else:  # laplacian
-                lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=ksize)
-                mag = np.abs(lap) * scale
-                return np.clip(mag, 0, 255).astype(np.uint8)
-
-        def _render(edges, orig_shape):
-            """Overlay param text on the edge image and return JPEG bytes."""
-            h, w = edges.shape[:2]
-            rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
-            pil_img = PilImage.fromarray(rgb)
-            draw = ImageDraw.Draw(pil_img)
-            font_size = max(14, w // 60)
-            try:
-                font = ImageFont.truetype(
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size
-                )
-            except Exception:
-                font = ImageFont.load_default()
-
-            if method == "canny":
-                lines = [
-                    f"method: canny",
-                    f"low_threshold: {low_thresh}",
-                    f"high_threshold: {high_thresh}",
-                    f"aperture: {aperture}",
-                    f"blur_kernel: {blur_k}",
-                ]
-            elif method == "sobel":
-                lines = [f"method: sobel", f"ksize: {ksize}", f"scale: {scale:.2f}"]
-            else:
-                lines = [f"method: laplacian", f"ksize: {ksize}", f"scale: {scale:.2f}"]
-
-            lines.append(f"cam{cam_id}  src {orig_shape[1]}x{orig_shape[0]}")
-
-            pad = max(6, w // 90)
-            y = pad
-            for line in lines:
-                bbox = draw.textbbox((0, 0), line, font=font)
-                tw = bbox[2] - bbox[0]
-                th = bbox[3] - bbox[1]
-                draw.rectangle([pad - 2, y - 1, pad + tw + 2, y + th + 1], fill=(0, 0, 0))
-                draw.text((pad, y), line, fill=(0, 255, 0), font=font)
-                y += th + 4
-
-            import io
-            buf = io.BytesIO()
-            pil_img.save(buf, format="JPEG", quality=80)
-            return buf.getvalue()
-
-        def generate():
-            import mvsdk as _mvsdk
-            _continuous_started = False
-            try:
-                while True:
-                    loop_start = time.monotonic()
-
-                    if cam._h_camera is None:
-                        time.sleep(1.0)
-                        continue
-
-                    if (
-                        not cam._streaming
-                        and not _continuous_started
-                        and cam.mode != CameraMode.HARDWARE_TRIGGER
-                    ):
-                        _mvsdk.CameraSetTriggerMode(cam._h_camera, 0)
-                        _continuous_started = True
-                        time.sleep(0.1)
-
-                    with cam._lock:
-                        frame = cam._grab_frame()
-
-                    if frame is not None:
-                        orig_shape = frame.shape
-                        if frame.shape[1] > max_width:
-                            scale_f = max_width / frame.shape[1]
-                            new_h = int(frame.shape[0] * scale_f)
-                            frame = cv2.resize(frame, (max_width, new_h), interpolation=cv2.INTER_LINEAR)
-                        gray = _to_gray(frame)
-                        edges = _apply_edges(gray)
-                        jpeg = _render(edges, orig_shape)
-                        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
-
-                    elapsed = time.monotonic() - loop_start
-                    remaining = frame_interval - elapsed
-                    if remaining > 0:
-                        time.sleep(remaining)
-            finally:
-                if (
-                    _continuous_started
-                    and cam._h_camera is not None
-                    and not cam._streaming
-                ):
-                    try:
-                        import mvsdk as _mvsdk
-                        _mvsdk.CameraSetTriggerMode(cam._h_camera, 1)
-                    except Exception:
-                        pass
-
-        return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
-
-    @bp.route("/edge-detection/frame")
-    def edge_detection_frame():
-        """Capture one frame, apply edge detection, and return a JPEG.
-
-        Accepts the same query params as /edge-detection/stream (minus fps/max_width).
-        """
-        import cv2
-        import numpy as np
-        import io
-
-        cam, cam_id = _resolve_camera()
-        if cam is None or cam._h_camera is None:
-            return jsonify({"error": f"Camera {cam_id} not found or not open"}), 404
-
-        method = request.args.get("method", "canny").lower()
-        if method not in ("canny", "sobel", "laplacian"):
-            return jsonify({"error": "method must be 'canny', 'sobel', or 'laplacian'"}), 400
-
-        low_thresh = request.args.get("low_threshold", 50, type=int)
-        high_thresh = request.args.get("high_threshold", 150, type=int)
-        aperture = request.args.get("aperture", 3, type=int)
-        if aperture not in (3, 5, 7):
-            aperture = 3
-        blur_k = request.args.get("blur_kernel", 3, type=int)
-        if blur_k not in (1, 3, 5, 7):
-            blur_k = 3
-        ksize = request.args.get("ksize", 3, type=int)
-        if ksize not in (1, 3, 5, 7):
-            ksize = 3
-        scale = max(0.1, request.args.get("scale", 1.0, type=float))
-
-        try:
-            with cam._lock:
-                if not cam._streaming:
-                    import mvsdk as _mvsdk
-                    _mvsdk.CameraSoftTrigger(cam._h_camera)
-                frame = cam._grab_frame()
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 503
-
-        if frame is None:
-            return jsonify({"error": "No frame available"}), 503
-
-        if frame.ndim == 3 and frame.shape[2] == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = frame[:, :, 0] if frame.ndim == 3 else frame
-
-        if method == "canny":
-            blurred = cv2.GaussianBlur(gray, (blur_k, blur_k), 0) if blur_k > 1 else gray
-            edges = cv2.Canny(blurred, low_thresh, high_thresh, apertureSize=aperture)
-        elif method == "sobel":
-            sx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=ksize)
-            sy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=ksize)
-            edges = np.clip(np.sqrt(sx ** 2 + sy ** 2) * scale, 0, 255).astype(np.uint8)
-        else:
-            lap = cv2.Laplacian(gray, cv2.CV_32F, ksize=ksize)
-            edges = np.clip(np.abs(lap) * scale, 0, 255).astype(np.uint8)
-
-        from PIL import Image as PilImage
-        pil_img = PilImage.fromarray(edges, mode="L")
-        buf = io.BytesIO()
-        pil_img.save(buf, format="JPEG", quality=90)
-        buf.seek(0)
-        return send_file(buf, mimetype="image/jpeg")
 
     @bp.route("/calibration/score")
     def calibration_score():
