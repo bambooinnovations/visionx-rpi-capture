@@ -32,7 +32,7 @@ function startStream() {
 
   img.src = '';
   img.onload = () => { placeholder.style.display = 'none'; };
-  img.src = `/rpi/mindvision/calibration/stream?camera_id=${state.activeCameraId}&fps=${state.fps}&charuco=0`;
+  img.src = `/api/cameras/calibration/stream?camera_id=${state.activeCameraId}&fps=${state.fps}&charuco=0`;
   state.streaming = true;
 }
 
@@ -89,7 +89,7 @@ async function init() {
   clearError();
 
   try {
-    const cams = await apiFetch('/rpi/mindvision/cameras');
+    const cams = await apiFetch('/api/cameras');
     state.cameras = Array.isArray(cams) ? cams : [];
   } catch (_) {
     state.cameras = [];

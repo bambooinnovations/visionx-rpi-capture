@@ -80,7 +80,7 @@ function _startStitchViewStream() {
   img.onerror = () => {
     loading.innerHTML = '<span class="stream-load-error">Stream error</span>';
   };
-  img.src = `/rpi/mindvision/stitch/stream?max_width=960&fps=${state.fps}&quality=75`;
+  img.src = `/api/stitch/stream?max_width=960&fps=${state.fps}&quality=75`;
 }
 
 function _stopStitchViewStream() {
@@ -309,7 +309,7 @@ function scheduleLayoutSave() {
 
 async function saveLayout() {
   try {
-    const res = await fetch('/rpi/mindvision/stitch/config', {
+    const res = await fetch('/api/stitch/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ camera_order: state.cameraOrder }),
@@ -330,7 +330,7 @@ async function loadStitchStatus() {
   const stitchTab = document.getElementById('tab-btn-stitch');
 
   try {
-    const data = await apiFetch('/rpi/mindvision/stitch/calibrate', { allow404: true });
+    const data = await apiFetch('/api/stitch/calibrate', { allow404: true });
 
     const wasReady = state.stitchReady;
     state.stitchReady = !!(data && data.ready_to_stitch);
@@ -444,7 +444,7 @@ const calWizard = {
   async _loadCurrentStatus() {
     const box = document.getElementById('cal-current-status');
     try {
-      const data = await apiFetch('/rpi/mindvision/stitch/calibrate', { allow404: true });
+      const data = await apiFetch('/api/stitch/calibrate', { allow404: true });
       const entries = Object.entries((data && data.cameras) || {});
       if (!data || !data.calibrated || entries.length === 0) {
         box.innerHTML = '<span style="color:var(--text-muted)">No existing calibration.</span>';
@@ -473,7 +473,7 @@ const calWizard = {
     if (!confirm('Delete ALL stitch calibration data? This cannot be undone.')) return;
     _calSetLoading(true);
     try {
-      await apiFetch('/rpi/mindvision/stitch/calibrate', { method: 'DELETE' });
+      await apiFetch('/api/stitch/calibrate', { method: 'DELETE' });
       await calWizard._loadCurrentStatus();
       await loadStitchStatus();
     } catch (e) {
@@ -519,7 +519,7 @@ const calWizard = {
     const detectImg = document.getElementById('cal-detect-img');
     clearError();
     try {
-      const blob = await apiFetch(`/rpi/mindvision/stitch/detect?camera_id=${pass[0]}&t=${Date.now()}`);
+      const blob = await apiFetch(`/api/stitch/detect?camera_id=${pass[0]}&t=${Date.now()}`);
       const prev = detectImg.src;
       if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
       detectImg.src = URL.createObjectURL(blob);
@@ -534,12 +534,12 @@ const calWizard = {
     _calSetLoading(true);
     clearError();
     try {
-      const postData = await apiFetch('/rpi/mindvision/stitch/calibrate', {
+      const postData = await apiFetch('/api/stitch/calibrate', {
         method: 'POST',
         body: { cameras: pass },
       });
       let statusData = null;
-      try { statusData = await apiFetch('/rpi/mindvision/stitch/calibrate'); } catch (_) {}
+      try { statusData = await apiFetch('/api/stitch/calibrate'); } catch (_) {}
       calWizard._showPassResult(postData, statusData);
       _calShowStep(2);
     } catch (e) {
@@ -594,7 +594,7 @@ const calWizard = {
     const img = document.getElementById('cal-preview-img');
     clearError();
     try {
-      const blob = await apiFetch('/rpi/mindvision/stitch/preview');
+      const blob = await apiFetch('/api/stitch/preview');
       if (state.calPreviewBlobUrl) URL.revokeObjectURL(state.calPreviewBlobUrl);
       state.calPreviewBlobUrl = URL.createObjectURL(blob);
       img.src = state.calPreviewBlobUrl;
@@ -612,7 +612,7 @@ const calWizard = {
     }
     _calShowStep(4);
     try {
-      const data = await apiFetch('/rpi/mindvision/stitch/calibrate');
+      const data = await apiFetch('/api/stitch/calibrate');
       const entries = Object.entries(data.cameras || {});
       const canvas = data.canvas || {};
       document.getElementById('cal-complete-info').innerHTML = `
@@ -654,7 +654,7 @@ async function loadWbCalStatus() {
   btnCal.disabled = !state.stitchReady;
 
   try {
-    const data = await apiFetch('/rpi/mindvision/stitch/calibrate-color', { allow404: true });
+    const data = await apiFetch('/api/stitch/calibrate-color', { allow404: true });
 
     if (!data || !data.calibrated) {
       pill.className = 'pill pill-red';
@@ -703,7 +703,7 @@ const wbCal = {
     btn.textContent = 'Calibrating…';
     clearError();
     try {
-      await apiFetch('/rpi/mindvision/stitch/calibrate-color', { method: 'POST' });
+      await apiFetch('/api/stitch/calibrate-color', { method: 'POST' });
       await loadWbCalStatus();
     } catch (e) {
       showError('WB calibration failed: ' + e.message);
@@ -717,7 +717,7 @@ const wbCal = {
     if (!confirm('Clear WB calibration? Cameras will render with uncorrected colours until you recalibrate.')) return;
     clearError();
     try {
-      await apiFetch('/rpi/mindvision/stitch/calibrate-color', { method: 'DELETE' });
+      await apiFetch('/api/stitch/calibrate-color', { method: 'DELETE' });
       await loadWbCalStatus();
     } catch (e) {
       showError('Failed to clear WB calibration: ' + e.message);
@@ -736,8 +736,8 @@ async function init() {
   clearError();
 
   const [cameras, cfg] = await Promise.all([
-    apiFetch('/rpi/mindvision/cameras').catch(() => []),
-    apiFetch('/rpi/mindvision/stitch/config').catch(() => null),
+    apiFetch('/api/cameras').catch(() => []),
+    apiFetch('/api/stitch/config').catch(() => null),
   ]);
 
   state.cameras = Array.isArray(cameras) ? cameras : [];

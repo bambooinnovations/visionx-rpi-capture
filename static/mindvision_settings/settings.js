@@ -1,6 +1,6 @@
 'use strict';
 
-const API = `/rpi/mindvision`;
+const API = `/api/cameras`;
 
 let initialSettings = {};
 let previewMode = 'live'; // 'live' | 'manual' | 'photo'
@@ -402,8 +402,8 @@ function wireControls() {
 async function checkStitchWbLock() {
   try {
     const [stitchCal, wbCal] = await Promise.all([
-      fetch('/rpi/mindvision/stitch/calibrate').then(r => r.json()).catch(() => null),
-      fetch('/rpi/mindvision/stitch/calibrate-color').then(r => r.json()).catch(() => null),
+      fetch('/api/stitch/calibrate').then(r => r.json()).catch(() => null),
+      fetch('/api/stitch/calibrate-color').then(r => r.json()).catch(() => null),
     ]);
     const inStitch = stitchCal && Array.isArray(stitchCal.cameras_calibrated) &&
                      stitchCal.cameras_calibrated.includes(CAMERA_ID);

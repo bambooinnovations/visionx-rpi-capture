@@ -1,18 +1,34 @@
-"""Serial-based hardware trigger listener.
+"""Serial-based hardware trigger listener with bidirectional Arduino control.
 
 Reads JSON lines from arduino/decoder_trigger.ino over a serial port.
 Each trigger event captures an image from the MindVision camera(s) and:
   - POSTs it to the configured destination URL (if set)
   - Saves a local copy (if hw_trigger.save_local is true)
 
-Expected Arduino JSON format:
-  {"type":"trigger","source":"encoder","count":118,"trigger":1}
-  {"type":"trigger","source":"manual","count":0,"trigger":1}
+Arduino → RPi messages:
+  {"type":"trigger","source":"encoder","count":118,"trigger":1,"speed_cms":5.20}
+  {"type":"speed","speed_cms":5.20,"count":118,"trigger_enabled":true}
+  {"type":"config","trigger_enabled":true,"trigger_interval":118,...}
+  {"type":"ack","cmd":"set_trigger_interval","ok":true}
+  {"type":"startup","msg":"Trigger controller started"}
+
+RPi → Arduino commands (queued via send_command()):
+  {"cmd":"get_config"}
+  {"cmd":"reset_count"}
+  {"cmd":"set_trigger_enabled","value":true}
+  {"cmd":"set_trigger_interval","value":118}
+  {"cmd":"set_counts_per_cm","value":118.0}
+  {"cmd":"set_pulse_width_ms","value":20}
+  {"cmd":"set_speed_report_interval_ms","value":500}
+
+On connect, the listener pushes values from data/arduino_config.json to the
+Arduino so parameters survive RPi restarts without reflashing the sketch.
 """
 from __future__ import annotations
 
 import io
 import json
+import queue
 import tempfile
 import threading
 import time
@@ -29,6 +45,25 @@ if TYPE_CHECKING:
     from camera.mindvision import MindVisionCamera
 
 logger = structlog.get_logger()
+
+# Persisted Arduino parameter overrides (survives RPi restart, no reflash needed).
+ARDUINO_CONFIG_PATH = Path("data/arduino_config.json")
+
+# Arduino compile-time defaults — used when resetting to factory state.
+ARDUINO_DEFAULTS: dict = {
+    "trigger_interval": 118,
+    "counts_per_cm": 118.0,
+    "pulse_width_ms": 20,
+    "speed_report_interval_ms": 500,
+}
+
+# Keys the RPi is allowed to set on the Arduino.
+ARDUINO_SETTABLE_KEYS: dict[str, type] = {
+    "trigger_interval": int,
+    "counts_per_cm": float,
+    "pulse_width_ms": int,
+    "speed_report_interval_ms": int,
+}
 
 
 def _get_destination_url() -> str:
@@ -56,12 +91,7 @@ def _get_health_check_url() -> str:
 
 
 def check_server_health() -> dict:
-    """GET the configured health_check_url and return reachability result.
-
-    Returns {"reachable": True} on any HTTP response (even 4xx — the server
-    answered), or {"reachable": False, "error": "<message>"} on network/timeout
-    failure. Returns None if no health_check_url is configured.
-    """
+    """GET the configured health_check_url and return reachability result."""
     url = _get_health_check_url()
     if not url:
         return None
@@ -147,13 +177,16 @@ def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict) -> Path | None:
 
 
 class SerialTriggerListener:
-    """Background thread that reads Arduino trigger events from a serial port."""
+    """Background thread that reads Arduino trigger events and sends commands."""
 
     def __init__(self, cameras: dict[int, "MindVisionCamera"]) -> None:
         self._cameras = cameras
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        self._send_queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._state_lock = threading.Lock()
+
         self._stats = {
             "triggers_received": 0,
             "captures_ok": 0,
@@ -161,6 +194,16 @@ class SerialTriggerListener:
             "uploads_ok": 0,
             "uploads_failed": 0,
             "started_at": None,
+        }
+
+        # Live state mirrored from Arduino messages.
+        self._arduino_state: dict = {
+            "serial_connected": False,
+            "speed_cms": 0.0,
+            "last_message_at": None,
+            "trigger_enabled": True,
+            "encoder_count": 0,
+            "arduino_config": {},
         }
 
     @property
@@ -190,17 +233,79 @@ class SerialTriggerListener:
         if self._thread is not None:
             self._thread.join(timeout=5)
         self._thread = None
+        with self._state_lock:
+            self._arduino_state["serial_connected"] = False
         logger.info("serial_trigger_listener_stopped")
+
+    def send_command(self, cmd: dict) -> None:
+        """Queue a JSON command to be sent to the Arduino on the next loop tick."""
+        if not self.running:
+            raise RuntimeError("Serial trigger listener is not running")
+        self._send_queue.put(json.dumps(cmd))
+
+    def save_config(self, updates: dict) -> None:
+        """Persist parameter overrides to arduino_config.json."""
+        cfg = self._load_file_config()
+        cfg.update(updates)
+        try:
+            ARDUINO_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ARDUINO_CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+        except Exception as exc:
+            logger.warning("arduino_config_save_failed", error=str(exc))
+
+    def reset_config(self) -> None:
+        """Delete arduino_config.json so Arduino defaults take effect on next connect."""
+        try:
+            ARDUINO_CONFIG_PATH.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning("arduino_config_reset_failed", error=str(exc))
 
     def status(self) -> dict:
         uptime = None
         if self._stats["started_at"] is not None and self.running:
             uptime = round(time.time() - self._stats["started_at"], 1)
+        with self._state_lock:
+            state = dict(self._arduino_state)
         return {
             "running": self.running,
             "uptime_seconds": uptime,
             **{k: v for k, v in self._stats.items() if k != "started_at"},
+            **state,
         }
+
+    # ── Private ───────────────────────────────────────────────────────────────
+
+    def _load_file_config(self) -> dict:
+        try:
+            if ARDUINO_CONFIG_PATH.exists():
+                return json.loads(ARDUINO_CONFIG_PATH.read_text())
+        except Exception as exc:
+            logger.warning("arduino_config_load_failed", error=str(exc))
+        return {}
+
+    def _push_startup_config(self, ser) -> None:
+        """Send get_config then push any persisted overrides from arduino_config.json."""
+        try:
+            ser.write((json.dumps({"cmd": "get_config"}) + "\n").encode("ascii"))
+            ser.flush()
+        except Exception as exc:
+            logger.warning("arduino_get_config_failed", error=str(exc))
+            return
+
+        cfg = self._load_file_config()
+        for key, value in cfg.items():
+            if key not in ARDUINO_SETTABLE_KEYS:
+                continue
+            try:
+                msg = json.dumps({"cmd": f"set_{key}", "value": value}) + "\n"
+                ser.write(msg.encode("ascii"))
+                ser.flush()
+                time.sleep(0.05)
+            except Exception as exc:
+                logger.warning("arduino_config_push_failed", key=key, error=str(exc))
+
+        if cfg:
+            logger.info("arduino_config_pushed", keys=list(cfg.keys()))
 
     def _run(self, port: str, baud: int) -> None:
         import serial
@@ -211,17 +316,29 @@ class SerialTriggerListener:
             try:
                 if ser is None:
                     ser = serial.Serial(port, baud, timeout=1.0)
+                    with self._state_lock:
+                        self._arduino_state["serial_connected"] = True
                     logger.info("serial_port_opened", port=port, baud=baud)
+                    # Arduino resets when DTR is asserted on open; wait for boot.
+                    time.sleep(2.0)
+                    self._push_startup_config(ser)
+
+                # Drain any queued outgoing commands before blocking on read.
+                while not self._send_queue.empty():
+                    try:
+                        msg = self._send_queue.get_nowait()
+                        ser.write((msg + "\n").encode("ascii"))
+                        ser.flush()
+                    except Exception as exc:
+                        logger.warning("serial_write_failed", error=str(exc))
 
                 line = ser.readline()
                 if not line:
                     continue
 
                 text = line.decode("ascii", errors="ignore").strip()
-                if not text:
-                    continue
-
-                self._handle_line(text)
+                if text:
+                    self._handle_line(text)
 
             except serial.serialutil.SerialException as exc:
                 logger.warning("serial_port_error", port=port, error=str(exc))
@@ -231,6 +348,8 @@ class SerialTriggerListener:
                     except Exception:
                         pass
                     ser = None
+                with self._state_lock:
+                    self._arduino_state["serial_connected"] = False
                 if not self._stop_event.is_set():
                     time.sleep(2.0)
 
@@ -251,22 +370,46 @@ class SerialTriggerListener:
         except json.JSONDecodeError:
             return
 
-        if event.get("type") != "trigger":
-            return
+        msg_type = event.get("type")
 
-        self._stats["triggers_received"] += 1
-        logger.info(
-            "serial_trigger_received",
-            source=event.get("source"),
-            count=event.get("count"),
-            trigger=event.get("trigger"),
-        )
+        with self._state_lock:
+            self._arduino_state["last_message_at"] = time.time()
 
-        # Frames are pre-buffered by the camera hardware when the trigger fires,
-        # so sequential grabs are safe and avoid potential SDK concurrency issues.
-        # Switch back to concurrent if the SDK is confirmed thread-safe across handles.
-        for cam_id, cam in self._cameras.items():
-            self._capture_one(cam_id, cam, event)
+        if msg_type == "trigger":
+            with self._state_lock:
+                self._arduino_state["speed_cms"] = event.get("speed_cms", 0.0)
+                self._arduino_state["encoder_count"] = event.get("count", 0)
+
+            self._stats["triggers_received"] += 1
+            logger.info(
+                "serial_trigger_received",
+                source=event.get("source"),
+                count=event.get("count"),
+                trigger=event.get("trigger"),
+                speed_cms=event.get("speed_cms"),
+            )
+
+            for cam_id, cam in self._cameras.items():
+                self._capture_one(cam_id, cam, event)
+
+        elif msg_type == "speed":
+            with self._state_lock:
+                self._arduino_state["speed_cms"] = event.get("speed_cms", 0.0)
+                self._arduino_state["encoder_count"] = event.get("count", 0)
+                self._arduino_state["trigger_enabled"] = event.get("trigger_enabled", True)
+
+        elif msg_type == "config":
+            cfg = {k: v for k, v in event.items() if k != "type"}
+            with self._state_lock:
+                self._arduino_state["trigger_enabled"] = event.get("trigger_enabled", True)
+                self._arduino_state["arduino_config"] = cfg
+            logger.info("arduino_config_received", config=cfg)
+
+        elif msg_type == "ack":
+            logger.debug("arduino_ack", cmd=event.get("cmd"), ok=event.get("ok"))
+
+        elif msg_type == "startup":
+            logger.info("arduino_startup", msg=event.get("msg"))
 
     def _capture_one(self, cam_id: int, cam: "MindVisionCamera", event: dict) -> None:
         try:

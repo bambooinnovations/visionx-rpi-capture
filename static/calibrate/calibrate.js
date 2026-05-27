@@ -200,9 +200,9 @@ async function refreshDashboard() {
   const camId = state.activeCameraId;
   try {
     const [cameras, wbRes, lensRes] = await Promise.allSettled([
-      apiFetch('GET', '/rpi/mindvision/cameras'),
-      apiFetch('GET', `/rpi/mindvision/white-balance?camera_id=${camId}`),
-      apiFetch('GET', '/rpi/mindvision/lens'),
+      apiFetch('GET', '/api/cameras'),
+      apiFetch('GET', `/api/cameras/white-balance?camera_id=${camId}`),
+      apiFetch('GET', '/api/lens'),
     ]);
 
     if (cameras.status === 'fulfilled' && Array.isArray(cameras.value)) {
@@ -314,7 +314,7 @@ const wb = {
     const camId = state.activeCameraId;
     const box = document.getElementById('wb-current-gains');
     try {
-      const data = await apiFetch('GET', `/rpi/mindvision/white-balance?camera_id=${camId}`);
+      const data = await apiFetch('GET', `/api/cameras/white-balance?camera_id=${camId}`);
       if (data && data.calibrated && data.r_gain !== undefined) {
         box.classList.remove('hidden');
         box.innerHTML = `<strong>Current gains</strong><br>R: ${data.r_gain} &nbsp; G: ${data.g_gain} &nbsp; B: ${data.b_gain}`;
@@ -332,7 +332,7 @@ const wb = {
     _setLoading(true);
     clearError();
     try {
-      const data = await apiFetch('POST', `/rpi/mindvision/calibrate-wb?camera_id=${camId}`);
+      const data = await apiFetch('POST', `/api/cameras/calibrate-wb?camera_id=${camId}`);
       wb._showResult(data);
       showStep(1);
     } catch (e) {
@@ -408,7 +408,7 @@ const lens = {
     const camId = state.activeCameraId;
     const box = document.getElementById('lens-current-status');
     try {
-      const data = await apiFetch('GET', '/rpi/mindvision/lens');
+      const data = await apiFetch('GET', '/api/lens');
       const entry = data[String(camId)] || data[camId];
       if (!entry) { box.innerHTML = 'No status available.'; return; }
       if (entry.frames_min != null)    lens.framesMin    = entry.frames_min;
@@ -434,7 +434,7 @@ const lens = {
     if (!confirm(`Delete lens calibration data for Camera ${camId}? This cannot be undone.`)) return;
     _setLoading(true);
     try {
-      await apiFetch('DELETE', '/rpi/mindvision/lens', { camera_id: camId });
+      await apiFetch('DELETE', '/api/lens', { camera_id: camId });
       state.lensBufferedFrames = 0;
       await lens._loadStatus();
     } catch (e) {
@@ -447,10 +447,10 @@ const lens = {
   _streamUrl(camId) {
     if (lens._posIdx >= LENS_POSITIONS.length) {
       // All guided positions done — free mode: no guide box, collect anywhere.
-      return `/rpi/mindvision/lens/stream?camera_id=${camId}&fps=2&max_width=960&guide_pct=0`;
+      return `/api/lens/stream?camera_id=${camId}&fps=2&max_width=960&guide_pct=0`;
     }
     const [cx, cy] = LENS_POSITIONS[lens._posIdx];
-    return `/rpi/mindvision/lens/stream?camera_id=${camId}&fps=2&max_width=960&guide_pct=${lens.guidePct}&cx=${cx}&cy=${cy}`;
+    return `/api/lens/stream?camera_id=${camId}&fps=2&max_width=960&guide_pct=${lens.guidePct}&cx=${cx}&cy=${cy}`;
   },
 
   startCollecting() {
@@ -526,7 +526,7 @@ const lens = {
     _setLoading(true);
     clearError();
     try {
-      const data = await apiFetch('POST', '/rpi/mindvision/lens/collect', { camera_id: camId });
+      const data = await apiFetch('POST', '/api/lens/collect', { camera_id: camId });
       state.lensBufferedFrames = data.buffered_frames;
       lens._updateProgress(data.buffered_frames);
       lens._setUndoEnabled(data.buffered_frames);
@@ -561,7 +561,7 @@ const lens = {
     _setLoading(true);
     clearError();
     try {
-      const data = await apiFetch('DELETE', '/rpi/mindvision/lens/last', { camera_id: camId });
+      const data = await apiFetch('DELETE', '/api/lens/last', { camera_id: camId });
       state.lensBufferedFrames = data.buffered_frames;
       lens._updateProgress(data.buffered_frames);
       lens._setUndoEnabled(data.buffered_frames);
@@ -583,7 +583,7 @@ const lens = {
     showStep(2);
     clearError();
     try {
-      const data = await apiFetch('POST', '/rpi/mindvision/lens/compute', { camera_id: camId });
+      const data = await apiFetch('POST', '/api/lens/compute', { camera_id: camId });
       lens._showResult(camId, data);
       showStep(3);
     } catch (e) {
@@ -614,7 +614,7 @@ const lens = {
 async function init() {
   clearError();
   try {
-    const cams = await apiFetch('GET', '/rpi/mindvision/cameras');
+    const cams = await apiFetch('GET', '/api/cameras');
     state.cameras = Array.isArray(cams) ? cams : [];
   } catch (_) {
     state.cameras = [];

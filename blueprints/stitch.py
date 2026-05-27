@@ -396,7 +396,7 @@ def _stitch_frames(
 # ── Blueprint ──────────────────────────────────────────────────────────────────
 
 def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
-    bp = Blueprint("stitch", __name__, url_prefix="/rpi/mindvision/stitch")
+    bp = Blueprint("stitch", __name__, url_prefix="/api/stitch")
 
     def _grab_frames(camera_ids: list[int]) -> tuple[dict[int, np.ndarray], dict[int, str]]:
         frames: dict[int, np.ndarray] = {}

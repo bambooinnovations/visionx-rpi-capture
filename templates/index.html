@@ -38,6 +38,22 @@
     </div>
   </section>
 
+  <!-- ── Decoder ───────────────────────────────────────────────────────── -->
+  <section class="section">
+    <div class="section-header">
+      <h2>Decoder</h2>
+    </div>
+    <div class="decoder-card" id="decoder-card" onclick="openDecoderModal()" role="button" tabindex="0">
+      <div class="decoder-summary">
+        <span class="status-dot status-dot-gray" id="decoder-connected-dot"></span>
+        <span class="decoder-label" id="decoder-connected-label">Checking…</span>
+        <span class="pill pill-gray" id="decoder-trigger-badge" style="display:none"></span>
+        <span class="decoder-speed" id="decoder-speed" style="display:none"></span>
+      </div>
+      <span class="decoder-hint">Click for details &amp; configuration</span>
+    </div>
+  </section>
+
   <!-- ── Quick Links ───────────────────────────────────────────────────── -->
   <section class="section quick-links">
     <a href="/calibrate" class="quick-card">
@@ -70,6 +86,29 @@
     </div>
     <div class="modal-body" id="modal-body">
       <div class="modal-loading">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Decoder Modal ────────────────────────────────────────────────── -->
+<div id="decoder-modal-overlay" class="modal-overlay hidden" onclick="closeDecoderModal(event)">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width:560px">
+    <div class="modal-header">
+      <div>
+        <h2>Decoder</h2>
+        <p class="modal-subtitle">Arduino encoder trigger controller</p>
+      </div>
+      <button class="modal-close" onclick="closeDecoderModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="cfg-section">
+        <div class="cfg-section-header">Live Status</div>
+        <div id="decoder-modal-stats" style="padding:12px 16px"><div class="modal-loading">Loading…</div></div>
+      </div>
+      <div class="cfg-section">
+        <div class="cfg-section-header">Configuration</div>
+        <div id="decoder-modal-config" style="padding:12px 16px"><div class="modal-loading">Loading…</div></div>
+      </div>
     </div>
   </div>
 </div>

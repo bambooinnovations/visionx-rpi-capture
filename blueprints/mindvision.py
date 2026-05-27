@@ -864,11 +864,16 @@ def _read_full_config(h: int, cam: "MindVisionCamera") -> dict:
     }
 
 
-def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
-    bp = Blueprint("mindvision", __name__, url_prefix="/rpi/mindvision")
+def create_blueprint(
+    cameras: dict[int, MindVisionCamera],
+    serial_listener: "SerialTriggerListener | None" = None,
+) -> Blueprint:
+    bp = Blueprint("mindvision", __name__, url_prefix="/api/cameras")
 
-    from camera.mindvision_trigger import SerialTriggerListener, check_server_health
-    _serial_listener = SerialTriggerListener(cameras)
+    from camera.mindvision_trigger import SerialTriggerListener
+    if serial_listener is None:
+        serial_listener = SerialTriggerListener(cameras)
+    _serial_listener = serial_listener
 
     def _resolve_camera():
         cam_id = request.args.get("camera_id", 0, type=int)
@@ -877,7 +882,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
 
     # ── Camera discovery ──────────────────────────────────────────────────────
 
-    @bp.route("/cameras", methods=["GET"])
+    @bp.route("", methods=["GET"])
     def list_cameras():
         """Return every known camera with its index and serial number.
 
@@ -1266,127 +1271,6 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
             generate(),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
-
-    # ── Serial trigger (Arduino encoder) ─────────────────────────────────────
-
-    @bp.route("/serial-trigger/start", methods=["POST"])
-    def serial_trigger_start():
-        """Start listening for Arduino encoder trigger events over serial.
-
-        Reads JSON lines from the configured serial port and captures + uploads
-        an image on each trigger event.  All cameras are switched to
-        hardware_trigger mode so the SDK waits for the physical trigger signal
-        from the Arduino (D9) rather than issuing a software trigger.
-
-        Optional JSON body:
-          port  str  Serial device path (default: hw_trigger.serial_port from config)
-          baud  int  Baud rate (default: hw_trigger.serial_baud from config)
-        """
-        if _serial_listener.running:
-            return jsonify({"error": "Serial trigger listener is already running"}), 409
-
-        body = request.get_json(silent=True) or {}
-        port = body.get("port", config.HW_TRIGGER_SERIAL_PORT)
-        baud = body.get("baud", config.HW_TRIGGER_SERIAL_BAUD)
-
-        # Switch every camera to hardware trigger mode before opening serial.
-        mode_errors = {}
-        for cam_id, cam in cameras.items():
-            try:
-                cam.set_mode(CameraMode.HARDWARE_TRIGGER)
-            except Exception as exc:
-                mode_errors[cam_id] = str(exc)
-
-        if mode_errors:
-            return jsonify({"error": "Failed to set hardware trigger mode", "details": {str(k): v for k, v in mode_errors.items()}}), 503
-
-        try:
-            _serial_listener.start(port=port, baud=int(baud))
-        except Exception as exc:
-            # Revert cameras if the serial port failed to open.
-            for cam in cameras.values():
-                try:
-                    cam.set_mode(CameraMode.CAPTURE)
-                except Exception:
-                    pass
-            logger.exception("serial_trigger_start_failed")
-            return jsonify({"error": str(exc)}), 500
-
-        health = check_server_health()
-        logger.info("serial_trigger_started", port=port, baud=baud, cameras=list(cameras.keys()))
-        return jsonify({"running": True, "port": port, "baud": baud, "camera_mode": CameraMode.HARDWARE_TRIGGER.value, "server_health": health})
-
-    @bp.route("/serial-trigger/stop", methods=["POST"])
-    def serial_trigger_stop():
-        """Stop the serial trigger listener and revert cameras to capture mode."""
-        if not _serial_listener.running:
-            return jsonify({"error": "Serial trigger listener is not running"}), 409
-
-        _serial_listener.stop()
-
-        # Revert all cameras back to capture (software trigger) mode.
-        for cam_id, cam in cameras.items():
-            try:
-                cam.set_mode(CameraMode.CAPTURE)
-            except Exception as exc:
-                logger.warning("serial_trigger_mode_revert_failed", camera_id=cam_id, error=str(exc))
-
-        logger.info("serial_trigger_stopped")
-        return jsonify({"running": False, "camera_mode": CameraMode.CAPTURE.value})
-
-    @bp.route("/serial-trigger/status", methods=["GET"])
-    def serial_trigger_status():
-        """Return the current status and statistics of the serial trigger listener."""
-        return jsonify(_serial_listener.status())
-
-    @bp.route("/hw-trigger/diag", methods=["GET"])
-    def hw_trigger_diag():
-        """Diagnostic: report trigger mode and frame stats for every camera.
-
-        Also fires a software trigger on each camera (regardless of current mode)
-        and reports whether a frame was received.  Use this to confirm the cameras
-        are alive and the SDK can grab frames independently of the hardware pin.
-        """
-        import mvsdk as _mvsdk
-        results = {}
-        for cam_id, cam in sorted(cameras.items()):
-            if cam._h_camera is None:
-                results[cam_id] = {"error": "camera not open"}
-                continue
-            try:
-                trigger_mode = _mvsdk.CameraGetTriggerMode(cam._h_camera)
-            except Exception as exc:
-                trigger_mode = f"error: {exc}"
-            stat = _mvsdk.CameraGetFrameStatistic(cam._h_camera)
-            # Fire a software trigger and attempt a grab to confirm camera health.
-            sw_ok = False
-            sw_error = None
-            try:
-                _mvsdk.CameraSoftTrigger(cam._h_camera)
-                raw, head = _mvsdk.CameraGetImageBuffer(cam._h_camera, 2000)
-                _mvsdk.CameraReleaseImageBuffer(cam._h_camera, raw)
-                sw_ok = True
-            except Exception as exc:
-                sw_error = str(exc)
-            results[cam_id] = {
-                "trigger_mode": trigger_mode,
-                "frames_total": stat.iTotal,
-                "frames_lost": stat.iLost,
-                "sw_trigger_ok": sw_ok,
-                "sw_trigger_error": sw_error,
-            }
-        return jsonify(results)
-
-    @bp.route("/hw-trigger/server-health", methods=["GET"])
-    def hw_trigger_server_health():
-        """Check reachability of the hw_trigger upload server via health_check_url.
-
-        Returns {"reachable": true, "status_code": 200} on success,
-        {"reachable": false, "error": "..."} on failure, or
-        {"reachable": null} if no health_check_url is configured.
-        """
-        result = check_server_health()
-        return jsonify({"reachable": None} if result is None else result)
 
     # ── Per-camera settings (read / apply / save / factory-reset / stream) ───
 

@@ -98,12 +98,17 @@ if not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     )
 
 if isinstance(camera, MindVisionCamera):
+    from camera.mindvision_trigger import SerialTriggerListener
+    _serial_listener = SerialTriggerListener(cameras)
+
     from blueprints.mindvision import create_blueprint
     from blueprints.stitch import create_blueprint as create_stitch_blueprint
     from blueprints.lens import create_blueprint as create_lens_blueprint
-    app.register_blueprint(create_blueprint(cameras))
+    from blueprints.arduino import create_blueprint as create_arduino_blueprint
+    app.register_blueprint(create_blueprint(cameras, _serial_listener))
     app.register_blueprint(create_stitch_blueprint(cameras))
     app.register_blueprint(create_lens_blueprint(cameras))
+    app.register_blueprint(create_arduino_blueprint(_serial_listener, cameras))
 
 
 def _resolve_camera(default_id: int = 0):
@@ -190,12 +195,12 @@ def mindvision_settings_page(camera_id):
     return render_template("mindvision_settings.html", camera_id=camera_id)
 
 
-@app.route("/health")
+@app.route("/api/health")
 def health():
     return jsonify({"status": "ok"})
 
 
-@app.route("/metrics/stats")
+@app.route("/api/metrics/stats")
 def metrics_stats():
     try:
         return jsonify(get_stats())
@@ -280,7 +285,7 @@ def _effective_config() -> dict:
     return base
 
 
-@app.route("/rpi/config", methods=["GET"])
+@app.route("/api/system/config", methods=["GET"])
 def get_config():
     overrides = runtime_config.load()
     return jsonify({
@@ -289,7 +294,7 @@ def get_config():
     })
 
 
-@app.route("/rpi/config", methods=["PATCH"])
+@app.route("/api/system/config", methods=["PATCH"])
 def patch_config():
     body = request.get_json(silent=True) or {}
     if not body:
@@ -327,7 +332,7 @@ def patch_config():
     return jsonify({"updated": list(updates.keys()), "config": _effective_config()})
 
 
-@app.route("/rpi/config/<string:key>", methods=["DELETE"])
+@app.route("/api/system/config/<string:key>", methods=["DELETE"])
 def delete_config(key: str):
     if key not in runtime_config.UPDATABLE:
         return jsonify({"error": f"'{key}' is not a runtime-updatable key"}), 400

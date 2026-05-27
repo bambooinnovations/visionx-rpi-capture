@@ -157,7 +157,7 @@ def _detect_charuco(
 
 def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
     import threading
-    bp = Blueprint("lens", __name__, url_prefix="/rpi/mindvision/lens")
+    bp = Blueprint("lens", __name__, url_prefix="/api/lens")
 
     def _grab_frame(cam_id: int) -> np.ndarray | None:
         cam = cameras.get(cam_id)
