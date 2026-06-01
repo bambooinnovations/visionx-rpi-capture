@@ -969,6 +969,7 @@ rpi = [
 [package.dev-dependencies]
 test-server = [
     { name = "fastapi" },
+    { name = "piexif" },
     { name = "python-multipart" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -989,6 +990,7 @@ provides-extras = ["rpi"]
 [package.metadata.requires-dev]
 test-server = [
     { name = "fastapi", specifier = ">=0.111" },
+    { name = "piexif", specifier = ">=1.1.3" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]

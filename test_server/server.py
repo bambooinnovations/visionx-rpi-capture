@@ -9,7 +9,6 @@ GET  /images/{filename} — serve a received image
 """
 from __future__ import annotations
 
-import io
 import json
 import time
 import uuid

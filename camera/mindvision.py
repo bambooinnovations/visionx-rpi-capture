@@ -351,17 +351,25 @@ class MindVisionCamera(BaseCamera):
             )
             return None, None
 
-    def _build_exif(self, head, captured_at: str) -> bytes | None:
-        """Build a piexif EXIF blob from the SDK frame header and camera info."""
+    def _build_exif(self, captured_at: str) -> bytes | None:
+        """Build a piexif EXIF blob by querying live camera state from the SDK."""
         try:
             import piexif
 
-            # Exposure time from frame header (microseconds → seconds as rational)
-            exp_us = getattr(head, "iExpTime", 0) or 0
-            exp_num, exp_den = int(exp_us), 1_000_000  # e.g. 30000/1000000 = 0.03s
-
-            # Analog gain: SDK reports as integer percentage (100 = 1×)
-            gain_raw = getattr(head, "uAnalogGain", 100) or 100
+            # Query actual exposure time and gain from the SDK.
+            # The frame header's iExpTime is unreliable in hardware trigger mode.
+            exp_us = 0
+            gain_raw = 100
+            if self._h_camera is not None:
+                try:
+                    exp_us = int(mvsdk.CameraGetExposureTime(self._h_camera))
+                except Exception:
+                    pass
+                try:
+                    # CameraGetAnalogGain returns the current analog gain value
+                    gain_raw = int(mvsdk.CameraGetAnalogGain(self._h_camera))
+                except Exception:
+                    pass
 
             model = ""
             serial = ""
@@ -391,7 +399,7 @@ class MindVisionCamera(BaseCamera):
                 },
                 "Exif": {
                     piexif.ExifIFD.DateTimeOriginal: exif_dt,
-                    piexif.ExifIFD.ExposureTime: (exp_num, exp_den),
+                    piexif.ExifIFD.ExposureTime: (exp_us, 1_000_000),
                     piexif.ExifIFD.ISOSpeedRatings: gain_raw,
                     piexif.ExifIFD.BodySerialNumber: serial.encode(),
                 },
@@ -519,7 +527,7 @@ class MindVisionCamera(BaseCamera):
         if frame is None:
             raise RuntimeError("Failed to capture frame from MindVision camera")
 
-        exif_bytes = self._build_exif(head, captured_at)
+        exif_bytes = self._build_exif(captured_at)
         jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes)
         output_image.write_bytes(jpeg_bytes)
 
