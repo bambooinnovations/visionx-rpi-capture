@@ -61,9 +61,86 @@
 
 .stream-status {
   margin-left: auto;
-  padding-right: 12px;
+  padding-right: 4px;
   font-size: 13px;
   color: var(--text-muted);
+}
+
+.stream-fullscreen-btn {
+  padding: 6px 10px;
+  margin-right: 6px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: color 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+.stream-fullscreen-btn:hover { color: var(--primary); border-color: var(--primary); }
+
+/* ── Fullscreen overrides ────────────────────────────────────────────── */
+.streams-section:fullscreen,
+.streams-section:-webkit-full-screen {
+  border-radius: 0;
+  border: none;
+  background: #0f172a;
+  display: flex;
+  flex-direction: column;
+}
+
+.streams-section:fullscreen .stream-tab-bar,
+.streams-section:-webkit-full-screen .stream-tab-bar {
+  background: #1e293b;
+  border-bottom-color: #334155;
+  flex-shrink: 0;
+}
+
+.streams-section:fullscreen .stream-tab,
+.streams-section:-webkit-full-screen .stream-tab {
+  color: #94a3b8;
+}
+.streams-section:fullscreen .stream-tab.active,
+.streams-section:-webkit-full-screen .stream-tab.active {
+  color: #60a5fa;
+  border-bottom-color: #60a5fa;
+}
+
+.streams-section:fullscreen #stream-panel-cameras,
+.streams-section:-webkit-full-screen #stream-panel-cameras {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 0;
+}
+
+.streams-section:fullscreen .stream-row,
+.streams-section:-webkit-full-screen .stream-row {
+  flex: 1;
+  min-height: 0;
+  border-radius: 0;
+}
+
+.streams-section:fullscreen .stream-img,
+.streams-section:-webkit-full-screen .stream-img {
+  max-height: calc(100vh - 48px);
+}
+
+.streams-section:fullscreen #stream-panel-stitch,
+.streams-section:-webkit-full-screen #stream-panel-stitch {
+  flex: 1;
+}
+
+.streams-section:fullscreen .stitch-view-row,
+.streams-section:-webkit-full-screen .stitch-view-row {
+  min-height: calc(100vh - 48px);
+}
+
+.streams-section:fullscreen .stitch-view-img,
+.streams-section:-webkit-full-screen .stitch-view-img {
+  max-height: calc(100vh - 48px);
 }
 
 #stream-panel-cameras { padding: 12px; }

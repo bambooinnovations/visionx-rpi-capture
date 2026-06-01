@@ -25,7 +25,6 @@ async function apiFetch(method, path, body = null, { allow404 = false } = {}) {
   const res = await fetch(path, opts);
   if (!res.ok) {
     if (allow404 && res.status === 404) {
-      // Return the parsed JSON anyway — caller handles the "calibrated: false" shape
       return res.json().catch(() => null);
     }
     let msg = `HTTP ${res.status}`;
@@ -70,10 +69,6 @@ function showView(viewId) {
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
   document.getElementById(viewId).classList.remove('hidden');
   state.currentView = viewId;
-
-  const onDashboard = viewId === 'view-dashboard';
-  document.getElementById('btn-back').classList.toggle('hidden', onDashboard);
-  document.getElementById('header-title').textContent = onDashboard ? 'Calibration' : '';
 }
 
 function showStep(stepIndex) {
@@ -106,10 +101,8 @@ function _buildStepDots(wizardName, count) {
 }
 
 function goToDashboard() {
-  // Stop any active streams before leaving
-  const focusImg = document.getElementById('focus-stream-img');
+  liveView.stopIfRunning();
   const lensImg = document.getElementById('lens-stream-img');
-  if (focusImg) clearStream(focusImg);
   if (lensImg) clearStream(lensImg);
 
   state.currentWizard = null;
@@ -140,10 +133,8 @@ function _buildCameraTabs() {
 }
 
 function _switchCamera(camId) {
-  // Stop any active streams before switching
-  const focusImg = document.getElementById('focus-stream-img');
+  liveView.stopIfRunning();
   const lensImg = document.getElementById('lens-stream-img');
-  if (focusImg) clearStream(focusImg);
   if (lensImg) clearStream(lensImg);
 
   state.activeTab = 'camera';
@@ -153,13 +144,11 @@ function _switchCamera(camId) {
   _buildCameraTabs();
   showView('view-dashboard');
 
-  // Show camera section, hide stitch section
   document.getElementById('camera-cards-section').classList.remove('hidden');
   document.getElementById('stitch-section')?.classList.add('hidden');
 
   refreshDashboard();
 
-  // Update URL param without full navigation
   const url = new URL(window.location);
   url.searchParams.set('camera', camId);
   window.history.replaceState({}, '', url);
@@ -218,61 +207,29 @@ async function refreshDashboard() {
 
     if (cameras.status === 'fulfilled' && Array.isArray(cameras.value)) {
       state.cameras = cameras.value;
-      _updateCameraBadge(state.cameras.length);
     }
 
-    // Only update camera cards if we're in camera mode
     if (state.activeTab === 'camera') {
       _renderWbCard(wbRes.status === 'fulfilled' ? wbRes.value : null);
-      _renderFocusCard(state.cameras);
       _renderLensCard(lensRes.status === 'fulfilled' ? lensRes.value : null, camId);
     }
 
-    // Update dashboard subtitle
-    const subtitle = document.getElementById('dashboard-subtitle');
-    if (subtitle && state.activeTab === 'camera') {
-      subtitle.textContent = `Camera ${camId} — select a calibration to run or check status.`;
-    }
   } catch (e) {
     showError('Failed to load status: ' + e.message);
   }
 }
 
-function _updateCameraBadge(count) {
-  const badge = document.getElementById('camera-count-badge');
-  badge.textContent = `${count} camera${count !== 1 ? 's' : ''} connected`;
-  badge.classList.toggle('hidden', count === 0);
-}
 
 function _renderWbCard(data) {
   const pill = document.getElementById('pill-wb');
-  const details = document.getElementById('wb-details');
-  const btn = document.getElementById('btn-wb-start');
-
+  if (!pill) return;
   if (!data || !data.calibrated) {
-    pill.className = 'pill pill-unknown'; pill.textContent = 'Not set';
-    details.innerHTML = '';
-    btn.textContent = 'Calibrate';
-    return;
+    pill.className = 'pill pill-unknown';
+    pill.textContent = 'WB Unknown';
+  } else {
+    pill.className = 'pill pill-green';
+    pill.textContent = 'WB Set';
   }
-
-  pill.className = 'pill pill-green';
-  pill.textContent = 'Calibrated';
-  btn.textContent = 'Recalibrate';
-  details.innerHTML = `
-    <table>
-      <tr><td>R gain</td><td>${data.r_gain}</td></tr>
-      <tr><td>G gain</td><td>${data.g_gain}</td></tr>
-      <tr><td>B gain</td><td>${data.b_gain}</td></tr>
-    </table>`;
-}
-
-function _renderFocusCard(cameras) {
-  const det = document.getElementById('focus-details');
-  if (cameras.length === 0) {
-    det.textContent = 'No cameras detected.'; return;
-  }
-  det.textContent = `${cameras.length} camera${cameras.length !== 1 ? 's' : ''} available.`;
 }
 
 function _renderLensCard(data, camId) {
@@ -308,79 +265,108 @@ function _renderLensCard(data, camId) {
   }
 }
 
-// ── White Balance Wizard ───────────────────────────────────────────────────
-const wb = {
-  async start() {
-    clearError();
-    state.currentWizard = 'wb';
-    _buildStepDots('wb', 2);
-    const lbl = document.getElementById('wb-cam-label');
-    if (lbl) lbl.textContent = `Camera ${state.activeCameraId}`;
-    showView('view-wb');
-    showStep(0);
-    await wb._loadCurrentGains();
+// ── Live View ──────────────────────────────────────────────────────────────
+const liveView = {
+  _streaming: false,
+
+  _streamUrl(camId) {
+    const focusPeak = document.getElementById('chk-focus-peak');
+    const clipEl    = document.getElementById('chk-clip-highlight');
+    const overlay   = focusPeak && focusPeak.checked ? 1 : 0;
+    const clip      = clipEl    && clipEl.checked    ? 1 : 0;
+    return `/api/cameras/calibration/stream?camera_id=${camId}&fps=2&charuco=0&show_overlay=${overlay}&clip_highlight=${clip}`;
   },
 
-  async _loadCurrentGains() {
+  start() {
+    const img = document.getElementById('live-view-img');
     const camId = state.activeCameraId;
-    const box = document.getElementById('wb-current-gains');
-    try {
-      const data = await apiFetch('GET', `/api/cameras/white-balance?camera_id=${camId}`);
-      if (data && data.calibrated && data.r_gain !== undefined) {
-        box.classList.remove('hidden');
-        box.innerHTML = `<strong>Current gains</strong><br>R: ${data.r_gain} &nbsp; G: ${data.g_gain} &nbsp; B: ${data.b_gain}`;
-      } else {
-        box.classList.add('hidden');
-      }
-    } catch (_) {
-      box.classList.add('hidden');
-    }
+    const url = this._streamUrl(camId);
+
+    img.onerror = async () => {
+      img.onerror = null;
+      liveView._setIdle();
+      let msg = 'Stream unavailable.';
+      try {
+        const r = await fetch(url);
+        if (r.status === 409) msg = 'Camera is in Hardware Trigger mode. Disable it in Settings to stream.';
+      } catch (_) {}
+      showError(msg);
+    };
+    img.src = url;
+    this._streaming = true;
+    this._setActive();
   },
 
+  stop() {
+    const img = document.getElementById('live-view-img');
+    img.onerror = null;
+    img.src = '';
+    this._streaming = false;
+    this._setIdle();
+  },
+
+  stopIfRunning() {
+    if (this._streaming) this.stop();
+  },
+
+  restartStream() {
+    if (!this._streaming) return;
+    const img = document.getElementById('live-view-img');
+    img.onerror = null;
+    img.src = this._streamUrl(state.activeCameraId);
+  },
+
+  fullscreen() {
+    const wrap = document.getElementById('live-stream-wrap');
+    if (!wrap) return;
+    if (wrap.requestFullscreen) wrap.requestFullscreen();
+    else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
+  },
+
+
+  _setActive() {
+    document.getElementById('live-stream-idle').classList.add('hidden');
+    document.getElementById('live-view-img').classList.remove('hidden');
+    document.getElementById('live-stream-bar').classList.remove('hidden');
+  },
+
+  _setIdle() {
+    document.getElementById('live-stream-idle').classList.remove('hidden');
+    document.getElementById('live-view-img').classList.add('hidden');
+    document.getElementById('live-stream-bar').classList.add('hidden');
+    this._streaming = false;
+  },
+};
+
+// ── White Balance (inline) ─────────────────────────────────────────────────
+const wb = {
   async run() {
     if (state.isLoading) return;
     const camId = state.activeCameraId;
+    const btn = document.getElementById('btn-wb-run');
+    const result = document.getElementById('wb-inline-result');
     _setLoading(true);
     clearError();
+    result.classList.add('hidden');
     try {
       const data = await apiFetch('POST', `/api/cameras/calibrate-wb?camera_id=${camId}`);
-      wb._showResult(data);
-      showStep(1);
+      const r = data.r_gain, g = data.g_gain, b = data.b_gain;
+      const warn = [r, g, b].some(v => v < 30 || v > 400);
+      result.className = `wb-inline-result ${warn ? 'wb-warn' : 'wb-ok'}`;
+      result.textContent = warn
+        ? '⚠ Done — gains look unusual. Try a more neutral surface.'
+        : '✓ White balance set';
+      result.classList.remove('hidden');
+      _renderWbCard({ calibrated: true, r_gain: r, g_gain: g, b_gain: b });
     } catch (e) {
-      showError('White balance calibration failed: ' + e.message);
+      showError('White balance failed: ' + e.message);
     } finally {
       _setLoading(false);
     }
   },
-
-  _showResult(data) {
-    const r = data.r_gain, g = data.g_gain, b = data.b_gain;
-    const unreasonable = (v) => v < 30 || v > 400;
-    const warn = unreasonable(r) || unreasonable(g) || unreasonable(b);
-    document.getElementById('wb-result').innerHTML = `
-      <div class="result-block ${warn ? 'warning' : 'success'}">
-        <h4>${warn ? '⚠ Calibration done — gains look unusual' : '✓ White balance calibrated'}</h4>
-        <table>
-          <tr><td>R gain</td><td>${r}</td></tr>
-          <tr><td>G gain</td><td>${g}</td></tr>
-          <tr><td>B gain</td><td>${b}</td></tr>
-        </table>
-        ${warn ? '<p style="margin-top:8px;font-size:13px;color:#92400e">Gains outside 30–400 range. Try again with a more neutral white/grey surface.</p>' : ''}
-      </div>`;
-  },
 };
 
-// ── Focus — navigate to dedicated page ────────────────────────────────────
-// NOTE: "focus" is a built-in on every HTMLElement, so it wins the scope
-// chain in inline onclick handlers. Using a plain function declaration instead
-// so it lands on window and is not shadowed.
-function openFocusStream() {
-  window.location.href = `/focus?camera=${state.activeCameraId}`;
-}
-
 // ── Lens Distortion Wizard ─────────────────────────────────────────────────
-// Positions the guide box visits in sequence (cx, cy as 0–1 fractions of frame).
-// Spread across the frame so each collected frame covers a different area.
 const LENS_POSITIONS = [
   [0.50, 0.50],  // centre
   [0.25, 0.25],  // top-left
@@ -406,6 +392,7 @@ const lens = {
   _posIdx: 0,
   async start() {
     clearError();
+    liveView.stopIfRunning();
     state.currentWizard = 'lens';
     _buildStepDots('lens', 4);
     const lbl = document.getElementById('lens-cam-label');
@@ -457,7 +444,6 @@ const lens = {
 
   _streamUrl(camId) {
     if (lens._posIdx >= LENS_POSITIONS.length) {
-      // All guided positions done — free mode: no guide box, collect anywhere.
       return `/api/lens/stream?camera_id=${camId}&fps=2&max_width=960&guide_pct=0`;
     }
     const [cx, cy] = LENS_POSITIONS[lens._posIdx];
@@ -476,7 +462,6 @@ const lens = {
     const skipBtn = document.getElementById('btn-lens-skip');
     if (skipBtn) skipBtn.disabled = false;
 
-    // Wire guide-size slider (only once per page load).
     const slider = document.getElementById('lens-guide-size');
     const sliderVal = document.getElementById('lens-guide-size-value');
     if (slider && !slider._wired) {
@@ -599,7 +584,6 @@ const lens = {
       showStep(3);
     } catch (e) {
       showError('Compute failed: ' + e.message);
-      // Go back to collection step so user can retry
       const img = document.getElementById('lens-stream-img');
       setStream(img, lens._streamUrl(camId));
       showStep(1);
@@ -631,7 +615,6 @@ async function init() {
     state.cameras = [];
   }
 
-  // Read ?camera=N query param from URL
   const params = new URLSearchParams(window.location.search);
   const camParam = params.get('camera');
   if (camParam !== null) {

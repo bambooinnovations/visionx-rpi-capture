@@ -19,7 +19,10 @@ async function apiFetch(path) {
 }
 
 // ── Cameras ────────────────────────────────────────────────────────────
+let _cameras = [];
+
 function renderCameras(cameras) {
+  _cameras = cameras;
   const grid  = document.getElementById('camera-grid');
   const badge = document.getElementById('camera-count');
 
@@ -34,12 +37,19 @@ function renderCameras(cameras) {
     return;
   }
 
-  grid.innerHTML = cameras.map(c => `
+  grid.innerHTML = cameras.map(c => {
+    const calibrateBtn = _hwTriggerActive
+      ? `<button class="btn btn-primary" style="flex:1;justify-content:center" disabled
+             title="Switch decoder to Calibration mode before calibrating">Calibrate</button>`
+      : `<a href="/calibrate?camera=${c.camera_id}" class="btn btn-primary" style="flex:1;justify-content:center">Calibrate</a>`;
+
+    return `
     <div class="camera-card">
       <div class="camera-card-header">
         <span class="cam-id-badge">Cam ${c.camera_id}</span>
         <span class="cam-model">${c.model || c.product_name || 'Unknown model'}</span>
         <span class="pill ${c.status === 'open' ? 'pill-green' : 'pill-red'}">${c.status}</span>
+        ${_hwTriggerActive ? `<span class="pill pill-yellow">HW Trigger</span>` : ''}
         <button class="btn-info-icon" title="View raw config" onclick="openConfigModal(${c.camera_id})">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/>
@@ -54,15 +64,13 @@ function renderCameras(cameras) {
         ${c.product_name && c.product_name !== c.model ? `<div class="camera-meta-row"><span>Product</span><span>${c.product_name}</span></div>` : ''}
       </div>
       <div class="camera-card-footer">
-        <a href="/calibrate?camera=${c.camera_id}" class="btn btn-primary" style="flex:1;justify-content:center">
-          Calibrate
-        </a>
+        ${calibrateBtn}
         <a href="/mindvision/${c.camera_id}/settings" class="btn btn-secondary" style="flex:1;justify-content:center">
           Settings
         </a>
       </div>
-    </div>`
-  ).join('');
+    </div>`;
+  }).join('');
 }
 
 // ── Camera Config Modal ────────────────────────────────────────────────
@@ -155,7 +163,8 @@ function downloadAllConfig() {
 
 // ── Decoder card ───────────────────────────────────────────────────────
 
-let _decoderPollTimer = null;
+let _decoderPollTimer  = null;
+let _hwTriggerActive   = false;
 
 function _decoderDot(status) {
   const now = Date.now() / 1000;
@@ -180,6 +189,7 @@ function updateDecoderCard(status) {
     if (checkBtn) checkBtn.style.display = notDetected ? '' : 'none';
     speed.style.display = 'none';
     if (checkbox) { checkbox.checked = false; checkbox.disabled = true; }
+    _setHwTriggerActive(false);
     return;
   }
 
@@ -193,13 +203,21 @@ function updateDecoderCard(status) {
   speed.style.display = '';
   const spd = typeof status.speed_cms === 'number' ? status.speed_cms.toFixed(1) : '—';
   speed.textContent = `${spd} cm/s`;
+
+  _setHwTriggerActive(status.running && !!status.trigger_enabled);
+}
+
+function _setHwTriggerActive(active) {
+  if (active === _hwTriggerActive) return;
+  _hwTriggerActive = active;
+  renderCameras(_cameras);
 }
 
 async function decoderToggleMode(enable) {
   const checkbox = document.getElementById('decoder-trigger-checkbox');
   if (checkbox) checkbox.disabled = true;
   try {
-    const url = enable ? '/api/decoder/trigger/enable' : '/api/decoder/trigger/disable';
+    const url = enable ? '/api/decoder/mode/hw-trigger' : '/api/decoder/mode/calibration';
     await fetch(url, { method: 'POST' });
   } catch (_) {}
   await pollDecoder();
@@ -404,18 +422,18 @@ async function decoderStop() {
   pollDecoder();
 }
 
-async function decoderTriggerEnable() {
+async function decoderSetModeHwTrigger() {
   try {
-    const res = await fetch('/api/decoder/trigger/enable', { method: 'POST' });
-    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to enable triggering'); return; }
+    const res = await fetch('/api/decoder/mode/hw-trigger', { method: 'POST' });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to switch to HW trigger mode'); return; }
   } catch (err) { alert('Error: ' + err.message); return; }
   setTimeout(() => { refreshDecoderModalStats(); pollDecoder(); }, 600);
 }
 
-async function decoderTriggerDisable() {
+async function decoderSetModeCalibration() {
   try {
-    const res = await fetch('/api/decoder/trigger/disable', { method: 'POST' });
-    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to disable triggering'); return; }
+    const res = await fetch('/api/decoder/mode/calibration', { method: 'POST' });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to switch to calibration mode'); return; }
   } catch (err) { alert('Error: ' + err.message); return; }
   setTimeout(() => { refreshDecoderModalStats(); pollDecoder(); }, 600);
 }
@@ -510,7 +528,7 @@ async function refreshAll() {
     renderCameras(list);
   } catch (e) {
     showError('Failed to load cameras: ' + e.message);
-    renderCameras([]);
+    renderCameras(_cameras.length ? _cameras : []);
   }
 }
 

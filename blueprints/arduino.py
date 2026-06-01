@@ -144,27 +144,46 @@ def create_blueprint(
         status["port_present"] = True
         return jsonify(status)
 
-    # ── Arduino trigger on/off ─────────────────────────────────────────────────
+    # ── Operating mode switch ──────────────────────────────────────────────────
 
-    @bp.route("/trigger/enable", methods=["POST"])
-    def trigger_enable():
-        """Tell the Arduino to start firing trigger pulses (distance-based)."""
+    @bp.route("/mode/hw-trigger", methods=["POST"])
+    def set_mode_hw_trigger():
+        """Switch to hardware trigger mode: cameras → HARDWARE_TRIGGER, Arduino begins firing pulses."""
+        mode_errors = {}
+        for cam_id, cam in cameras.items():
+            try:
+                cam.set_mode(CameraMode.HARDWARE_TRIGGER)
+            except Exception as exc:
+                mode_errors[cam_id] = str(exc)
+
+        if mode_errors:
+            return jsonify({
+                "error": "Failed to set hardware trigger mode",
+                "details": {str(k): v for k, v in mode_errors.items()},
+            }), 503
+
         try:
             listener.send_command({"cmd": "set_trigger_enabled", "value": True})
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         listener.set_trigger_state(True)
-        return jsonify({"trigger_enabled": True})
+        return jsonify({"trigger_enabled": True, "camera_mode": CameraMode.HARDWARE_TRIGGER.value})
 
-    @bp.route("/trigger/disable", methods=["POST"])
-    def trigger_disable():
-        """Tell the Arduino to stop firing trigger pulses without stopping the listener."""
+    @bp.route("/mode/calibration", methods=["POST"])
+    def set_mode_calibration():
+        """Switch to calibration mode: cameras → CAPTURE (software trigger), Arduino stops firing pulses."""
+        for cam_id, cam in cameras.items():
+            try:
+                cam.set_mode(CameraMode.CAPTURE)
+            except Exception as exc:
+                logger.warning("set_mode_calibration_revert_failed", camera_id=cam_id, error=str(exc))
+
         try:
             listener.send_command({"cmd": "set_trigger_enabled", "value": False})
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         listener.set_trigger_state(False)
-        return jsonify({"trigger_enabled": False})
+        return jsonify({"trigger_enabled": False, "camera_mode": CameraMode.CAPTURE.value})
 
     @bp.route("/trigger/fire", methods=["POST"])
     def trigger_fire():

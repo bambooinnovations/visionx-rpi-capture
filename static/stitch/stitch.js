@@ -766,4 +766,11 @@ async function init() {
   await loadWbCalStatus();
 }
 
+function streamsFullscreen() {
+  const el = document.querySelector('.streams-section');
+  if (!el) return;
+  if (el.requestFullscreen) el.requestFullscreen();
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+}
+
 document.addEventListener('DOMContentLoaded', init);

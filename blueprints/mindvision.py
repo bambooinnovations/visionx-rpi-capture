@@ -46,6 +46,28 @@ def _get_charuco_board():
     return _charuco_board, _charuco_dict
 
 
+def _encode_raw_frame(frame: "np.ndarray", max_width: int) -> bytes:
+    """Resize frame and return a plain JPEG with no overlay."""
+    import io
+    from PIL import Image as PilImage
+
+    if frame.ndim == 3 and frame.shape[2] == 3:
+        pil_img = PilImage.fromarray(frame[:, :, ::-1])
+    elif frame.ndim == 3 and frame.shape[2] == 1:
+        pil_img = PilImage.fromarray(frame[:, :, 0], mode="L").convert("RGB")
+    else:
+        pil_img = PilImage.fromarray(frame, mode="L").convert("RGB")
+
+    orig_w, orig_h = pil_img.size
+    if orig_w > max_width:
+        new_h = int(orig_h * max_width / orig_w)
+        pil_img = pil_img.resize((max_width, new_h), PilImage.BILINEAR)
+
+    buf = io.BytesIO()
+    pil_img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
 def _render_calibration_overlay(
     frame: "np.ndarray",
     history: "deque[float]",
@@ -53,6 +75,7 @@ def _render_calibration_overlay(
     max_width: int,
     camera_id: int = 0,
     detect_charuco: bool = False,
+    clip_highlight: bool = True,
 ) -> bytes:
     """Return a JPEG with focus peaking + info overlay.
 
@@ -196,7 +219,8 @@ def _render_calibration_overlay(
     rgb_out = rgb.copy()
     rgb_out[peak_mask] = [255, 0, 255]
     # Clipped pixels painted red on top — more critical than focus-peak markers.
-    rgb_out[clip_mask] = [255, 40, 40]
+    if clip_highlight:
+        rgb_out[clip_mask] = [255, 40, 40]
 
     pil_out = PilImage.fromarray(rgb_out).convert("RGBA")
     draw = ImageDraw.Draw(pil_out)
@@ -1111,6 +1135,8 @@ def create_blueprint(
           peak_threshold  int   Gradient threshold for peaking highlights (default 50)
           max_width       int   Downscale width before overlay (default 1280)
           charuco         int   1 to enable ChArUco overlay (default 0)
+          clip_highlight  int   0 to hide overexposure (red) highlight (default 1)
+          show_overlay    int   0 for clean raw frame with no overlay at all (default 1)
         """
         cam, cam_id = _resolve_camera()
         if cam is None:
@@ -1122,6 +1148,8 @@ def create_blueprint(
         peak_threshold = request.args.get("peak_threshold", 50, type=int)
         max_width = request.args.get("max_width", 1280, type=int)
         detect_charuco = request.args.get("charuco", 0, type=int) == 1
+        clip_highlight = request.args.get("clip_highlight", 1, type=int) == 1
+        show_overlay = request.args.get("show_overlay", 1, type=int) == 1
 
         if cam_id not in _calibration_history:
             _calibration_history[cam_id] = deque(maxlen=30)
@@ -1161,7 +1189,10 @@ def create_blueprint(
                         frame, _head = cam._grab_frame()
 
                     if frame is not None:
-                        jpeg = _render_calibration_overlay(frame, history, peak_threshold, max_width, cam_id, detect_charuco)
+                        if show_overlay:
+                            jpeg = _render_calibration_overlay(frame, history, peak_threshold, max_width, cam_id, detect_charuco, clip_highlight)
+                        else:
+                            jpeg = _encode_raw_frame(frame, max_width)
                         yield (
                             b"--frame\r\n"
                             b"Content-Type: image/jpeg\r\n\r\n"
@@ -1243,7 +1274,7 @@ def create_blueprint(
                         time.sleep(0.1)
 
                     with cam._lock:
-                        frame = cam._grab_frame()
+                        frame, _head = cam._grab_frame()
 
                     if frame is not None:
                         jpeg = _render_lens_stream_frame(frame, max_width, guide_pct, cam_id, cx_frac, cy_frac)
@@ -1405,7 +1436,7 @@ def create_blueprint(
                     effective_interval = max(frame_interval, exp_us / 1_000_000)
 
                     with cam._lock:
-                        frame = cam._grab_frame(timeout_ms=grab_timeout_ms)
+                        frame, _head = cam._grab_frame(timeout_ms=grab_timeout_ms)
 
                     if frame is not None:
                         if frame.ndim == 3 and frame.shape[2] == 3:
@@ -1476,7 +1507,7 @@ def create_blueprint(
             with cam._lock:
                 if not cam._streaming and cam.mode != CameraMode.HARDWARE_TRIGGER:
                     _mvsdk.CameraSoftTrigger(cam._h_camera)
-                frame = cam._grab_frame(timeout_ms=grab_timeout_ms)
+                frame, _head = cam._grab_frame(timeout_ms=grab_timeout_ms)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 503
 
@@ -1526,7 +1557,7 @@ def create_blueprint(
             with cam._lock:
                 if not cam._streaming:
                     mvsdk.CameraSoftTrigger(cam._h_camera)
-                frame = cam._grab_frame()
+                frame, _head = cam._grab_frame()
         except Exception as exc:
             return jsonify({"error": str(exc)}), 503
 

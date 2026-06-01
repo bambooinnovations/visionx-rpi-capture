@@ -168,7 +168,8 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                 if not cam._streaming and cam.mode != cam.mode.HARDWARE_TRIGGER:
                     import mvsdk
                     mvsdk.CameraSoftTrigger(cam._h_camera)
-                return cam._grab_frame()
+                frame, _head = cam._grab_frame()
+                return frame
         except Exception:
             return None
 
