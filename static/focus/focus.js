@@ -32,7 +32,17 @@ function startStream() {
 
   img.src = '';
   img.onload = () => { placeholder.style.display = 'none'; };
-  img.src = `/api/cameras/calibration/stream?camera_id=${state.activeCameraId}&fps=${state.fps}&charuco=0`;
+  const url = `/api/cameras/calibration/stream?camera_id=${state.activeCameraId}&fps=${state.fps}&charuco=0`;
+  img.onerror = async () => {
+    img.onerror = null;
+    let msg = 'Stream unavailable.';
+    try {
+      const r = await fetch(url);
+      if (r.status === 409) msg = 'Camera is in Hardware Trigger mode. Disable it on the main page to stream.';
+    } catch (_) {}
+    showError(msg);
+  };
+  img.src = url;
   state.streaming = true;
 }
 

@@ -59,6 +59,8 @@ HW_TRIGGER_LOCAL_SAVE_DIR: Path = Path(_get("hw_trigger", "local_save_dir", "dat
 HW_TRIGGER_LOCAL_MAX_FILES: int = _get("hw_trigger", "local_max_files", 200)
 HW_TRIGGER_LOCAL_MAX_MB: int = _get("hw_trigger", "local_max_mb", 500)
 HW_TRIGGER_HEALTH_CHECK_URL: str = _get("hw_trigger", "health_check_url", "")
+HW_TRIGGER_RAW_DESTINATION_URL: str = _get("hw_trigger", "raw_destination_url", "")
+HW_TRIGGER_SEND_RAW_IMAGES: bool = _get("hw_trigger", "send_raw_images", False)
 
 
 def get_camera_profile(model: str) -> dict:

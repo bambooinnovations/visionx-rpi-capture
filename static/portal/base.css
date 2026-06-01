@@ -53,6 +53,17 @@ body {
   margin-right: 20px;
 }
 
+.nav-spacer {
+  flex: 1;
+}
+
+.nav-divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(255,255,255,0.12);
+  margin: 0 8px;
+}
+
 .nav-link {
   color: #94a3b8;
   text-decoration: none;
@@ -64,6 +75,13 @@ body {
 }
 .nav-link:hover { color: #fff; background: rgba(255,255,255,0.08); }
 .nav-link.active { color: #fff; background: rgba(255,255,255,0.12); }
+
+.nav-link-settings {
+  color: #64748b;
+  font-size: 13px;
+}
+.nav-link-settings:hover { color: #94a3b8; background: rgba(255,255,255,0.06); }
+.nav-link-settings.active { color: #fff; background: rgba(255,255,255,0.10); }
 
 /* ── Shared Primitives ───────────────────────────────────────────────── */
 .pill {

@@ -823,6 +823,10 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
           max_width  int    Cap each input frame width before warping (default 640, 0 = no limit)
           camera_id  int    Fallback camera when not calibrated (default 0)
         """
+        for cam in cameras.values():
+            if isinstance(cam, MindVisionCamera) and cam.mode == CameraMode.HARDWARE_TRIGGER:
+                return Response("Camera is in hardware trigger mode", status=409, mimetype="text/plain")
+
         cal = _load_calibration()
         all_ids = sorted(cameras.keys())
         calibrated_ids = sorted(int(k) for k in cal.get("cameras", {})) if cal else []

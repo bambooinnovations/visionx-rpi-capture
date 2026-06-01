@@ -117,6 +117,14 @@ def _get_save_local() -> bool:
     return bool(runtime_config.get("hw_trigger.save_local", config.HW_TRIGGER_SAVE_LOCAL))
 
 
+def _get_send_raw_images() -> bool:
+    return bool(runtime_config.get("hw_trigger.send_raw_images", config.HW_TRIGGER_SEND_RAW_IMAGES))
+
+
+def _get_raw_destination_url() -> str:
+    return runtime_config.get("hw_trigger.raw_destination_url", config.HW_TRIGGER_RAW_DESTINATION_URL)
+
+
 def _get_health_check_url() -> str:
     return config.HW_TRIGGER_HEALTH_CHECK_URL
 
@@ -138,11 +146,12 @@ def check_server_health() -> dict:
         return {"reachable": False, "error": str(exc)}
 
 
-def _upload_image(jpeg_bytes: bytes, trigger_event: dict) -> bool:
-    """POST jpeg_bytes to the destination URL. Returns True on success."""
+def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg") -> bool:
+    """POST jpeg_bytes to url (defaults to destination_url). Returns True on success."""
     import requests
 
-    url = _get_destination_url()
+    if url is None:
+        url = _get_destination_url()
     if not url:
         return False
 
@@ -158,7 +167,7 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict) -> bool:
         try:
             resp = requests.post(
                 url,
-                files={"image": ("capture.jpg", io.BytesIO(jpeg_bytes), "image/jpeg")},
+                files={"image": (filename, io.BytesIO(jpeg_bytes), "image/jpeg")},
                 data={
                     "trigger_count": str(trigger_event.get("count", "")),
                     "trigger_number": str(trigger_event.get("trigger", "")),
@@ -171,6 +180,7 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict) -> bool:
             logger.info(
                 "hw_trigger_upload_ok",
                 url=url,
+                filename=filename,
                 status=resp.status_code,
                 trigger=trigger_event,
             )
@@ -181,6 +191,7 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict) -> bool:
                 attempt=attempt,
                 attempts=attempts,
                 url=url,
+                filename=filename,
                 error=str(exc),
                 trigger=trigger_event,
             )
@@ -190,14 +201,16 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict) -> bool:
     return False
 
 
-def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict) -> Path | None:
+def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | None = None) -> Path | None:
     """Write jpeg_bytes to the local save dir. Returns the saved path."""
     save_dir = config.HW_TRIGGER_LOCAL_SAVE_DIR
     try:
         save_dir.mkdir(parents=True, exist_ok=True)
-        ts = int(time.time() * 1000)
-        tnum = trigger_event.get("trigger", 0)
-        path = save_dir / f"trigger_{tnum:06d}_{ts}.jpg"
+        if filename is None:
+            ts = int(time.time() * 1000)
+            tnum = trigger_event.get("trigger", 0)
+            filename = f"trigger_{tnum:06d}_{ts}.jpg"
+        path = save_dir / filename
         path.write_bytes(jpeg_bytes)
         enforce_local_limits(save_dir)
         logger.info("hw_trigger_saved_local", path=str(path), trigger=trigger_event)
@@ -439,8 +452,7 @@ class SerialTriggerListener:
                 speed_cms=event.get("speed_cms"),
             )
 
-            for cam_id, cam in self._cameras.items():
-                self._capture_pool.submit(self._capture_one, cam_id, cam, event)
+            self._capture_pool.submit(self._capture_and_stitch, event)
 
         elif msg_type == "speed":
             with self._state_lock:
@@ -461,27 +473,86 @@ class SerialTriggerListener:
         elif msg_type == "startup":
             logger.info("arduino_startup", msg=event.get("msg"))
 
-    def _capture_one(self, cam_id: int, cam: "MindVisionCamera", event: dict) -> None:
-        try:
-            tmp_dir = config.CAPTURE_TMP_DIR / "hw_trigger"
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(dir=tmp_dir) as td:
-                image_path, _ = cam.capture_image(output_folder=Path(td))
-                jpeg_bytes = image_path.read_bytes()
+    def _capture_and_stitch(self, event: dict) -> None:
+        """Capture from all cameras, stitch, and upload. Called once per trigger event."""
+        import cv2
+        import numpy as np
+        from blueprints.stitch import _load_calibration, _stitch_frames
 
-            self._stats["captures_ok"] += 1
-            logger.info("hw_trigger_captured", camera_id=cam_id, trigger=event)
-        except Exception as exc:
-            self._stats["captures_failed"] += 1
-            logger.warning("hw_trigger_capture_failed", camera_id=cam_id, error=str(exc))
+        ts_ms = int(time.time() * 1000)
+        tmp_dir = config.CAPTURE_TMP_DIR / "hw_trigger"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        # --- 1. Capture raw frames from every camera ---
+        raw_captures: dict[int, tuple[bytes, str]] = {}  # cam_id → (jpeg_bytes, serial)
+        for cam_id, cam in self._cameras.items():
+            try:
+                with tempfile.TemporaryDirectory(dir=tmp_dir) as td:
+                    image_path, _ = cam.capture_image(output_folder=Path(td))
+                    jpeg_bytes = image_path.read_bytes()
+                serial = cam.serial_number or str(cam_id)
+                raw_captures[cam_id] = (jpeg_bytes, serial)
+                self._stats["captures_ok"] += 1
+                logger.info("hw_trigger_captured", camera_id=cam_id, trigger=event)
+            except Exception as exc:
+                self._stats["captures_failed"] += 1
+                logger.warning("hw_trigger_capture_failed", camera_id=cam_id, error=str(exc))
+
+        if not raw_captures:
             return
 
+        # --- 2. Upload raw images if enabled ---
+        if _get_send_raw_images():
+            raw_url = _get_raw_destination_url()
+            for cam_id, (jpeg_bytes, serial) in raw_captures.items():
+                filename = f"{ts_ms}_{serial}.jpg"
+                if _get_save_local():
+                    _save_image_locally(jpeg_bytes, event, filename=filename)
+                if raw_url:
+                    ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename)
+                    if ok:
+                        self._stats["uploads_ok"] += 1
+                    else:
+                        self._stats["uploads_failed"] += 1
+
+        # --- 3. Stitch and upload ---
+        stitch_filename = f"{ts_ms}_stitch.jpg"
+        stitch_bytes: bytes | None = None
+
+        if len(raw_captures) >= 2:
+            cal = _load_calibration()
+            if cal:
+                frames: dict[int, np.ndarray] = {}
+                for cam_id, (jpeg_bytes, _) in raw_captures.items():
+                    arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        frames[cam_id] = frame
+
+                stitched = _stitch_frames(frames, cal) if frames else None
+                if stitched is not None:
+                    ok_enc, buf = cv2.imencode(".jpg", stitched, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    if ok_enc:
+                        stitch_bytes = buf.tobytes()
+                        logger.info("hw_trigger_stitched", trigger=event)
+                    else:
+                        logger.warning("hw_trigger_stitch_encode_failed", trigger=event)
+                else:
+                    logger.warning("hw_trigger_stitch_failed", trigger=event)
+            else:
+                logger.warning("hw_trigger_no_stitch_calibration", trigger=event)
+
+        if stitch_bytes is None:
+            # Fallback: use the first available raw image as the "stitched" upload.
+            first_cam = next(iter(raw_captures))
+            stitch_bytes, _ = raw_captures[first_cam]
+
         if _get_save_local():
-            _save_image_locally(jpeg_bytes, event)
+            _save_image_locally(stitch_bytes, event, filename=stitch_filename)
 
         url = _get_destination_url()
         if url:
-            ok = _upload_image(jpeg_bytes, event)
+            ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename)
             if ok:
                 self._stats["uploads_ok"] += 1
             else:

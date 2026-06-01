@@ -14,6 +14,9 @@
   <a class="nav-link active" href="/">Home</a>
   <a class="nav-link" href="/calibrate">Calibration</a>
   <a class="nav-link" href="/stitch">Stitch</a>
+  <span class="nav-spacer"></span>
+  <span class="nav-divider"></span>
+  <a class="nav-link nav-link-settings" href="/settings">Settings</a>
   <button class="nav-dev-btn" id="dev-mode-btn" onclick="toggleDevMode()">Dev</button>
 </nav>
 
@@ -48,12 +51,18 @@
       <div class="decoder-summary">
         <span class="status-dot status-dot-gray" id="decoder-connected-dot"></span>
         <span class="decoder-label" id="decoder-connected-label">Checking…</span>
-        <span class="pill pill-gray" id="decoder-trigger-badge" style="display:none"></span>
         <span class="decoder-speed" id="decoder-speed" style="display:none"></span>
         <button class="btn btn-secondary btn-sm" id="decoder-check-btn" style="display:none"
                 onclick="event.stopPropagation(); decoderCheckAgain()">Check Again</button>
       </div>
-      <span class="decoder-hint">Click for details &amp; configuration</span>
+      <label class="decoder-mode-toggle" id="decoder-mode-toggle" onclick="event.stopPropagation()" title="Hardware Trigger / Calibration mode">
+        <span class="decoder-mode-label" id="decoder-mode-label">Calibration</span>
+        <span class="toggle-track" id="decoder-toggle-track">
+          <input type="checkbox" id="decoder-trigger-checkbox" onchange="decoderToggleMode(this.checked)" disabled>
+          <span class="toggle-thumb"></span>
+        </span>
+        <span class="decoder-mode-label">HW Trigger</span>
+      </label>
     </div>
   </section>
 

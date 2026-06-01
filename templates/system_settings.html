@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX — System Settings</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/system_settings/settings.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+  <span class="nav-spacer"></span>
+  <span class="nav-divider"></span>
+  <a class="nav-link nav-link-settings active" href="/settings">Settings</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+<div id="success-toast" class="success-toast hidden">Saved</div>
+
+<div class="sys-page">
+
+  <div class="sys-header">
+    <h1>System Settings</h1>
+    <p class="sys-subtitle">Runtime-editable values persist across restarts. Read-only values are set in <code>configuration.toml</code>.</p>
+  </div>
+
+  <!-- ── Upload ─────────────────────────────────────────────────────── -->
+  <section class="sys-card">
+    <div class="sys-card-header">
+      <h2>Upload</h2>
+      <span class="pill pill-info">hw_trigger</span>
+    </div>
+
+    <div class="sys-field">
+      <div class="sys-field-label">
+        <span class="sys-label">Stitched image URL</span>
+        <span class="sys-desc">POST destination for stitched captures</span>
+      </div>
+      <div class="sys-field-control">
+        <input class="sys-input" id="destination_url" type="url" placeholder="http://…/upload" autocomplete="off">
+        <button class="btn btn-secondary btn-sm" onclick="resetField('hw_trigger.destination_url')" title="Reset to toml default">Reset</button>
+      </div>
+    </div>
+
+    <div class="sys-field">
+      <div class="sys-field-label">
+        <span class="sys-label">API key</span>
+        <span class="sys-desc">Sent as <code>Authorization: Bearer …</code></span>
+      </div>
+      <div class="sys-field-control">
+        <input class="sys-input sys-input-password" id="destination_api_key" type="password" placeholder="Leave blank if not required" autocomplete="off">
+        <button class="btn btn-secondary btn-sm" onclick="resetField('hw_trigger.destination_api_key')" title="Reset to toml default">Reset</button>
+      </div>
+    </div>
+
+    <div class="sys-divider"></div>
+
+    <div class="sys-field">
+      <div class="sys-field-label">
+        <span class="sys-label">Send raw images</span>
+        <span class="sys-desc">Upload per-camera raw images during debug / calibration sessions</span>
+      </div>
+      <div class="sys-field-control sys-field-control--toggle">
+        <label class="sys-toggle">
+          <input type="checkbox" id="send_raw_images" onchange="onRawToggle()">
+          <span class="sys-toggle-track"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="sys-field" id="raw-url-row">
+      <div class="sys-field-label">
+        <span class="sys-label">Raw image URL</span>
+        <span class="sys-desc">POST destination for per-camera raw images</span>
+      </div>
+      <div class="sys-field-control">
+        <input class="sys-input" id="raw_destination_url" type="url" placeholder="http://…/upload/raw" autocomplete="off">
+        <button class="btn btn-secondary btn-sm" onclick="resetField('hw_trigger.raw_destination_url')" title="Reset to toml default">Reset</button>
+      </div>
+    </div>
+
+    <div class="sys-card-actions">
+      <button class="btn btn-primary btn-sm" onclick="saveUpload()">Save</button>
+    </div>
+  </section>
+
+  <!-- ── Serial / Hardware Trigger (read-only) ──────────────────────── -->
+  <section class="sys-card">
+    <div class="sys-card-header">
+      <h2>Serial Port</h2>
+      <span class="sys-readonly-badge">Read-only · configuration.toml</span>
+    </div>
+    <div class="sys-ro-table">
+      <div class="sys-ro-row"><span class="sys-ro-key">Serial port</span><span class="sys-ro-val" id="ro-serial_port">—</span></div>
+      <div class="sys-ro-row"><span class="sys-ro-key">Baud rate</span><span class="sys-ro-val" id="ro-serial_baud">—</span></div>
+      <div class="sys-ro-row"><span class="sys-ro-key">Retry attempts</span><span class="sys-ro-val" id="ro-retry_attempts">—</span></div>
+      <div class="sys-ro-row"><span class="sys-ro-key">Timeout</span><span class="sys-ro-val" id="ro-timeout_seconds">—</span></div>
+    </div>
+  </section>
+
+  <!-- ── Local Storage (read-only) ──────────────────────────────────── -->
+  <section class="sys-card">
+    <div class="sys-card-header">
+      <h2>Local Storage</h2>
+      <span class="sys-readonly-badge">Read-only · configuration.toml</span>
+    </div>
+    <div class="sys-ro-table">
+      <div class="sys-ro-row"><span class="sys-ro-key">Save local</span><span class="sys-ro-val" id="ro-save_local">—</span></div>
+      <div class="sys-ro-row"><span class="sys-ro-key">Save directory</span><span class="sys-ro-val" id="ro-local_save_dir">—</span></div>
+      <div class="sys-ro-row"><span class="sys-ro-key">Max files</span><span class="sys-ro-val" id="ro-local_max_files">—</span></div>
+      <div class="sys-ro-row"><span class="sys-ro-key">Max size</span><span class="sys-ro-val" id="ro-local_max_mb">—</span></div>
+    </div>
+  </section>
+
+</div>
+
+<script src="/static/system_settings/settings.js"></script>
+</body>
+</html>

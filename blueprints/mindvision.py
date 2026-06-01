@@ -1115,6 +1115,8 @@ def create_blueprint(
         cam, cam_id = _resolve_camera()
         if cam is None:
             return jsonify({"error": f"Camera {cam_id} not found"}), 404
+        if isinstance(cam, MindVisionCamera) and cam.mode == CameraMode.HARDWARE_TRIGGER:
+            return Response("Camera is in hardware trigger mode", status=409, mimetype="text/plain")
 
         fps = max(0.5, min(request.args.get("fps", 2.0, type=float), 10.0))
         peak_threshold = request.args.get("peak_threshold", 50, type=int)
@@ -1156,7 +1158,7 @@ def create_blueprint(
                         time.sleep(0.1)
 
                     with cam._lock:
-                        frame = cam._grab_frame()
+                        frame, _head = cam._grab_frame()
 
                     if frame is not None:
                         jpeg = _render_calibration_overlay(frame, history, peak_threshold, max_width, cam_id, detect_charuco)
@@ -1207,6 +1209,8 @@ def create_blueprint(
         cam, cam_id = _resolve_camera()
         if cam is None:
             return jsonify({"error": f"Camera {cam_id} not found"}), 404
+        if isinstance(cam, MindVisionCamera) and cam.mode == CameraMode.HARDWARE_TRIGGER:
+            return Response("Camera is in hardware trigger mode", status=409, mimetype="text/plain")
 
         fps = max(0.5, min(request.args.get("fps", 2.0, type=float), 10.0))
         guide_pct = max(10, min(90, request.args.get("guide_pct", 40, type=int)))
@@ -1358,6 +1362,8 @@ def create_blueprint(
         cam, cam_id = _resolve_camera()
         if cam is None:
             return jsonify({"error": f"Camera {cam_id} not found"}), 404
+        if isinstance(cam, MindVisionCamera) and cam.mode == CameraMode.HARDWARE_TRIGGER:
+            return Response("Camera is in hardware trigger mode", status=409, mimetype="text/plain")
 
         fps = max(0.5, min(request.args.get("fps", 5.0, type=float), 10.0))
         max_width = request.args.get("max_width", 1280, type=int)

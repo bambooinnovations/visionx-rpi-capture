@@ -144,8 +144,8 @@ def stream():
     if cam is None:
         return Response(f"Camera {cam_id} not found", status=404)
 
-    if isinstance(cam, MindVisionCamera) and cam.mode != CameraMode.STREAM:
-        return Response("Camera is not in stream mode", status=409)
+    if isinstance(cam, MindVisionCamera) and cam.mode == CameraMode.HARDWARE_TRIGGER:
+        return Response("Camera is in hardware trigger mode", status=409)
 
     width = request.args.get("width", None, type=int)
     height = request.args.get("height", None, type=int)
@@ -205,6 +205,11 @@ def stitch_ui():
 @app.route("/focus")
 def focus_ui():
     return render_template("focus.html")
+
+
+@app.route("/settings")
+def system_settings_ui():
+    return render_template("system_settings.html")
 
 
 @app.route("/mindvision/<int:camera_id>/settings")
@@ -291,13 +296,18 @@ def _effective_config() -> dict:
     base = {
         "stream.fps":                     config.STREAM_FPS,
         "stream.quality":                 config.STREAM_QUALITY,
+        "hw_trigger.serial_port":         config.HW_TRIGGER_SERIAL_PORT,
+        "hw_trigger.serial_baud":         config.HW_TRIGGER_SERIAL_BAUD,
         "hw_trigger.destination_url":     config.HW_TRIGGER_DESTINATION_URL,
         "hw_trigger.destination_api_key": "***" if config.HW_TRIGGER_DESTINATION_API_KEY else "",
         "hw_trigger.retry_attempts":      config.HW_TRIGGER_RETRY_ATTEMPTS,
         "hw_trigger.timeout_seconds":     config.HW_TRIGGER_TIMEOUT_SECONDS,
         "hw_trigger.save_local":          config.HW_TRIGGER_SAVE_LOCAL,
+        "hw_trigger.local_save_dir":      str(config.HW_TRIGGER_LOCAL_SAVE_DIR),
         "hw_trigger.local_max_files":     config.HW_TRIGGER_LOCAL_MAX_FILES,
         "hw_trigger.local_max_mb":        config.HW_TRIGGER_LOCAL_MAX_MB,
+        "hw_trigger.raw_destination_url": config.HW_TRIGGER_RAW_DESTINATION_URL,
+        "hw_trigger.send_raw_images":     config.HW_TRIGGER_SEND_RAW_IMAGES,
     }
     overrides = runtime_config.load()
     for key, value in overrides.items():

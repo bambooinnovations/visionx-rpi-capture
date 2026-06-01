@@ -347,6 +347,64 @@
 .decoder-speed { font-size: 14px; font-weight: 600; font-family: monospace; color: var(--primary); }
 .decoder-hint  { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 
+.decoder-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+.decoder-mode-toggle:has(input:disabled) {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.decoder-mode-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.toggle-track {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+}
+.toggle-track input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.toggle-thumb {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 22px;
+  transition: background 0.2s;
+  cursor: pointer;
+}
+.toggle-thumb::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+.toggle-track input:checked + .toggle-thumb {
+  background: var(--primary);
+}
+.toggle-track input:checked + .toggle-thumb::after {
+  transform: translateX(18px);
+}
+
 /* ── Decoder config form rows ────────────────────────────────────────── */
 /* ── Decoder config tabs ─────────────────────────────────────────────── */
 .dcfg-tab-bar {
@@ -430,7 +488,6 @@
 
 /* ── Dev Mode toggle (in nav) ────────────────────────────────────────── */
 .nav-dev-btn {
-  margin-left: auto;
   background: transparent;
   border: 1px solid rgba(255,255,255,0.2);
   color: #94a3b8;

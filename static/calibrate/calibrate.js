@@ -42,8 +42,19 @@ async function apiFetch(method, path, body = null, { allow404 = false } = {}) {
 }
 
 // ── Stream management ──────────────────────────────────────────────────────
-function setStream(imgEl, url) { imgEl.src = url; }
-function clearStream(imgEl) { imgEl.src = ''; }
+function setStream(imgEl, url) {
+  imgEl.onerror = async () => {
+    imgEl.onerror = null;
+    let msg = 'Stream unavailable.';
+    try {
+      const r = await fetch(url);
+      if (r.status === 409) msg = 'Camera is in Hardware Trigger mode. Disable it on the main page to stream.';
+    } catch (_) {}
+    showError(msg);
+  };
+  imgEl.src = url;
+}
+function clearStream(imgEl) { imgEl.onerror = null; imgEl.src = ''; }
 
 // ── Error display ──────────────────────────────────────────────────────────
 function showError(msg) {

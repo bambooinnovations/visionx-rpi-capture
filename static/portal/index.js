@@ -167,9 +167,9 @@ function _decoderDot(status) {
 function updateDecoderCard(status) {
   const dot      = document.getElementById('decoder-connected-dot');
   const label    = document.getElementById('decoder-connected-label');
-  const badge    = document.getElementById('decoder-trigger-badge');
   const speed    = document.getElementById('decoder-speed');
   const checkBtn = document.getElementById('decoder-check-btn');
+  const checkbox = document.getElementById('decoder-trigger-checkbox');
 
   const color = _decoderDot(status);
   dot.className = `status-dot status-dot-${color}`;
@@ -178,8 +178,8 @@ function updateDecoderCard(status) {
     const notDetected = status.port_present === false;
     label.textContent = notDetected ? 'Not detected' : 'Not started';
     if (checkBtn) checkBtn.style.display = notDetected ? '' : 'none';
-    badge.style.display = 'none';
     speed.style.display = 'none';
+    if (checkbox) { checkbox.checked = false; checkbox.disabled = true; }
     return;
   }
 
@@ -188,18 +188,21 @@ function updateDecoderCard(status) {
   const fresh = status.last_message_at && (now - status.last_message_at) < 5;
   label.textContent = fresh ? 'Connected' : 'No data';
 
-  badge.style.display = '';
-  if (status.trigger_enabled) {
-    badge.textContent = 'Triggering';
-    badge.className = 'pill pill-green';
-  } else {
-    badge.textContent = 'Stopped';
-    badge.className = 'pill pill-yellow';
-  }
+  if (checkbox) { checkbox.checked = !!status.trigger_enabled; checkbox.disabled = false; }
 
   speed.style.display = '';
   const spd = typeof status.speed_cms === 'number' ? status.speed_cms.toFixed(1) : '—';
   speed.textContent = `${spd} cm/s`;
+}
+
+async function decoderToggleMode(enable) {
+  const checkbox = document.getElementById('decoder-trigger-checkbox');
+  if (checkbox) checkbox.disabled = true;
+  try {
+    const url = enable ? '/api/decoder/trigger/enable' : '/api/decoder/trigger/disable';
+    await fetch(url, { method: 'POST' });
+  } catch (_) {}
+  await pollDecoder();
 }
 
 async function decoderCheckAgain() {
@@ -287,7 +290,6 @@ async function refreshDecoderModalStats() {
           <tr><td class="cfg-key">Arduino port</td><td>${portLabel}</td></tr>
           <tr><td class="cfg-key">Listener</td><td><span class="cfg-val cfg-bool-${s.running}">${s.running ? 'Running' : 'Stopped'}</span></td></tr>
           <tr><td class="cfg-key">Arduino</td><td><span class="cfg-val" style="color:var(--${connColor === 'green' ? 'success' : connColor === 'yellow' ? 'warning' : 'text-muted'})">${fresh ? 'Connected' : s.running ? 'No data' : '—'}</span></td></tr>
-          <tr><td class="cfg-key">Triggering</td><td><span class="cfg-val cfg-bool-${s.trigger_enabled}">${s.trigger_enabled}</span></td></tr>
           <tr><td class="cfg-key">Speed</td><td><span class="cfg-val cfg-num">${typeof s.speed_cms === 'number' ? s.speed_cms.toFixed(2) : '—'}</span><span class="cfg-unit">cm/s</span></td></tr>
           <tr><td class="cfg-key">Encoder count</td><td><span class="cfg-val cfg-num">${s.encoder_count ?? '—'}</span></td></tr>
           <tr><td class="cfg-key">Uptime</td><td><span class="cfg-val">${s.uptime_seconds != null ? s.uptime_seconds + 's' : '—'}</span></td></tr>
@@ -300,12 +302,6 @@ async function refreshDecoderModalStats() {
         ${s.running
           ? `<button class="btn btn-danger btn-sm" onclick="decoderStop()">Stop listener</button>`
           : `<button class="btn btn-primary btn-sm" onclick="decoderStart()" ${s.port_present === false ? 'disabled title="Arduino not connected on /dev/ttyACM0"' : ''}>Start listener</button>`}
-        ${s.running && s.trigger_enabled
-          ? `<button class="btn btn-secondary btn-sm" onclick="decoderTriggerDisable()">Disable triggering</button>`
-          : s.running
-            ? `<button class="btn btn-secondary btn-sm" onclick="decoderTriggerEnable()">Enable triggering</button>`
-            : ''}
-        ${s.running ? `<button class="btn btn-primary btn-sm" onclick="decoderFireTrigger()">Fire trigger</button>` : ''}
       </div>`;
   } catch (err) {
     el.innerHTML = `<div class="modal-error">Failed: ${err.message}</div>`;

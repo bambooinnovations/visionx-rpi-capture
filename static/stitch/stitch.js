@@ -77,10 +77,17 @@ function _startStitchViewStream() {
   loading.innerHTML = '<div class="stream-spinner"></div><span>Connecting…</span>';
   loading.classList.remove('hidden');
   img.onload = () => loading.classList.add('hidden');
-  img.onerror = () => {
-    loading.innerHTML = '<span class="stream-load-error">Stream error</span>';
+  const stitchUrl = `/api/stitch/stream?max_width=960&fps=${state.fps}&quality=75`;
+  img.onerror = async () => {
+    img.onerror = null;
+    let msg = 'Stream error';
+    try {
+      const r = await fetch(stitchUrl);
+      if (r.status === 409) msg = 'HW Trigger mode active';
+    } catch (_) {}
+    loading.innerHTML = `<span class="stream-load-error">${msg}</span>`;
   };
-  img.src = `/api/stitch/stream?max_width=960&fps=${state.fps}&quality=75`;
+  img.src = stitchUrl;
 }
 
 function _stopStitchViewStream() {
@@ -140,8 +147,13 @@ function buildStreams() {
     img.className = 'stream-img';
     img.alt = `Camera ${camId} stream`;
     img.addEventListener('load', () => loading.classList.add('hidden'), { once: true });
-    img.addEventListener('error', () => {
-      loading.innerHTML = '<span class="stream-load-error">No signal</span>';
+    img.addEventListener('error', async () => {
+      let msg = 'No signal';
+      try {
+        const r = await fetch(img.src);
+        if (r.status === 409) msg = 'HW Trigger mode active';
+      } catch (_) {}
+      loading.innerHTML = `<span class="stream-load-error">${msg}</span>`;
     }, { once: true });
     panel.appendChild(img);
 

@@ -261,7 +261,17 @@ function onSettingChange() {
 
 function startStream() {
   const img = document.getElementById('preview-stream');
-  img.src = `${API}/settings/stream?camera_id=${CAMERA_ID}&fps=5&_t=${Date.now()}`;
+  const url = `${API}/settings/stream?camera_id=${CAMERA_ID}&fps=5&_t=${Date.now()}`;
+  img.onerror = async () => {
+    img.onerror = null;
+    let msg = 'Stream unavailable.';
+    try {
+      const r = await fetch(url);
+      if (r.status === 409) msg = 'Camera is in Hardware Trigger mode. Disable it on the main page to stream.';
+    } catch (_) {}
+    showError(msg);
+  };
+  img.src = url;
   img.classList.remove('hidden');
   document.getElementById('snapshot-img').classList.add('hidden');
   document.getElementById('snapshot-placeholder').classList.add('hidden');
