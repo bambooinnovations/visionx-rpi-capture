@@ -57,13 +57,43 @@ ARDUINO_DEFAULTS: dict = {
     "speed_report_interval_ms": 500,
 }
 
-# Keys the RPi is allowed to set on the Arduino.
+# Keys the RPi is allowed to set on the Arduino (raw counts-based params).
 ARDUINO_SETTABLE_KEYS: dict[str, type] = {
     "trigger_interval": int,
     "counts_per_cm": float,
     "pulse_width_ms": int,
     "speed_report_interval_ms": int,
 }
+
+# Human-readable physical parameters — stored in config file, never sent to Arduino.
+# The system derives trigger_interval and counts_per_cm from these.
+PHYSICAL_DEFAULTS: dict = {
+    "wheel_diameter_mm": 64.7,    # encoder wheel diameter in mm (as given by manufacturer)
+    "encoder_ppr": 600,           # encoder pulses per revolution
+    "capture_interval_mm": 10.0,  # desired distance between captures in mm
+}
+
+PHYSICAL_SETTABLE_KEYS: dict[str, type] = {
+    "wheel_diameter_mm": float,
+    "encoder_ppr": int,
+    "capture_interval_mm": float,
+}
+
+
+def compute_arduino_params(diameter_mm: float, ppr: int, interval_mm: float) -> dict:
+    """Derive counts_per_cm and trigger_interval from physical wheel/encoder values.
+
+    circumference = π × diameter
+    Quadrature decoding gives 4× the encoder PPR as counts per revolution.
+    """
+    import math
+    circumference_mm = math.pi * diameter_mm
+    counts_per_cm = (ppr * 4) / (circumference_mm / 10.0)
+    trigger_interval = max(1, round(counts_per_cm * interval_mm / 10.0))
+    return {
+        "counts_per_cm": round(counts_per_cm, 4),
+        "trigger_interval": trigger_interval,
+    }
 
 
 def _get_destination_url() -> str:
@@ -259,6 +289,15 @@ class SerialTriggerListener:
             ARDUINO_CONFIG_PATH.unlink(missing_ok=True)
         except Exception as exc:
             logger.warning("arduino_config_reset_failed", error=str(exc))
+
+    def set_trigger_state(self, enabled: bool) -> None:
+        """Optimistically update trigger_enabled in the mirrored Arduino state."""
+        with self._state_lock:
+            self._arduino_state["trigger_enabled"] = enabled
+
+    def file_config(self) -> dict:
+        """Return the full saved config (physical + raw params) from disk."""
+        return self._load_file_config()
 
     def status(self) -> dict:
         uptime = None

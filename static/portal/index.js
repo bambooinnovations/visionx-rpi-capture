@@ -174,7 +174,8 @@ function updateDecoderCard(status) {
   dot.className = `status-dot status-dot-${color}`;
 
   if (!status.running) {
-    label.textContent = 'Not started';
+    const portMsg = status.port_present === false ? 'Arduino not connected' : 'Not started';
+    label.textContent = portMsg;
     badge.style.display = 'none';
     speed.style.display = 'none';
     return;
@@ -251,9 +252,13 @@ async function refreshDecoderModalStats() {
     const now = Date.now() / 1000;
     const fresh = s.last_message_at && (now - s.last_message_at) < 5;
     const connColor = _decoderDot(s);
+    const portLabel = s.port_present === false
+      ? `<span class="cfg-val" style="color:var(--danger)">Not detected</span>`
+      : `<span class="cfg-val" style="color:var(--success)">Detected</span>`;
     el.innerHTML = `
       <table class="cfg-table">
         <tbody>
+          <tr><td class="cfg-key">Arduino port</td><td>${portLabel}</td></tr>
           <tr><td class="cfg-key">Listener</td><td><span class="cfg-val cfg-bool-${s.running}">${s.running ? 'Running' : 'Stopped'}</span></td></tr>
           <tr><td class="cfg-key">Arduino</td><td><span class="cfg-val" style="color:var(--${connColor === 'green' ? 'success' : connColor === 'yellow' ? 'warning' : 'text-muted'})">${fresh ? 'Connected' : s.running ? 'No data' : '—'}</span></td></tr>
           <tr><td class="cfg-key">Triggering</td><td><span class="cfg-val cfg-bool-${s.trigger_enabled}">${s.trigger_enabled}</span></td></tr>
@@ -268,7 +273,7 @@ async function refreshDecoderModalStats() {
       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
         ${s.running
           ? `<button class="btn btn-danger btn-sm" onclick="decoderStop()">Stop listener</button>`
-          : `<button class="btn btn-primary btn-sm" onclick="decoderStart()">Start listener</button>`}
+          : `<button class="btn btn-primary btn-sm" onclick="decoderStart()" ${s.port_present === false ? 'disabled title="Arduino not connected on /dev/ttyACM0"' : ''}>Start listener</button>`}
         ${s.running && s.trigger_enabled
           ? `<button class="btn btn-secondary btn-sm" onclick="decoderTriggerDisable()">Disable triggering</button>`
           : s.running
@@ -285,29 +290,57 @@ async function refreshDecoderModalConfig() {
   const el = document.getElementById('decoder-modal-config');
   try {
     const d = await apiFetch('/api/decoder/config');
+    const phys = d.physical_config || {};
+    const physDefs = d.physical_defaults || {};
     const cfg = d.arduino_config || {};
-    const defs = d.defaults || {};
+    const arduinoDefs = d.arduino_defaults || {};
+    const triggerActive = !!d.trigger_enabled;
 
-    const rows = [
-      { key: 'trigger_interval',        label: 'Trigger interval',        unit: 'counts', type: 'int' },
-      { key: 'counts_per_cm',           label: 'Counts per cm',           unit: 'counts/cm', type: 'float' },
-      { key: 'pulse_width_ms',          label: 'Pulse width',             unit: 'ms', type: 'int' },
-      { key: 'speed_report_interval_ms',label: 'Speed heartbeat interval',unit: 'ms', type: 'int' },
+    const physRows = [
+      { key: 'wheel_diameter_mm',   label: 'Wheel diameter',     unit: 'mm',  type: 'float' },
+      { key: 'encoder_ppr',         label: 'Encoder resolution', unit: 'PPR', type: 'int'   },
+      { key: 'capture_interval_mm', label: 'Capture interval',   unit: 'mm',  type: 'float' },
     ];
 
-    el.innerHTML = rows.map(r => {
-      const current = cfg[r.key] ?? defs[r.key] ?? '';
-      return `
-        <div class="decoder-cfg-row">
-          <label class="decoder-cfg-label">${r.label}</label>
-          <div class="decoder-cfg-input-wrap">
-            <input class="decoder-cfg-input" id="dcfg-${r.key}" type="number" value="${current}" step="${r.type === 'float' ? '0.1' : '1'}">
-            <span class="cfg-unit">${r.unit}</span>
-            <button class="btn btn-primary btn-sm" onclick="decoderApplyCfg('${r.key}', '${r.type}')">Apply</button>
-          </div>
-        </div>`;
-    }).join('') + `
-      <div style="margin-top:10px">
+    const derivedRows = [
+      { key: 'counts_per_cm',    label: 'Counts per cm',    unit: 'counts/cm', type: 'float' },
+      { key: 'trigger_interval', label: 'Trigger interval', unit: 'counts',    type: 'int'   },
+    ];
+
+    const advRows = [
+      { key: 'pulse_width_ms',            label: 'Pulse width',             unit: 'ms', type: 'int' },
+      { key: 'speed_report_interval_ms',  label: 'Speed heartbeat interval',unit: 'ms', type: 'int' },
+    ];
+
+    const cfgRow = (key, label, unit, type, value) => `
+      <div class="decoder-cfg-row">
+        <label class="decoder-cfg-label">${label}</label>
+        <div class="decoder-cfg-input-wrap">
+          <input class="decoder-cfg-input" id="dcfg-${key}" type="number" value="${value}"
+            step="${type === 'float' ? '0.1' : '1'}">
+          <span class="cfg-unit">${unit}</span>
+          <button class="btn btn-primary btn-sm" onclick="decoderApplyCfg('${key}','${type}')">Apply</button>
+        </div>
+      </div>`;
+
+    const cfgRowReadOnly = (label, unit, value) => `
+      <div class="decoder-cfg-row">
+        <label class="decoder-cfg-label">${label}</label>
+        <div class="decoder-cfg-input-wrap">
+          <span class="cfg-val cfg-num" style="min-width:80px;display:inline-block">${value}</span>
+          <span class="cfg-unit">${unit}</span>
+        </div>
+      </div>`;
+
+    el.innerHTML = `
+      <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px">Set wheel size and capture distance — counts are computed automatically.</p>
+      ${physRows.map(r => cfgRow(r.key, r.label, r.unit, r.type, phys[r.key] ?? physDefs[r.key] ?? '')).join('')}
+      <div style="margin:10px 0 4px;font-size:11px;color:var(--text-muted)">Computed values (read-only)</div>
+      ${derivedRows.map(r => cfgRowReadOnly(r.label, r.unit, cfg[r.key] ?? arduinoDefs[r.key] ?? '—')).join('')}
+      <div style="margin:10px 0 4px;font-size:11px;color:var(--text-muted)">Advanced</div>
+      ${advRows.map(r => cfgRow(r.key, r.label, r.unit, r.type, cfg[r.key] ?? arduinoDefs[r.key] ?? '')).join('')}
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" onclick="decoderResetCount()">Reset encoder count</button>
         <button class="btn btn-secondary btn-sm" onclick="decoderResetConfig()">Reset to defaults</button>
       </div>`;
   } catch (err) {
@@ -332,12 +365,18 @@ async function decoderStop() {
 }
 
 async function decoderTriggerEnable() {
-  try { await fetch('/api/decoder/trigger/enable', { method: 'POST' }); } catch (_) {}
+  try {
+    const res = await fetch('/api/decoder/trigger/enable', { method: 'POST' });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to enable triggering'); return; }
+  } catch (err) { alert('Error: ' + err.message); return; }
   setTimeout(() => { refreshDecoderModalStats(); pollDecoder(); }, 600);
 }
 
 async function decoderTriggerDisable() {
-  try { await fetch('/api/decoder/trigger/disable', { method: 'POST' }); } catch (_) {}
+  try {
+    const res = await fetch('/api/decoder/trigger/disable', { method: 'POST' });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to disable triggering'); return; }
+  } catch (err) { alert('Error: ' + err.message); return; }
   setTimeout(() => { refreshDecoderModalStats(); pollDecoder(); }, 600);
 }
 
@@ -346,7 +385,8 @@ async function decoderFireTrigger() {
     const res = await fetch('/api/decoder/trigger/fire', { method: 'POST' });
     if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to fire trigger'); return; }
   } catch (err) { alert('Error: ' + err.message); return; }
-  setTimeout(() => { refreshDecoderModalStats(); pollDecoder(); }, 600);
+  // Allow time for serial round-trip (Arduino queuing up to ~1s) + capture
+  setTimeout(() => { refreshDecoderModalStats(); pollDecoder(); }, 1500);
 }
 
 async function decoderApplyCfg(key, type) {
@@ -367,6 +407,14 @@ async function decoderApplyCfg(key, type) {
   } catch (err) {
     alert('Error: ' + err.message);
   }
+}
+
+async function decoderResetCount() {
+  try {
+    const res = await fetch('/api/decoder/reset-count', { method: 'POST' });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed'); return; }
+  } catch (err) { alert('Error: ' + err.message); return; }
+  setTimeout(() => { refreshDecoderModalStats(); pollDecoder(); }, 400);
 }
 
 async function decoderResetConfig() {

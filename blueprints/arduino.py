@@ -8,6 +8,8 @@ so they need access to both the listener and the camera registry.
 """
 from __future__ import annotations
 
+import os
+
 import structlog
 from flask import Blueprint, jsonify, request
 
@@ -16,8 +18,11 @@ from camera.mindvision import CameraMode, MindVisionCamera
 from camera.mindvision_trigger import (
     ARDUINO_DEFAULTS,
     ARDUINO_SETTABLE_KEYS,
+    PHYSICAL_DEFAULTS,
+    PHYSICAL_SETTABLE_KEYS,
     SerialTriggerListener,
     check_server_health,
+    compute_arduino_params,
 )
 
 logger = structlog.get_logger()
@@ -100,7 +105,9 @@ def create_blueprint(
     @bp.route("/status", methods=["GET"])
     def decoder_status():
         """Full listener status including live Arduino state and capture statistics."""
-        return jsonify(listener.status())
+        status = listener.status()
+        status["port_present"] = os.path.exists(config.HW_TRIGGER_SERIAL_PORT)
+        return jsonify(status)
 
     # ── Arduino trigger on/off ─────────────────────────────────────────────────
 
@@ -111,6 +118,7 @@ def create_blueprint(
             listener.send_command({"cmd": "set_trigger_enabled", "value": True})
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
+        listener.set_trigger_state(True)
         return jsonify({"trigger_enabled": True})
 
     @bp.route("/trigger/disable", methods=["POST"])
@@ -120,6 +128,7 @@ def create_blueprint(
             listener.send_command({"cmd": "set_trigger_enabled", "value": False})
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
+        listener.set_trigger_state(False)
         return jsonify({"trigger_enabled": False})
 
     @bp.route("/trigger/fire", methods=["POST"])
@@ -131,53 +140,85 @@ def create_blueprint(
             return jsonify({"error": str(exc)}), 409
         return jsonify({"fired": True})
 
+    @bp.route("/reset-count", methods=["POST"])
+    def reset_count():
+        """Reset the Arduino encoder count and speed to zero."""
+        try:
+            listener.send_command({"cmd": "reset_count"})
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        return jsonify({"reset": True})
+
     # ── Arduino parameter config ───────────────────────────────────────────────
 
     @bp.route("/config", methods=["GET"])
     def get_config():
-        """Return the current Arduino parameters as last reported by the Arduino."""
+        """Return current Arduino parameters and the physical wheel/encoder configuration."""
         status = listener.status()
+        saved = listener.file_config()
+        physical = {k: saved.get(k, PHYSICAL_DEFAULTS[k]) for k in PHYSICAL_DEFAULTS}
         return jsonify({
             "arduino_config": status.get("arduino_config", {}),
+            "physical_config": physical,
             "trigger_enabled": status.get("trigger_enabled"),
-            "defaults": ARDUINO_DEFAULTS,
+            "arduino_defaults": ARDUINO_DEFAULTS,
+            "physical_defaults": PHYSICAL_DEFAULTS,
         })
 
     @bp.route("/config", methods=["PATCH"])
     def patch_config():
-        """Update one or more Arduino parameters, apply immediately, and persist to file.
+        """Update physical wheel/encoder params or raw Arduino params.
 
-        Settable keys: trigger_interval (int), counts_per_cm (float),
-                       pulse_width_ms (int), speed_report_interval_ms (int).
+        Physical keys (wheel_circumference_mm, encoder_ppr, capture_interval_mm)
+        automatically recompute and push counts_per_cm + trigger_interval to the Arduino.
+
+        Raw keys (pulse_width_ms, speed_report_interval_ms) are sent directly.
         """
         body = request.get_json(silent=True) or {}
         if not body:
             return jsonify({"error": "Request body must be a JSON object"}), 400
 
+        ALL_SETTABLE = {**PHYSICAL_SETTABLE_KEYS, **ARDUINO_SETTABLE_KEYS}
+
         errors: dict = {}
         updates: dict = {}
         for key, value in body.items():
-            if key not in ARDUINO_SETTABLE_KEYS:
+            if key not in ALL_SETTABLE:
                 errors[key] = "not a settable key"
                 continue
             try:
-                updates[key] = ARDUINO_SETTABLE_KEYS[key](value)
+                updates[key] = ALL_SETTABLE[key](value)
             except (ValueError, TypeError):
-                errors[key] = f"expected {ARDUINO_SETTABLE_KEYS[key].__name__}"
+                errors[key] = f"expected {ALL_SETTABLE[key].__name__}"
 
         if errors:
             return jsonify({"error": "invalid values", "details": errors}), 400
 
+        # If any physical param changed, recompute and push derived Arduino params.
+        physical_keys = PHYSICAL_SETTABLE_KEYS.keys()
+        if updates.keys() & physical_keys:
+            saved = listener.file_config()
+            merged = {k: saved.get(k, PHYSICAL_DEFAULTS[k]) for k in PHYSICAL_DEFAULTS}
+            merged.update({k: v for k, v in updates.items() if k in physical_keys})
+            derived = compute_arduino_params(
+                diameter_mm=merged["wheel_diameter_mm"],
+                ppr=int(merged["encoder_ppr"]),
+                interval_mm=merged["capture_interval_mm"],
+            )
+            updates.update(derived)
+
+        to_save = dict(updates)
         not_running = []
         for key, value in updates.items():
-            try:
-                listener.send_command({"cmd": f"set_{key}", "value": value})
-            except RuntimeError:
-                not_running.append(key)
+            if key in ARDUINO_SETTABLE_KEYS:
+                try:
+                    listener.send_command({"cmd": f"set_{key}", "value": value})
+                except RuntimeError:
+                    not_running.append(key)
 
-        listener.save_config(updates)
+        listener.save_config(to_save)
 
-        result: dict = {"updated": list(updates.keys())}
+        result: dict = {"updated": list(to_save.keys())}
         if not_running:
             result["warning"] = f"Saved to file but listener not running — {not_running} will apply on next connect"
         return jsonify(result)
