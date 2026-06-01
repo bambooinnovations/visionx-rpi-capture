@@ -9,6 +9,7 @@ GET  /images/{filename} — serve a received image
 """
 from __future__ import annotations
 
+import io
 import json
 import time
 import uuid
@@ -21,6 +22,56 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 SAVE_DIR = Path(__file__).parent / "received"
 SAVE_DIR.mkdir(exist_ok=True)
+
+
+def _extract_exif(jpeg_bytes: bytes) -> dict:
+    """Return a flat dict of human-readable EXIF values from a JPEG blob."""
+    try:
+        import piexif
+
+        exif = piexif.load(jpeg_bytes)
+        out: dict = {}
+
+        ifd0 = exif.get("0th", {})
+        exif_ifd = exif.get("Exif", {})
+
+        def _str(val):
+            if isinstance(val, bytes):
+                return val.decode(errors="replace").rstrip("\x00")
+            return val
+
+        make = _str(ifd0.get(piexif.ImageIFD.Make, ""))
+        model = _str(ifd0.get(piexif.ImageIFD.Model, ""))
+        serial = _str(ifd0.get(piexif.ImageIFD.CameraSerialNumber, ""))
+        dt = _str(ifd0.get(piexif.ImageIFD.DateTime, ""))
+
+        if make:
+            out["make"] = make
+        if model:
+            out["model"] = model
+        if serial:
+            out["serial_number"] = serial
+        if dt:
+            out["datetime"] = dt
+
+        exp = exif_ifd.get(piexif.ExifIFD.ExposureTime)
+        if exp and isinstance(exp, tuple) and exp[1]:
+            us = exp[0]
+            ms = us / 1000
+            out["exposure_time"] = f"{us} µs ({ms:.2f} ms)"
+
+        iso = exif_ifd.get(piexif.ExifIFD.ISOSpeedRatings)
+        if iso is not None:
+            out["analog_gain"] = f"{iso}%"
+
+        body_serial = _str(exif_ifd.get(piexif.ExifIFD.BodySerialNumber, ""))
+        if body_serial and body_serial != serial:
+            out["body_serial"] = body_serial
+
+        return out
+    except Exception:
+        return {}
+
 
 app = FastAPI(title="VisionX HW Trigger Test Server")
 
@@ -61,6 +112,8 @@ async def upload(request: Request):
         if not hasattr(v, "read")
     }
 
+    exif_info = _extract_exif(content)
+
     payload = {
         "id": image_id,
         "received_at": datetime.now(timezone.utc).isoformat(),
@@ -69,6 +122,7 @@ async def upload(request: Request):
         "content_type": image_field.content_type,
         "file_size_bytes": len(content),
         "meta": meta,
+        "exif": exif_info,
         "headers": dict(request.headers),
         "image_url": f"/images/{filename}",
     }
@@ -247,6 +301,12 @@ function addCard(d) {
   const headersText = Object.entries(d.headers || {})
     .map(([k, v]) => `${k}: ${v}`).join("\\n");
 
+  // EXIF section — only shown when the image carries embedded metadata
+  const exifEntries = Object.entries(d.exif || {});
+  const exifSection = exifEntries.length ? `
+      <div class="section-label">camera exif</div>
+      <table>${exifEntries.map(([k, v]) => row(k, v)).join("")}</table>` : "";
+
   const card = document.createElement("div");
   card.className = "card";
   card.innerHTML = `
@@ -258,6 +318,8 @@ function addCard(d) {
 
       <div class="section-label">server</div>
       <table>${serverRows}</table>
+
+      ${exifSection}
 
       <div class="section-label">form fields</div>
       <table>${metaRows}</table>

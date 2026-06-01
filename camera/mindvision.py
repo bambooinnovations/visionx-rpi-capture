@@ -320,8 +320,12 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CameraAlignFree(self._frame_buffer)
             self._frame_buffer = 0
 
-    def _grab_frame(self, timeout_ms: int = 1000) -> "np.ndarray | None":
-        """Grab one processed frame as a numpy array. Caller must hold self._lock."""
+    def _grab_frame(self, timeout_ms: int = 1000) -> "tuple[np.ndarray, object] | tuple[None, None]":
+        """Grab one processed frame as a numpy array plus the raw SDK frame header.
+
+        Caller must hold self._lock.
+        Returns (array, head) on success, (None, None) on failure.
+        """
         try:
             raw, head = mvsdk.CameraGetImageBuffer(self._h_camera, timeout_ms)
             mvsdk.CameraImageProcess(self._h_camera, raw, self._frame_buffer, head)
@@ -334,7 +338,7 @@ class MindVisionCamera(BaseCamera):
             )
             # _frame_buffer is shared C memory reused on the next grab, so we
             # must copy into a new numpy array before releasing the lock.
-            return arr.copy()
+            return arr.copy(), head
         except mvsdk.CameraException as e:
             stat = mvsdk.CameraGetFrameStatistic(self._h_camera)
             logger.warning(
@@ -345,15 +349,70 @@ class MindVisionCamera(BaseCamera):
                 frames_total=stat.iTotal,
                 frames_lost=stat.iLost,
             )
+            return None, None
+
+    def _build_exif(self, head, captured_at: str) -> bytes | None:
+        """Build a piexif EXIF blob from the SDK frame header and camera info."""
+        try:
+            import piexif
+
+            # Exposure time from frame header (microseconds → seconds as rational)
+            exp_us = getattr(head, "iExpTime", 0) or 0
+            exp_num, exp_den = int(exp_us), 1_000_000  # e.g. 30000/1000000 = 0.03s
+
+            # Analog gain: SDK reports as integer percentage (100 = 1×)
+            gain_raw = getattr(head, "uAnalogGain", 100) or 100
+
+            model = ""
+            serial = ""
+            if self._dev_info is not None:
+                try:
+                    model = self._dev_info.GetFriendlyName() or ""
+                except Exception:
+                    pass
+                try:
+                    serial = self._dev_info.GetSn() or ""
+                except Exception:
+                    pass
+
+            # EXIF datetime format: "YYYY:MM:DD HH:MM:SS"
+            try:
+                dt = datetime.fromisoformat(captured_at)
+                exif_dt = dt.strftime("%Y:%m:%d %H:%M:%S").encode()
+            except Exception:
+                exif_dt = b""
+
+            exif_dict = {
+                "0th": {
+                    piexif.ImageIFD.Make: b"MindVision",
+                    piexif.ImageIFD.Model: model.encode(),
+                    piexif.ImageIFD.DateTime: exif_dt,
+                    piexif.ImageIFD.CameraSerialNumber: serial.encode(),
+                },
+                "Exif": {
+                    piexif.ExifIFD.DateTimeOriginal: exif_dt,
+                    piexif.ExifIFD.ExposureTime: (exp_num, exp_den),
+                    piexif.ExifIFD.ISOSpeedRatings: gain_raw,
+                    piexif.ExifIFD.BodySerialNumber: serial.encode(),
+                },
+                "GPS": {},
+                "1st": {},
+            }
+            return piexif.dump(exif_dict)
+        except Exception:
+            logger.warning("exif_build_failed")
             return None
 
-    def _encode_jpeg(self, frame: "np.ndarray", quality: int) -> bytes:
+    def _encode_jpeg(self, frame: "np.ndarray", quality: int, exif_bytes: bytes | None = None) -> bytes:
         if frame.ndim == 3 and frame.shape[2] == 1:
             img = PilImage.fromarray(frame[:, :, 0], mode="L")
         else:
             img = PilImage.fromarray(frame[:, :, ::-1])  # SDK outputs BGR; PIL expects RGB
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=quality)
+        save_kwargs: dict = {"format": "JPEG", "quality": quality}
+        if exif_bytes:
+            save_kwargs["exif"] = exif_bytes
+        img.save(buf, **save_kwargs)
         return buf.getvalue()
 
     def stream_frames(
@@ -406,7 +465,7 @@ class MindVisionCamera(BaseCamera):
                 frame_data = None
 
                 with self._lock:
-                    frame = self._grab_frame()
+                    frame, _head = self._grab_frame()
                     if frame is not None:
                         frame_data = self._encode_jpeg(frame, config.STREAM_QUALITY)
 
@@ -454,13 +513,14 @@ class MindVisionCamera(BaseCamera):
             if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
                 mvsdk.CameraSoftTrigger(self._h_camera)
             t0 = time.perf_counter()
-            frame = self._grab_frame()
+            frame, head = self._grab_frame()
             capture_duration_ms = (time.perf_counter() - t0) * 1000
 
         if frame is None:
             raise RuntimeError("Failed to capture frame from MindVision camera")
 
-        jpeg_bytes = self._encode_jpeg(frame, quality=95)
+        exif_bytes = self._build_exif(head, captured_at)
+        jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes)
         output_image.write_bytes(jpeg_bytes)
 
         height, width = frame.shape[:2]
