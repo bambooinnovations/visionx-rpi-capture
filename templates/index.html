@@ -14,6 +14,7 @@
   <a class="nav-link active" href="/">Home</a>
   <a class="nav-link" href="/calibrate">Calibration</a>
   <a class="nav-link" href="/stitch">Stitch</a>
+  <button class="nav-dev-btn" id="dev-mode-btn" onclick="toggleDevMode()">Dev</button>
 </nav>
 
 <div id="error-banner" class="error-banner hidden">
@@ -49,8 +50,44 @@
         <span class="decoder-label" id="decoder-connected-label">Checking…</span>
         <span class="pill pill-gray" id="decoder-trigger-badge" style="display:none"></span>
         <span class="decoder-speed" id="decoder-speed" style="display:none"></span>
+        <button class="btn btn-secondary btn-sm" id="decoder-check-btn" style="display:none"
+                onclick="event.stopPropagation(); decoderCheckAgain()">Check Again</button>
       </div>
       <span class="decoder-hint">Click for details &amp; configuration</span>
+    </div>
+  </section>
+
+  <!-- ── Dev Tools ────────────────────────────────────────────────────── -->
+  <section class="section hidden" id="dev-tools-section">
+    <div class="dev-panel">
+      <div class="dev-panel-header">
+        <h2>Dev Tools</h2>
+        <span class="pill pill-yellow">dev mode</span>
+      </div>
+      <div class="dev-groups">
+
+        <div class="dev-group">
+          <div class="dev-group-title">Camera Mode</div>
+          <div class="dev-group-sub" id="dev-cam-mode-label">Current: —</div>
+          <div class="dev-group-btns">
+            <button class="btn btn-secondary btn-sm" onclick="devSetCamMode('hardware_trigger')">Hardware Trigger</button>
+            <button class="btn btn-secondary btn-sm" onclick="devSetCamMode('capture')">Software Trigger</button>
+            <button class="btn btn-secondary btn-sm" onclick="devSetCamMode('stream')">Stream</button>
+          </div>
+        </div>
+
+        <div class="dev-group">
+          <div class="dev-group-title">Decoder</div>
+          <div class="dev-group-btns">
+            <button class="btn btn-primary btn-sm" onclick="decoderStart(); devRefreshAfterDecoderOp()">Start</button>
+            <button class="btn btn-danger btn-sm" onclick="decoderStop(); devRefreshAfterDecoderOp()">Stop</button>
+            <button class="btn btn-secondary btn-sm" onclick="decoderTriggerEnable()">Enable Trigger</button>
+            <button class="btn btn-secondary btn-sm" onclick="decoderTriggerDisable()">Disable Trigger</button>
+            <button class="btn btn-secondary btn-sm" onclick="decoderFireTrigger()">Fire Trigger</button>
+          </div>
+        </div>
+
+      </div>
     </div>
   </section>
 
@@ -100,14 +137,16 @@
       </div>
       <button class="modal-close" onclick="closeDecoderModal()">&times;</button>
     </div>
-    <div class="modal-body">
-      <div class="cfg-section">
-        <div class="cfg-section-header">Live Status</div>
-        <div id="decoder-modal-stats" style="padding:12px 16px"><div class="modal-loading">Loading…</div></div>
+    <div class="modal-body" style="padding:0">
+      <div class="dcfg-tab-bar" style="padding:0 16px">
+        <button class="dcfg-tab active" data-tab="status" onclick="switchDecoderModalTab('status')">Status</button>
+        <button class="dcfg-tab" data-tab="config" onclick="switchDecoderModalTab('config')">Configuration</button>
       </div>
-      <div class="cfg-section">
-        <div class="cfg-section-header">Configuration</div>
-        <div id="decoder-modal-config" style="padding:12px 16px"><div class="modal-loading">Loading…</div></div>
+      <div class="dcfg-pane active" data-tab="status" style="padding:12px 16px">
+        <div id="decoder-modal-stats"><div class="modal-loading">Loading…</div></div>
+      </div>
+      <div class="dcfg-pane" data-tab="config" style="padding:12px 16px">
+        <div id="decoder-modal-config"><div class="modal-loading">Loading…</div></div>
       </div>
     </div>
   </div>

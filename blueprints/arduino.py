@@ -109,6 +109,41 @@ def create_blueprint(
         status["port_present"] = os.path.exists(config.HW_TRIGGER_SERIAL_PORT)
         return jsonify(status)
 
+    @bp.route("/detect", methods=["POST"])
+    def decoder_detect():
+        """Probe the serial port; auto-start the listener if the Arduino is found."""
+        port_present = os.path.exists(config.HW_TRIGGER_SERIAL_PORT)
+        status = listener.status()
+        status["port_present"] = port_present
+
+        if not port_present or listener.running:
+            return jsonify(status)
+
+        # Port found and listener not running — set camera mode and auto-start.
+        mode_errors = {}
+        for cam_id, cam in cameras.items():
+            try:
+                cam.set_mode(CameraMode.HARDWARE_TRIGGER)
+            except Exception as exc:
+                mode_errors[cam_id] = str(exc)
+
+        if mode_errors:
+            return jsonify({
+                "error": "Failed to set hardware trigger mode",
+                "details": {str(k): v for k, v in mode_errors.items()},
+            }), 503
+
+        try:
+            listener.start(port=config.HW_TRIGGER_SERIAL_PORT, baud=config.HW_TRIGGER_SERIAL_BAUD)
+        except Exception as exc:
+            logger.exception("decoder_detect_start_failed")
+            return jsonify({"error": str(exc)}), 500
+
+        logger.info("decoder_detect_auto_started", port=config.HW_TRIGGER_SERIAL_PORT)
+        status = listener.status()
+        status["port_present"] = True
+        return jsonify(status)
+
     # ── Arduino trigger on/off ─────────────────────────────────────────────────
 
     @bp.route("/trigger/enable", methods=["POST"])
@@ -134,6 +169,10 @@ def create_blueprint(
     @bp.route("/trigger/fire", methods=["POST"])
     def trigger_fire():
         """Send a software trigger over serial — fires one pulse immediately on the Arduino."""
+        if not listener.running:
+            return jsonify({"error": "Decoder listener is not running"}), 409
+        if not listener.serial_connected:
+            return jsonify({"error": "Arduino serial port not connected"}), 503
         try:
             listener.send_command({"cmd": "fire_trigger"})
         except RuntimeError as exc:

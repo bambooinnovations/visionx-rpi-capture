@@ -155,8 +155,10 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CameraSaveParameter(h, 0)
         else:
             # CameraSetTriggerMode can reset parameters loaded by CameraInit.
-            # Explicitly reload Team A config, then force-apply AE from the
-            # parsed file as a second-level guard against SDK non-compliance.
+            # Explicitly reload Team A config, then force-apply AE and trigger
+            # mode as a second-level guard against SDK non-compliance.
+            # NOTE: CameraLoadParameter restores all saved params including the
+            # trigger mode, so we must re-assert software trigger after loading.
             try:
                 mvsdk.CameraLoadParameter(h, 0)
             except Exception:
@@ -166,6 +168,9 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CameraSetAeTarget(h, _ae_target)
             if not _ae_state:
                 mvsdk.CameraSetExposureTime(h, _exp_time)
+            # Re-assert software trigger — CameraLoadParameter may have restored
+            # continuous mode (0) from a previous stream session's saved config.
+            mvsdk.CameraSetTriggerMode(h, 1)
 
         # CameraPlay starts the SDK's internal grab thread; subsequent
         # CameraGetImageBuffer calls pull from its ring buffer.

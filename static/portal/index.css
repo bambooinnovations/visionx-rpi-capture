@@ -348,24 +348,45 @@
 .decoder-hint  { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 
 /* ── Decoder config form rows ────────────────────────────────────────── */
-.decoder-cfg-row {
+/* ── Decoder config tabs ─────────────────────────────────────────────── */
+.dcfg-tab-bar {
   display: flex;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0;
+}
+.dcfg-tab {
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.dcfg-tab:hover { color: var(--text); }
+.dcfg-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+.dcfg-pane { display: none; }
+.dcfg-pane.active { display: block; }
+
+/* Grid rows — fixed label column keeps inputs perfectly aligned */
+.dcfg-row {
+  display: grid;
+  grid-template-columns: 155px 95px 1fr;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 0;
+  column-gap: 10px;
+  padding: 7px 0;
   border-bottom: 1px solid #f4f6f9;
 }
-.decoder-cfg-row:last-child { border-bottom: none; }
-.decoder-cfg-label { font-size: 13px; color: #374151; flex: 1; }
-.decoder-cfg-input-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-.decoder-cfg-input {
-  width: 90px;
+.dcfg-row:last-of-type { border-bottom: none; }
+.dcfg-label { font-size: 13px; color: var(--text); }
+.dcfg-unit  { font-size: 12px; color: var(--text-muted); }
+
+.dcfg-input {
+  width: 95px;
   padding: 4px 8px;
   font-size: 13px;
   font-family: monospace;
@@ -373,11 +394,104 @@
   border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--text);
+  box-sizing: border-box;
 }
-.decoder-cfg-input:focus {
+.dcfg-input:focus {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+}
+.dcfg-readonly {
+  font-size: 13px;
+  font-family: monospace;
+  color: var(--text-muted);
+  width: 95px;
+  display: inline-block;
+}
+
+.dcfg-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 14px 0 6px;
+}
+.dcfg-section-label:first-child { margin-top: 0; }
+
+.dcfg-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Dev Mode toggle (in nav) ────────────────────────────────────────── */
+.nav-dev-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.nav-dev-btn:hover { color: #fff; border-color: rgba(255,255,255,0.45); }
+.nav-dev-btn.dev-btn-active {
+  background: #d97706;
+  border-color: #d97706;
+  color: #fff;
+}
+
+/* ── Dev Tools panel ─────────────────────────────────────────────────── */
+.dev-panel {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+
+.dev-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.dev-panel-header h2 { font-size: 15px; font-weight: 700; color: #92400e; }
+
+.dev-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dev-group { display: flex; flex-direction: column; gap: 6px; }
+
+.dev-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #b45309;
+}
+
+.dev-group-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
+.dev-group-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 @media (max-width: 600px) {

@@ -165,22 +165,25 @@ function _decoderDot(status) {
 }
 
 function updateDecoderCard(status) {
-  const dot   = document.getElementById('decoder-connected-dot');
-  const label = document.getElementById('decoder-connected-label');
-  const badge = document.getElementById('decoder-trigger-badge');
-  const speed = document.getElementById('decoder-speed');
+  const dot      = document.getElementById('decoder-connected-dot');
+  const label    = document.getElementById('decoder-connected-label');
+  const badge    = document.getElementById('decoder-trigger-badge');
+  const speed    = document.getElementById('decoder-speed');
+  const checkBtn = document.getElementById('decoder-check-btn');
 
   const color = _decoderDot(status);
   dot.className = `status-dot status-dot-${color}`;
 
   if (!status.running) {
-    const portMsg = status.port_present === false ? 'Arduino not connected' : 'Not started';
-    label.textContent = portMsg;
+    const notDetected = status.port_present === false;
+    label.textContent = notDetected ? 'Not detected' : 'Not started';
+    if (checkBtn) checkBtn.style.display = notDetected ? '' : 'none';
     badge.style.display = 'none';
     speed.style.display = 'none';
     return;
   }
 
+  if (checkBtn) checkBtn.style.display = 'none';
   const now = Date.now() / 1000;
   const fresh = status.last_message_at && (now - status.last_message_at) < 5;
   label.textContent = fresh ? 'Connected' : 'No data';
@@ -199,38 +202,65 @@ function updateDecoderCard(status) {
   speed.textContent = `${spd} cm/s`;
 }
 
+async function decoderCheckAgain() {
+  const btn = document.getElementById('decoder-check-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  try {
+    await fetch('/api/decoder/detect', { method: 'POST' });
+  } catch (_) {}
+  if (btn) { btn.disabled = false; btn.textContent = 'Check Again'; }
+  await pollDecoder();
+  devRefreshAfterDecoderOp();
+}
+
 let _decoderPollInterval = 10000;
 
 async function pollDecoder() {
   let running = false;
+  let portPresent = true;
   try {
     const status = await apiFetch('/api/decoder/status');
     updateDecoderCard(status);
     running = !!status.running;
+    portPresent = status.port_present !== false;
   } catch (_) {
     updateDecoderCard({ running: false });
   }
+
+  if (_decoderPollTimer) { clearInterval(_decoderPollTimer); _decoderPollTimer = null; }
+
+  // Stop polling entirely when the Arduino is not detected — the "Check Again"
+  // button lets the user re-probe manually.
+  if (!portPresent && !running) return;
+
   const next = running ? 2000 : 10000;
-  if (next !== _decoderPollInterval) {
-    _decoderPollInterval = next;
-    if (_decoderPollTimer) clearInterval(_decoderPollTimer);
-    _decoderPollTimer = setInterval(pollDecoder, next);
-  }
+  _decoderPollInterval = next;
+  _decoderPollTimer = setInterval(pollDecoder, next);
 }
 
 function startDecoderPolling() {
   pollDecoder();
-  _decoderPollTimer = setInterval(pollDecoder, _decoderPollInterval);
 }
 
 // ── Decoder Modal ──────────────────────────────────────────────────────
 
 let _decoderModalRefreshTimer = null;
+let _decoderModalActiveTab = 'status';
+
+function switchDecoderModalTab(tab) {
+  _decoderModalActiveTab = tab;
+  const overlay = document.getElementById('decoder-modal-overlay');
+  overlay.querySelectorAll('.dcfg-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  overlay.querySelectorAll('.dcfg-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === tab));
+  if (tab === 'config') refreshDecoderModalConfig();
+}
 
 function openDecoderModal() {
   document.getElementById('decoder-modal-overlay').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
-  refreshDecoderModal();
+  // Always open on Status tab and start live refresh
+  switchDecoderModalTab('status');
+  refreshDecoderModalStats();
   _decoderModalRefreshTimer = setInterval(refreshDecoderModalStats, 2000);
 }
 
@@ -239,10 +269,6 @@ function closeDecoderModal(event) {
   document.getElementById('decoder-modal-overlay').classList.add('hidden');
   document.body.style.overflow = '';
   if (_decoderModalRefreshTimer) { clearInterval(_decoderModalRefreshTimer); _decoderModalRefreshTimer = null; }
-}
-
-async function refreshDecoderModal() {
-  await Promise.all([refreshDecoderModalStats(), refreshDecoderModalConfig()]);
 }
 
 async function refreshDecoderModalStats() {
@@ -290,61 +316,79 @@ async function refreshDecoderModalConfig() {
   const el = document.getElementById('decoder-modal-config');
   try {
     const d = await apiFetch('/api/decoder/config');
-    const phys = d.physical_config || {};
-    const physDefs = d.physical_defaults || {};
-    const cfg = d.arduino_config || {};
-    const arduinoDefs = d.arduino_defaults || {};
-    const triggerActive = !!d.trigger_enabled;
+    const phys        = d.physical_config  || {};
+    const physDefs    = d.physical_defaults || {};
+    const cfg         = d.arduino_config   || {};
+    const arduinoDefs = d.arduino_defaults  || {};
 
-    const physRows = [
-      { key: 'wheel_diameter_mm',   label: 'Wheel diameter',     unit: 'mm',  type: 'float' },
-      { key: 'encoder_ppr',         label: 'Encoder resolution', unit: 'PPR', type: 'int'   },
-      { key: 'capture_interval_mm', label: 'Capture interval',   unit: 'mm',  type: 'float' },
-    ];
-
-    const derivedRows = [
-      { key: 'counts_per_cm',    label: 'Counts per cm',    unit: 'counts/cm', type: 'float' },
-      { key: 'trigger_interval', label: 'Trigger interval', unit: 'counts',    type: 'int'   },
-    ];
-
-    const advRows = [
-      { key: 'pulse_width_ms',            label: 'Pulse width',             unit: 'ms', type: 'int' },
-      { key: 'speed_report_interval_ms',  label: 'Speed heartbeat interval',unit: 'ms', type: 'int' },
-    ];
-
-    const cfgRow = (key, label, unit, type, value) => `
-      <div class="decoder-cfg-row">
-        <label class="decoder-cfg-label">${label}</label>
-        <div class="decoder-cfg-input-wrap">
-          <input class="decoder-cfg-input" id="dcfg-${key}" type="number" value="${value}"
-            step="${type === 'float' ? '0.1' : '1'}">
-          <span class="cfg-unit">${unit}</span>
-          <button class="btn btn-primary btn-sm" onclick="decoderApplyCfg('${key}','${type}')">Apply</button>
-        </div>
+    const row = (key, label, unit, type, value) => `
+      <div class="dcfg-row">
+        <label class="dcfg-label" for="dcfg-${key}">${label}</label>
+        <input class="dcfg-input" id="dcfg-${key}" type="number" value="${value}"
+          step="${type === 'float' ? '0.1' : '1'}">
+        <span class="dcfg-unit">${unit}</span>
       </div>`;
 
-    const cfgRowReadOnly = (label, unit, value) => `
-      <div class="decoder-cfg-row">
-        <label class="decoder-cfg-label">${label}</label>
-        <div class="decoder-cfg-input-wrap">
-          <span class="cfg-val cfg-num" style="min-width:80px;display:inline-block">${value}</span>
-          <span class="cfg-unit">${unit}</span>
-        </div>
+    const rowRO = (label, unit, value) => `
+      <div class="dcfg-row">
+        <span class="dcfg-label">${label}</span>
+        <span class="dcfg-readonly">${value}</span>
+        <span class="dcfg-unit">${unit}</span>
       </div>`;
 
     el.innerHTML = `
-      <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px">Set wheel size and capture distance — counts are computed automatically.</p>
-      ${physRows.map(r => cfgRow(r.key, r.label, r.unit, r.type, phys[r.key] ?? physDefs[r.key] ?? '')).join('')}
-      <div style="margin:10px 0 4px;font-size:11px;color:var(--text-muted)">Computed values (read-only)</div>
-      ${derivedRows.map(r => cfgRowReadOnly(r.label, r.unit, cfg[r.key] ?? arduinoDefs[r.key] ?? '—')).join('')}
-      <div style="margin:10px 0 4px;font-size:11px;color:var(--text-muted)">Advanced</div>
-      ${advRows.map(r => cfgRow(r.key, r.label, r.unit, r.type, cfg[r.key] ?? arduinoDefs[r.key] ?? '')).join('')}
-      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <div class="dcfg-section-label">Wheel &amp; encoder</div>
+      ${row('wheel_diameter_mm',   'Wheel diameter',     'mm',  'float', phys['wheel_diameter_mm']   ?? physDefs['wheel_diameter_mm']   ?? '')}
+      ${row('encoder_ppr',         'Encoder resolution', 'PPR', 'int',   phys['encoder_ppr']         ?? physDefs['encoder_ppr']         ?? '')}
+      ${row('capture_interval_mm', 'Capture interval',   'mm',  'float', phys['capture_interval_mm'] ?? physDefs['capture_interval_mm'] ?? '')}
+
+      <div class="dcfg-section-label">Computed (read-only)</div>
+      ${rowRO('Counts per cm',    'counts/cm', cfg['counts_per_cm']    ?? arduinoDefs['counts_per_cm']    ?? '—')}
+      ${rowRO('Trigger interval', 'counts',    cfg['trigger_interval'] ?? arduinoDefs['trigger_interval'] ?? '—')}
+
+      <div class="dcfg-section-label">Timing</div>
+      ${row('pulse_width_ms',           'Pulse width',           'ms', 'int', cfg['pulse_width_ms']           ?? arduinoDefs['pulse_width_ms']           ?? '')}
+      ${row('speed_report_interval_ms', 'Speed report interval', 'ms', 'int', cfg['speed_report_interval_ms'] ?? arduinoDefs['speed_report_interval_ms'] ?? '')}
+
+      <div class="dcfg-actions">
+        <button class="btn btn-primary btn-sm" onclick="decoderApplyAllCfg()">Apply</button>
         <button class="btn btn-secondary btn-sm" onclick="decoderResetCount()">Reset encoder count</button>
         <button class="btn btn-secondary btn-sm" onclick="decoderResetConfig()">Reset to defaults</button>
       </div>`;
   } catch (err) {
     el.innerHTML = `<div class="modal-error">Failed: ${err.message}</div>`;
+  }
+}
+
+async function decoderApplyAllCfg() {
+  const fields = [
+    { key: 'wheel_diameter_mm',        type: 'float' },
+    { key: 'encoder_ppr',              type: 'int'   },
+    { key: 'capture_interval_mm',      type: 'float' },
+    { key: 'pulse_width_ms',           type: 'int'   },
+    { key: 'speed_report_interval_ms', type: 'int'   },
+  ];
+
+  const body = {};
+  for (const { key, type } of fields) {
+    const input = document.getElementById(`dcfg-${key}`);
+    if (!input) continue;
+    const value = type === 'float' ? parseFloat(input.value) : parseInt(input.value, 10);
+    if (!isNaN(value)) body[key] = value;
+  }
+  if (!Object.keys(body).length) return;
+
+  try {
+    const res = await fetch('/api/decoder/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Failed to apply config'); return; }
+    setTimeout(refreshDecoderModalConfig, 600);
+  } catch (err) {
+    alert('Error: ' + err.message);
   }
 }
 
@@ -389,25 +433,7 @@ async function decoderFireTrigger() {
   setTimeout(() => { refreshDecoderModalStats(); pollDecoder(); }, 1500);
 }
 
-async function decoderApplyCfg(key, type) {
-  const input = document.getElementById(`dcfg-${key}`);
-  if (!input) return;
-  const raw = input.value.trim();
-  const value = type === 'float' ? parseFloat(raw) : parseInt(raw, 10);
-  if (isNaN(value)) { alert(`Invalid value for ${key}`); return; }
-  try {
-    const res = await fetch('/api/decoder/config', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ [key]: value }),
-    });
-    const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Failed'); return; }
-    setTimeout(refreshDecoderModalConfig, 600);
-  } catch (err) {
-    alert('Error: ' + err.message);
-  }
-}
+
 
 async function decoderResetCount() {
   try {
@@ -425,12 +451,67 @@ async function decoderResetConfig() {
   setTimeout(refreshDecoderModalConfig, 800);
 }
 
+// ── Dev Mode ───────────────────────────────────────────────────────────
+let _devCameraIds = [];
+
+function initDevMode() {
+  const active = localStorage.getItem('visionx_dev_mode') === 'true';
+  _applyDevMode(active);
+}
+
+function toggleDevMode() {
+  const active = localStorage.getItem('visionx_dev_mode') === 'true';
+  const next = !active;
+  localStorage.setItem('visionx_dev_mode', String(next));
+  _applyDevMode(next);
+}
+
+function _applyDevMode(active) {
+  const btn     = document.getElementById('dev-mode-btn');
+  const section = document.getElementById('dev-tools-section');
+  if (btn)     btn.classList.toggle('dev-btn-active', active);
+  if (section) section.classList.toggle('hidden', !active);
+  if (active)  refreshDevCamMode();
+}
+
+async function refreshDevCamMode() {
+  const label = document.getElementById('dev-cam-mode-label');
+  if (!label) return;
+  try {
+    const data = await apiFetch('/api/cameras/mode?camera_id=0');
+    label.textContent = `Current: ${data.mode || '—'}`;
+  } catch (_) {
+    label.textContent = 'Current: —';
+  }
+}
+
+async function devSetCamMode(mode) {
+  const ids = _devCameraIds.length ? _devCameraIds : [0];
+  await Promise.all(ids.map(id =>
+    fetch(`/api/cameras/mode?camera_id=${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    }).catch(() => {})
+  ));
+  setTimeout(refreshDevCamMode, 300);
+}
+
+function devRefreshAfterDecoderOp() {
+  const section = document.getElementById('dev-tools-section');
+  if (section && !section.classList.contains('hidden')) {
+    setTimeout(refreshDevCamMode, 600);
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────
 async function refreshAll() {
   clearError();
   try {
     const cameras = await apiFetch('/api/cameras');
-    renderCameras(Array.isArray(cameras) ? cameras : []);
+    const list = Array.isArray(cameras) ? cameras : [];
+    _devCameraIds = list.map(c => c.camera_id);
+    renderCameras(list);
   } catch (e) {
     showError('Failed to load cameras: ' + e.message);
     renderCameras([]);
@@ -438,6 +519,7 @@ async function refreshAll() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  initDevMode();
   refreshAll();
   startDecoderPolling();
 });

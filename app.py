@@ -110,6 +110,27 @@ if isinstance(camera, MindVisionCamera):
     app.register_blueprint(create_lens_blueprint(cameras))
     app.register_blueprint(create_arduino_blueprint(_serial_listener, cameras))
 
+    # Auto-start decoder if the Arduino serial port is already present at boot.
+    if (not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true") \
+            and os.path.exists(config.HW_TRIGGER_SERIAL_PORT):
+        _mode_errors = {}
+        for _cam_id, _cam in cameras.items():
+            try:
+                _cam.set_mode(CameraMode.HARDWARE_TRIGGER)
+            except Exception as _e:
+                _mode_errors[_cam_id] = str(_e)
+        if not _mode_errors:
+            try:
+                _serial_listener.start(
+                    port=config.HW_TRIGGER_SERIAL_PORT,
+                    baud=config.HW_TRIGGER_SERIAL_BAUD,
+                )
+                logger.info("decoder_auto_started", port=config.HW_TRIGGER_SERIAL_PORT)
+            except Exception as _e:
+                logger.warning("decoder_auto_start_failed", error=str(_e))
+        else:
+            logger.warning("decoder_auto_start_skipped", mode_errors=_mode_errors)
+
 
 def _resolve_camera(default_id: int = 0):
     """Return (cam, cam_id) from the camera_id query param, or None on miss."""

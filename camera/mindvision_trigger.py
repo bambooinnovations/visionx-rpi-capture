@@ -26,6 +26,7 @@ Arduino so parameters survive RPi restarts without reflashing the sketch.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import io
 import json
 import queue
@@ -216,6 +217,11 @@ class SerialTriggerListener:
         self._lock = threading.Lock()
         self._send_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._state_lock = threading.Lock()
+        # Captures and uploads run in a thread pool so the serial I/O loop is
+        # never blocked waiting for image grabs or network uploads.
+        self._capture_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="hw-capture"
+        )
 
         self._stats = {
             "triggers_received": 0,
@@ -239,6 +245,11 @@ class SerialTriggerListener:
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def serial_connected(self) -> bool:
+        with self._state_lock:
+            return bool(self._arduino_state.get("serial_connected", False))
 
     def start(self, port: str, baud: int = 115200) -> None:
         with self._lock:
@@ -354,7 +365,7 @@ class SerialTriggerListener:
         while not self._stop_event.is_set():
             try:
                 if ser is None:
-                    ser = serial.Serial(port, baud, timeout=1.0)
+                    ser = serial.Serial(port, baud, timeout=0.1)
                     with self._state_lock:
                         self._arduino_state["serial_connected"] = True
                     logger.info("serial_port_opened", port=port, baud=baud)
@@ -429,7 +440,7 @@ class SerialTriggerListener:
             )
 
             for cam_id, cam in self._cameras.items():
-                self._capture_one(cam_id, cam, event)
+                self._capture_pool.submit(self._capture_one, cam_id, cam, event)
 
         elif msg_type == "speed":
             with self._state_lock:
