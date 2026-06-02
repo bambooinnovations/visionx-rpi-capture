@@ -47,9 +47,24 @@
 
 .camera-card-header {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
   margin-bottom: 10px;
+}
+
+.cam-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cam-header-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .cam-id-badge {
@@ -66,7 +81,6 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

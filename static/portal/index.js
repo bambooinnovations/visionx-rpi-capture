@@ -46,17 +46,21 @@ function renderCameras(cameras) {
     return `
     <div class="camera-card">
       <div class="camera-card-header">
-        <span class="cam-id-badge">Cam ${c.camera_id}</span>
+        <div class="cam-header-top">
+          <span class="cam-id-badge">Cam ${c.camera_id}</span>
+          <div class="cam-header-pills">
+            <span class="pill ${c.status === 'open' ? 'pill-green' : 'pill-red'}">${c.status}</span>
+            ${_hwTriggerActive ? `<span class="pill pill-yellow">HW Trigger</span>` : ''}
+            <button class="btn-info-icon" title="View raw config" onclick="openConfigModal(${c.camera_id})">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 16v-4"/>
+                <path d="M12 8h.01" stroke-width="2.5"/>
+              </svg>
+            </button>
+          </div>
+        </div>
         <span class="cam-model">${c.model || c.product_name || 'Unknown model'}</span>
-        <span class="pill ${c.status === 'open' ? 'pill-green' : 'pill-red'}">${c.status}</span>
-        ${_hwTriggerActive ? `<span class="pill pill-yellow">HW Trigger</span>` : ''}
-        <button class="btn-info-icon" title="View raw config" onclick="openConfigModal(${c.camera_id})">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M12 16v-4"/>
-            <path d="M12 8h.01" stroke-width="2.5"/>
-          </svg>
-        </button>
       </div>
       <div class="camera-meta">
         ${c.serial_number ? `<div class="camera-meta-row"><span>Serial</span><span>${c.serial_number}</span></div>` : ''}
