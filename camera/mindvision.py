@@ -147,30 +147,32 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CAMERA_MEDIA_TYPE_MONO8 if self._mono else mvsdk.CAMERA_MEDIA_TYPE_BGR8,
         )
 
-        mvsdk.CameraSetTriggerMode(h, 1)  # software trigger; continuous only while streaming
-
+        # IMPORTANT: CameraSetTriggerMode resets the AE state to manual on every
+        # call (verified empirically — it clears the auto-exposure flag). So the
+        # trigger mode must always be set BEFORE auto-exposure, never after, or
+        # AE gets silently clobbered back to off.
         if _first_run:
+            mvsdk.CameraSetTriggerMode(h, 1)  # software trigger; continuous only while streaming
             mvsdk.CameraSetAeState(h, 1)
             mvsdk.CameraSetAeTarget(h, 100)
             mvsdk.CameraSaveParameter(h, 0)
         else:
-            # CameraSetTriggerMode can reset parameters loaded by CameraInit.
-            # Explicitly reload Team A config, then force-apply AE and trigger
-            # mode as a second-level guard against SDK non-compliance.
-            # NOTE: CameraLoadParameter restores all saved params including the
-            # trigger mode, so we must re-assert software trigger after loading.
+            # CameraLoadParameter restores all saved params (including trigger
+            # mode), so reload Team A config first, then re-assert software
+            # trigger, then apply AE/exposure last so the trigger-mode change
+            # doesn't reset them.
             try:
                 mvsdk.CameraLoadParameter(h, 0)
             except Exception:
                 pass
             _ae_state, _ae_target, _exp_time = _parse_exposure_config(_config_file)
+            # Re-assert software trigger — CameraLoadParameter may have restored
+            # continuous mode (0) from a previous stream session's saved config.
+            mvsdk.CameraSetTriggerMode(h, 1)
             mvsdk.CameraSetAeState(h, _ae_state)
             mvsdk.CameraSetAeTarget(h, _ae_target)
             if not _ae_state:
                 mvsdk.CameraSetExposureTime(h, _exp_time)
-            # Re-assert software trigger — CameraLoadParameter may have restored
-            # continuous mode (0) from a previous stream session's saved config.
-            mvsdk.CameraSetTriggerMode(h, 1)
 
         # CameraPlay starts the SDK's internal grab thread; subsequent
         # CameraGetImageBuffer calls pull from its ring buffer.
@@ -241,15 +243,44 @@ class MindVisionCamera(BaseCamera):
     def mode(self) -> CameraMode:
         return self._mode
 
+    def set_trigger_mode(self, mode: int) -> None:
+        """Set the SDK trigger mode while preserving the auto-exposure state.
+
+        CameraSetTriggerMode resets the AE state to manual on every call, so we
+        snapshot AE / AE target / exposure beforehand and restore them after.
+        All trigger-mode changes (mode switches, stream start/stop) must go
+        through here so auto-exposure survives them.
+        """
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        h = self._h_camera
+        try:
+            ae = mvsdk.CameraGetAeState(h)
+            target = mvsdk.CameraGetAeTarget(h)
+            exp = mvsdk.CameraGetExposureTime(h)
+        except Exception:
+            ae = target = exp = None
+
+        mvsdk.CameraSetTriggerMode(h, mode)
+
+        if ae is not None:
+            try:
+                mvsdk.CameraSetAeState(h, ae)
+                mvsdk.CameraSetAeTarget(h, target)
+                if not ae:
+                    mvsdk.CameraSetExposureTime(h, exp)
+            except Exception:
+                logger.warning("mindvision_reapply_ae_after_trigger_failed")
+
     def set_mode(self, mode: CameraMode) -> None:
         if self._h_camera is None:
             raise RuntimeError("Camera not open")
         if mode == CameraMode.HARDWARE_TRIGGER:
-            mvsdk.CameraSetTriggerMode(self._h_camera, 2)
+            self.set_trigger_mode(2)
         else:
             # STREAM and CAPTURE both idle in software trigger; stream_frames()
             # activates continuous mode automatically while a stream is active.
-            mvsdk.CameraSetTriggerMode(self._h_camera, 1)
+            self.set_trigger_mode(1)
         self._mode = mode
         logger.info("camera_mode_changed", mode=mode.value)
 
@@ -466,7 +497,7 @@ class MindVisionCamera(BaseCamera):
                     )
 
                 if not _continuous_active and self._mode != CameraMode.HARDWARE_TRIGGER:
-                    mvsdk.CameraSetTriggerMode(h, 0)  # continuous while streaming
+                    self.set_trigger_mode(0)  # continuous while streaming (preserves AE)
                     _continuous_active = True
 
                 start = time.monotonic()
@@ -498,7 +529,7 @@ class MindVisionCamera(BaseCamera):
             # and reverting here would break it.
             if self._stream_count == 0 and self._h_camera is not None and self._mode != CameraMode.HARDWARE_TRIGGER:
                 try:
-                    mvsdk.CameraSetTriggerMode(self._h_camera, 1)  # back to software trigger
+                    self.set_trigger_mode(1)  # back to software trigger (preserves AE)
                     logger.info("stream_ended_reverted_to_software_trigger")
                 except Exception:
                     logger.warning("mindvision_revert_trigger_failed")

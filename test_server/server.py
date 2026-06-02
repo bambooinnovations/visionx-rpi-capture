@@ -3,8 +3,9 @@
 Start with:  uv run --group test-server python test_server/server.py
 Then open:   http://<pi-ip>:8888/
 
-POST /upload    — capture endpoint; accepts any multipart form fields alongside the image
-GET  /          — real-time monitor page (WebSocket-updated, no refresh needed)
+POST /upload        — stitched capture endpoint; accepts any multipart form fields alongside the image
+POST /upload-raw    — raw per-camera capture endpoint; same behaviour as /upload
+GET  /              — real-time monitor page (WebSocket-updated, no refresh needed)
 GET  /images/{filename} — serve a received image
 """
 from __future__ import annotations
@@ -88,8 +89,7 @@ async def _broadcast(payload: dict) -> None:
         _clients.remove(ws)
 
 
-@app.post("/upload")
-async def upload(request: Request):
+async def _handle_upload(request: Request, kind: str):
     form = await request.form()
 
     # Find the image file — accept any field name, fall back to first file found.
@@ -104,17 +104,12 @@ async def upload(request: Request):
     filename = f"{int(time.time())}_{image_id}.jpg"
     (SAVE_DIR / filename).write_bytes(content)
 
-    # Collect every non-file form field as metadata — whatever was sent.
-    meta = {
-        k: v
-        for k, v in form.items()
-        if not hasattr(v, "read")
-    }
-
+    meta = {k: v for k, v in form.items() if not hasattr(v, "read")}
     exif_info = _extract_exif(content)
 
     payload = {
         "id": image_id,
+        "kind": kind,
         "received_at": datetime.now(timezone.utc).isoformat(),
         "filename": filename,
         "original_filename": image_field.filename,
@@ -128,6 +123,16 @@ async def upload(request: Request):
 
     await _broadcast(payload)
     return {"status": "received", **payload}
+
+
+@app.post("/upload")
+async def upload(request: Request):
+    return await _handle_upload(request, "stitch")
+
+
+@app.post("/upload-raw")
+async def upload_raw(request: Request):
+    return await _handle_upload(request, "raw")
 
 
 @app.get("/health")
@@ -183,6 +188,20 @@ _HTML = """<!DOCTYPE html>
     padding: 14px;
     animation: pop 0.15s ease;
   }
+  .card.raw { border-left-color: #fb923c; }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.6rem;
+    font-weight: bold;
+    letter-spacing: 0.08em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    vertical-align: middle;
+    margin-left: 6px;
+  }
+  .badge-stitch { background: #14532d; color: #4ade80; }
+  .badge-raw    { background: #431407; color: #fb923c; }
   @keyframes pop {
     from { opacity: 0; transform: translateY(-6px); }
     to   { opacity: 1; transform: translateY(0); }
@@ -306,14 +325,18 @@ function addCard(d) {
       <div class="section-label">camera exif</div>
       <table>${exifEntries.map(([k, v]) => row(k, v)).join("")}</table>` : "";
 
+  const isRaw   = d.kind === "raw";
+  const badgeClass = isRaw ? "badge-raw" : "badge-stitch";
+  const badgeLabel = isRaw ? "RAW" : "STITCH";
+
   const card = document.createElement("div");
-  card.className = "card";
+  card.className = "card" + (isRaw ? " raw" : "");
   card.innerHTML = `
     <img class="thumb" src="${d.image_url}" loading="lazy"
          alt="capture ${uid}" onclick="window.open(this.src)"
          title="Click to open full size">
     <div class="meta-wrap">
-      <div class="capture-id">#${uid}</div>
+      <div class="capture-id">#${uid}<span class="badge ${badgeClass}">${badgeLabel}</span></div>
 
       <div class="section-label">server</div>
       <table>${serverRows}</table>

@@ -55,6 +55,8 @@ db_path = "/tmp/visionx_metrics.db"
 # local_max_files     = 200      # max number of files to keep; oldest deleted first (0 = unlimited)
 # local_max_mb        = 500      # max total size in MB; oldest deleted first (0 = unlimited)
 # health_check_url    = "https://yoursite.com/health"  # GET this before starting; omit to skip check
+# raw_destination_url = ""       # where to POST raw (per-camera) images; leave blank to disable
+# send_raw_images     = false    # set true during debug to also upload raw images alongside the stitch
 
 # Background task that removes stale capture temp directories.
 [cleanup]

@@ -1164,8 +1164,6 @@ def create_blueprint(
         frame_interval = 1.0 / fps
 
         def generate():
-            import mvsdk
-
             _continuous_started = False
             try:
                 while True:
@@ -1181,7 +1179,7 @@ def create_blueprint(
                         and not _continuous_started
                         and cam.mode != CameraMode.HARDWARE_TRIGGER
                     ):
-                        mvsdk.CameraSetTriggerMode(cam._h_camera, 0)
+                        cam.set_trigger_mode(0)  # preserves AE
                         _continuous_started = True
                         time.sleep(0.1)
 
@@ -1213,7 +1211,7 @@ def create_blueprint(
                     and not cam._streaming
                 ):
                     try:
-                        mvsdk.CameraSetTriggerMode(cam._h_camera, 1)
+                        cam.set_trigger_mode(1)  # preserves AE
                     except Exception:
                         pass
 
@@ -1253,8 +1251,6 @@ def create_blueprint(
         frame_interval = 1.0 / fps
 
         def generate():
-            import mvsdk
-
             _continuous_started = False
             try:
                 while True:
@@ -1269,7 +1265,7 @@ def create_blueprint(
                         and not _continuous_started
                         and cam.mode != CameraMode.HARDWARE_TRIGGER
                     ):
-                        mvsdk.CameraSetTriggerMode(cam._h_camera, 0)
+                        cam.set_trigger_mode(0)  # preserves AE
                         _continuous_started = True
                         time.sleep(0.1)
 
@@ -1298,7 +1294,7 @@ def create_blueprint(
                     and not cam._streaming
                 ):
                     try:
-                        mvsdk.CameraSetTriggerMode(cam._h_camera, 1)
+                        cam.set_trigger_mode(1)  # preserves AE
                     except Exception:
                         pass
 
@@ -1421,7 +1417,7 @@ def create_blueprint(
                         and not _continuous_started
                         and cam.mode != CameraMode.HARDWARE_TRIGGER
                     ):
-                        mvsdk.CameraSetTriggerMode(cam._h_camera, 0)
+                        cam.set_trigger_mode(0)  # preserves AE
                         _continuous_started = True
                         time.sleep(0.1)
 
@@ -1473,7 +1469,7 @@ def create_blueprint(
                     and not cam._streaming
                 ):
                     try:
-                        mvsdk.CameraSetTriggerMode(cam._h_camera, 1)
+                        cam.set_trigger_mode(1)  # preserves AE
                     except Exception:
                         pass
 
