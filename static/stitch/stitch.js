@@ -606,7 +606,7 @@ const calWizard = {
     const img = document.getElementById('cal-preview-img');
     clearError();
     try {
-      const blob = await apiFetch('/api/stitch/preview');
+      const blob = await apiFetch('/api/stitch/capture');
       if (state.calPreviewBlobUrl) URL.revokeObjectURL(state.calPreviewBlobUrl);
       state.calPreviewBlobUrl = URL.createObjectURL(blob);
       img.src = state.calPreviewBlobUrl;

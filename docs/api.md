@@ -680,7 +680,7 @@ Remove colour correction data without touching the stitch calibration. Returns `
 
 ---
 
-### `GET /api/stitch/preview`
+### `GET /api/stitch/capture`
 
 Capture all cameras, apply homographies, blend, and return a single stitched JPEG. Returns `412` with a hint if calibration is missing or incomplete.
 

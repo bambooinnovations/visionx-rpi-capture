@@ -776,8 +776,8 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
 
     # ── Preview ────────────────────────────────────────────────────────────────
 
-    @bp.route("/preview", methods=["GET"])
-    def preview():
+    @bp.route("/capture", methods=["GET"])
+    def capture():
         """Capture all cameras and return a single stitched JPEG.
 
         Returns 412 with a helpful message if calibration is missing or incomplete.
