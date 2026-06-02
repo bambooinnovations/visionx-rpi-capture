@@ -20,16 +20,20 @@ Returns capture performance statistics from the SQLite metrics database.
 
 ### `GET /rpi/stream`
 
-MJPEG live preview stream. Frame rate and JPEG quality are set in `configuration.toml` under `[stream]`.
+MJPEG live preview stream. Behaviour depends on whether `camera_id` is supplied and how many cameras are connected:
+
+- **`camera_id` supplied** — streams that specific camera regardless of calibration state.
+- **No `camera_id`, multiple cameras** — redirects to [`GET /api/stitch/stream`](#get-apistitch-stream): stitched composite if fully calibrated, single-camera fallback otherwise.
+- **No `camera_id`, single camera** — streams camera `0` directly (no redirect).
 
 For MindVision cameras, returns `409` if the camera is in `hardware_trigger` mode. Only one stream per camera is allowed — a new connection cancels the previous one.
 
 | Query param | Type | Default | Description |
 | ----------- | ---- | ------- | ----------- |
-| `camera_id` | int | `0` | Camera to stream |
-| `width` | int | config / sensor native | Override frame width in pixels (MindVision only) |
-| `height` | int | config / sensor native | Override frame height in pixels (MindVision only) |
-| `fps` | float | `stream.fps` from config | Override frames per second for this stream (MindVision only) |
+| `camera_id` | int | — | Camera to stream; omit to use smart auto-select |
+| `width` | int | config / sensor native | Override frame width in pixels (MindVision only, single-camera path) |
+| `height` | int | config / sensor native | Override frame height in pixels (MindVision only, single-camera path) |
+| `fps` | float | `stream.fps` from config | Override frames per second (MindVision only, single-camera path) |
 
 `width` and `height` can be set independently. The camera's original resolution is restored when the stream ends.
 
@@ -37,13 +41,19 @@ For MindVision cameras, returns `409` if the camera is in `hardware_trigger` mod
 
 ### `POST /rpi/capture`
 
-Capture one frame and return a JPEG. Returns `429` if a capture is already in progress, `503` if no camera is available, `409` if the camera is in `hardware_trigger` mode.
+Capture one frame and return a JPEG. Behaviour depends on whether `camera_id` is supplied and how many cameras are connected:
+
+- **`camera_id` supplied** — captures that specific camera regardless of calibration state.
+- **No `camera_id`, multiple cameras** — redirects (302) to [`GET /api/stitch/capture`](#get-apistitchcapture): stitched JPEG if fully calibrated, single-camera JPEG otherwise.
+- **No `camera_id`, single camera** — captures camera `0` directly (no redirect).
+
+Returns `429` if a capture is already in progress, `503` if no camera is available, `409` if the camera is in `hardware_trigger` mode.
 
 | Query param | Type | Default | Description |
 | ----------- | ---- | ------- | ----------- |
-| `camera_id` | int | `0` | Camera to capture from |
-| `width` | int | sensor native | Output width in pixels — must be provided with `height` |
-| `height` | int | sensor native | Output height in pixels — must be provided with `width` |
+| `camera_id` | int | — | Camera to capture from; omit to use smart auto-select |
+| `width` | int | sensor native | Output width in pixels — must be provided with `height` (single-camera path only) |
+| `height` | int | sensor native | Output height in pixels — must be provided with `width` (single-camera path only) |
 
 ---
 
