@@ -15,6 +15,8 @@ source "$SCRIPT_DIR/modules/camera.sh"
 source "$SCRIPT_DIR/modules/certs.sh"
 # shellcheck source=modules/mindvision.sh
 source "$SCRIPT_DIR/modules/mindvision.sh"
+# shellcheck source=modules/arduino.sh
+source "$SCRIPT_DIR/modules/arduino.sh"
 
 # ── User context ──────────────────────────────────────────────────────────────
 if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
@@ -155,6 +157,7 @@ _menu_check_status() {
         echo ""
         echo "    1.  ArduCam 64MP Hawkeye"
         echo "    2.  MindVision"
+        echo "    3.  Arduino IDE"
         echo "    0.  Back"
         echo ""
         read -rp "  Enter choice: " choice
@@ -162,6 +165,7 @@ _menu_check_status() {
         case "$choice" in
             1) check_arducam;    _pause ;;
             2) check_mindvision; _pause ;;
+            3) check_arduino;    _pause ;;
             0) return ;;
             *) log WARN "Invalid choice '${choice}'." ; _pause ;;
         esac
@@ -178,7 +182,8 @@ main() {
         echo "    1.  Check installation status"
         echo "    2.  Install ArduCam"
         echo "    3.  Install MindVision"
-        echo "    4.  Setup TLS certificates"
+        echo "    4.  Install Arduino IDE"
+        echo "    5.  Setup TLS certificates"
         echo "    0.  Exit"
         echo ""
         read -rp "  Enter choice: " choice
@@ -197,6 +202,10 @@ main() {
                 _prompt_reboot
                 ;;
             4)
+                install_arduino
+                _prompt_reboot
+                ;;
+            5)
                 setup_certs
                 _pause
                 ;;
