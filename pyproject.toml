@@ -20,6 +20,10 @@ rpi = [
 ]
 
 [dependency-groups]
+scripts = [
+    "numpy>=1.26",
+    "Pillow>=10.0",
+]
 test-server = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.29",

@@ -234,6 +234,146 @@ def health():
     return jsonify({"status": "ok"})
 
 
+def _build_system_status() -> tuple[bool, dict]:
+    """Return (ready, subsystems) reflecting the current state of all subsystems."""
+    # --- cameras ---
+    cam_list = []
+    for cam_id, cam in sorted(cameras.items()):
+        info = cam.camera_info()
+        entry = {
+            "id": cam_id,
+            "open": info.get("status") != "closed",
+            "serial": info.get("serial_number"),
+        }
+        if isinstance(cam, MindVisionCamera):
+            entry["mode"] = cam.mode.value
+        cam_list.append(entry)
+
+    cameras_ready = all(c["open"] for c in cam_list)
+    if isinstance(camera, MindVisionCamera):
+        cameras_ready = cameras_ready and all(
+            c.get("mode") == CameraMode.HARDWARE_TRIGGER.value for c in cam_list
+        )
+    cameras_subsystem = {"ready": cameras_ready, "cameras": cam_list}
+
+    # --- decoder (MindVision only) ---
+    decoder_subsystem = None
+    if isinstance(camera, MindVisionCamera):
+        s = _serial_listener.status()
+        running = s.get("running", False)
+        serial_connected = s.get("serial_connected", False)
+        trigger_enabled = s.get("trigger_enabled", False)
+        decoder_subsystem = {
+            "ready": running and serial_connected and trigger_enabled,
+            "running": running,
+            "serial_connected": serial_connected,
+            "trigger_enabled": trigger_enabled,
+        }
+
+    # --- config ---
+    destination_url = runtime_config.get(
+        "hw_trigger.destination_url", config.HW_TRIGGER_DESTINATION_URL
+    )
+    config_subsystem = {
+        "ready": bool(destination_url),
+        "destination_url": destination_url or "",
+    }
+
+    # --- stitching (multi-camera MindVision only) ---
+    stitching_subsystem = None
+    if isinstance(camera, MindVisionCamera) and len(cameras) > 1:
+        from blueprints.stitch import _load_calibration
+        cal = _load_calibration()
+        cal_camera_keys = list(cal.get("cameras", {}).keys()) if cal else []
+        active_ids = [str(i) for i in sorted(cameras.keys())]
+        stitching_subsystem = {
+            "ready": cal is not None and all(k in cal_camera_keys for k in active_ids),
+            "calibrated_cameras": [int(k) for k in cal_camera_keys],
+        }
+
+    # stitching not required — falls back to single camera when uncalibrated
+    ready = cameras_ready and config_subsystem["ready"]
+    if decoder_subsystem is not None:
+        ready = ready and decoder_subsystem["ready"]
+
+    subsystems = {"cameras": cameras_subsystem, "config": config_subsystem}
+    if decoder_subsystem is not None:
+        subsystems["decoder"] = decoder_subsystem
+    if stitching_subsystem is not None:
+        subsystems["stitching"] = stitching_subsystem
+
+    return ready, subsystems
+
+
+@app.route("/api/system/ready", methods=["GET"])
+def system_ready():
+    ready, subsystems = _build_system_status()
+    return jsonify({"ready": ready, "subsystems": subsystems})
+
+
+@app.route("/api/system/mode", methods=["POST"])
+def system_mode():
+    """Switch the system between high-level operating modes.
+
+    Body: {"mode": "fabric" | "regular"}
+
+    fabric  — hardware trigger + stitching pipeline (production capture).
+              Opens cameras, sets hardware trigger mode, starts the decoder.
+    regular — calibration / software trigger workflow.
+              Stops the decoder and reverts cameras to capture mode.
+    """
+    body = request.get_json(silent=True) or {}
+    mode = body.get("mode")
+    if mode not in ("fabric", "regular"):
+        return jsonify({"error": "mode must be 'fabric' or 'regular'"}), 400
+
+    actions: list[dict] = []
+
+    if isinstance(camera, MindVisionCamera):
+        if mode == "fabric":
+            for cam_id, cam in sorted(cameras.items()):
+                if cam.camera_info().get("status") == "closed":
+                    try:
+                        cam.open()
+                        actions.append({"action": "open_camera", "camera_id": cam_id, "ok": True})
+                    except Exception as exc:
+                        actions.append({"action": "open_camera", "camera_id": cam_id, "ok": False, "error": str(exc)})
+
+            for cam_id, cam in sorted(cameras.items()):
+                if cam.mode != CameraMode.HARDWARE_TRIGGER:
+                    try:
+                        cam.set_mode(CameraMode.HARDWARE_TRIGGER)
+                        actions.append({"action": "set_hardware_trigger_mode", "camera_id": cam_id, "ok": True})
+                    except Exception as exc:
+                        actions.append({"action": "set_hardware_trigger_mode", "camera_id": cam_id, "ok": False, "error": str(exc)})
+
+            if not _serial_listener.running:
+                try:
+                    _serial_listener.start(port=config.HW_TRIGGER_SERIAL_PORT, baud=config.HW_TRIGGER_SERIAL_BAUD)
+                    actions.append({"action": "start_decoder", "ok": True})
+                except Exception as exc:
+                    actions.append({"action": "start_decoder", "ok": False, "error": str(exc)})
+
+        elif mode == "regular":
+            if _serial_listener.running:
+                try:
+                    _serial_listener.stop()
+                    actions.append({"action": "stop_decoder", "ok": True})
+                except Exception as exc:
+                    actions.append({"action": "stop_decoder", "ok": False, "error": str(exc)})
+
+            for cam_id, cam in sorted(cameras.items()):
+                if cam.mode != CameraMode.CAPTURE:
+                    try:
+                        cam.set_mode(CameraMode.CAPTURE)
+                        actions.append({"action": "set_capture_mode", "camera_id": cam_id, "ok": True})
+                    except Exception as exc:
+                        actions.append({"action": "set_capture_mode", "camera_id": cam_id, "ok": False, "error": str(exc)})
+
+    ready, subsystems = _build_system_status()
+    return jsonify({"mode": mode, "actions": actions, "ready": ready, "subsystems": subsystems})
+
+
 @app.route("/api/metrics/stats")
 def metrics_stats():
     try:

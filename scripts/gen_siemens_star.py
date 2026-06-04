@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Generate a Siemens star focus target for letter paper.")
-    p.add_argument("--output", type=Path, default=Path("siemens_star_letter.png"),
+    p.add_argument("--output", type=Path, default=Path("targets/siemens_star_letter.png"),
                    help="Output PNG path (default: siemens_star_letter.png)")
     p.add_argument("--dpi", type=int, default=300,
                    help="Output resolution in DPI (default: 300)")
@@ -37,7 +37,7 @@ def main() -> None:
         import numpy as np
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
-        print("ERROR: numpy and Pillow are required. Run: uv sync")
+        print("ERROR: numpy and Pillow are required. Run: uv run --group scripts python scripts/gen_siemens_star.py")
         sys.exit(1)
 
     dpi = args.dpi

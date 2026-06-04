@@ -142,7 +142,7 @@ Both endpoints accept `?camera_id=N`.
 
 Wide-angle and short-focal-length lenses introduce barrel or pincushion distortion. Correcting it before stitching improves homography accuracy and removes bent straight lines from the output. The lens calibration workflow uses the same **ChArUco board** as stitch calibration to fit a camera matrix **K** and distortion coefficients **D** for each camera.
 
-**Board file:** [`charuco/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png`](../charuco/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png)
+**Board file:** [`targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png`](../targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png)
 
 ### Overview
 
@@ -270,7 +270,7 @@ curl -X DELETE http://localhost:8080/rpi/mindvision/lens \
 
 Multi-camera stitching uses a **ChArUco board** to compute a homography for each camera — a transform that maps each camera's pixel coordinates to a shared flat coordinate plane (the physical surface of the board). Once calibrated, all cameras are expressed in the same coordinate space and can be composited into a single image.
 
-**Board file:** [`charuco/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png`](../charuco/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png)
+**Board file:** [`targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png`](../targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png)
 
 - 20 × 14 squares, 10 mm checker size, 8 mm ArUco marker size, DICT_4X4_250
 
