@@ -4,12 +4,12 @@ Flask API that captures images from a camera and serves them over HTTP on port *
 
 ## Requirements
 
-| Requirement  | Detail                                                                                              |
-| ------------ | --------------------------------------------------------------------------------------------------- |
+| Requirement  | Detail                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------- |
 | **Hardware** | Raspberry Pi 5, 4B, 3B+, 3A+, Zero, Zero 2W, CM3/CM3+/CM4                                         |
 | **Camera**   | Arducam 64MP Hawkeye **or** standard Pi Camera v2 / v3 / HQ (MIPI CSI-2) **or** MindVision camera |
-| **OS**       | Raspberry Pi OS — Bullseye, Bookworm, or Trixie (64-bit recommended)                               |
-| **Internet** | Required during setup (driver downloads, uv installer, TLS certificates)                           |
+| **OS**       | Raspberry Pi OS — Bullseye, Bookworm, or Trixie (64-bit recommended)                              |
+| **Internet** | Required during setup (driver downloads, uv installer, TLS certificates)                          |
 
 ## Installation
 
@@ -20,86 +20,27 @@ make setup        # or: sudo bash scripts/setup.sh
 
 The setup script presents a menu with four options:
 
-| Option | Action |
-| ------ | ------ |
-| 1 | Check installation status |
-| 2 | Install ArduCam (downloads Pivariety drivers, patches boot config, installs app + systemd) |
-| 3 | Install MindVision (installs MindVision SDK libraries and installs app + systemd) |
-| 4 | Setup TLS certificates (can be run independently at any time) |
+| Option | Action                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------ |
+| 1      | Check installation status                                                                  |
+| 2      | Install ArduCam (downloads Pivariety drivers, patches boot config, installs app + systemd) |
+| 3      | Install MindVision (installs MindVision SDK libraries and installs app + systemd)          |
+| 4      | Setup TLS certificates (can be run independently at any time)                              |
 
 After installation the service starts automatically on reboot.
 
 ### Verify
 
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:8080/api/health
 curl -X POST http://localhost:8080/rpi/capture --output test.jpg
 ```
 
 ## TLS Certificates
 
-The platform frontend is served over HTTPS by a Caddy reverse proxy that uses an internal CA. For the Raspberry Pi's browser (Chromium) and system tools (`curl`, `wget`, Python `requests`) to trust this CA, the setup script installs the root and intermediate certificates.
+The platform frontend is served over HTTPS by a Caddy reverse proxy using an internal CA. The setup script installs the root and intermediate certificates into the system CA store and Chrome/Chromium NSS database automatically.
 
-### What the setup does
-
-The cert module (`scripts/modules/certs.sh`) runs automatically as part of `make setup`:
-
-1. **Downloads** the Caddy internal CA root and intermediate certificates from the [certs repo](https://github.com/bambooinnovations/certs)
-2. **System CA store** — copies both certs to `/usr/local/share/ca-certificates/` and runs `update-ca-certificates`, so `curl`, `wget`, Python, and other tools that use the system trust store will accept the platform's TLS certificate
-3. **Chrome/Chromium NSS database** — installs `libnss3-tools` (if needed) and adds both certs to the NSS database (`~/.pki/nssdb`) for **every user** on the system (root + all UID >= 1000). If Chrome is running for a user it is restarted so the new certs take effect
-4. **Verifies** the root cert against the system CA store
-
-### Manual re-run
-
-To re-install certificates without running the full setup, use option 4 in the setup menu:
-
-```bash
-make setup   # then choose option 4
-```
-
-Or invoke the cert module directly:
-
-```bash
-sudo bash -c '
-  source scripts/lib/utils.sh
-  source scripts/modules/certs.sh
-  setup_certs
-'
-```
-
-### DNS setup
-
-Each Pi needs host entries pointing to the server running Caddy. Edit `/etc/hosts`:
-
-```
-server_ip visionxai.com api.visionxai.com
-```
-
-Replace the IP with your actual server address.
-
-### Verifying certificates
-
-After setup (or after a manual re-run), verify the certs are installed correctly:
-
-```bash
-# System trust store — should complete without SSL errors
-curl https://visionxai.com
-
-# Chromium NSS database — look for "Caddy VisionX Root" with trust flags "C,,"
-certutil -d sql:$HOME/.pki/nssdb -L
-
-# If Chromium was open during cert install, restart it to pick up the new certs
-pkill -f chromium
-```
-
-### Troubleshooting
-
-| Symptom | Fix |
-| ------- | --- |
-| `curl: (60) SSL certificate problem` | Certs not in system store — re-run setup or the manual command above |
-| Chromium shows "Not Secure" / cert warning | NSS certs missing for your user — re-run setup (installs for all users) |
-| `certutil: command not found` | `sudo apt install libnss3-tools` |
-| Caddy regenerated its CA (e.g. after deleting `caddy/pki/`) | The old certs are invalid — re-run setup to fetch and install the new ones |
+See **[docs/tls-setup.md](docs/tls-setup.md)** for manual re-run instructions, DNS setup, and troubleshooting.
 
 ## API Endpoints
 
@@ -107,204 +48,42 @@ Full parameter and response details: **[docs/api.md](docs/api.md)**
 
 ### Core
 
-| Method | Path             | Description                                         |
-| ------ | ---------------- | --------------------------------------------------- |
-| GET    | `/health`        | Health check — `{"status": "ok"}`                   |
-| POST   | `/rpi/capture`   | Capture and return an image (JPEG)                  |
-| GET    | `/rpi/stream`    | MJPEG live preview stream                           |
-| GET    | `/metrics/stats` | Capture performance stats (durations, sizes, ratio) |
+| Method | Path                 | Description                                         |
+| ------ | -------------------- | --------------------------------------------------- |
+| GET    | `/api/health`        | Health check — `{"status": "ok"}`                   |
+| POST   | `/rpi/capture`       | Capture and return an image (JPEG)                  |
+| GET    | `/rpi/stream`        | MJPEG live preview stream                           |
+| GET    | `/api/metrics/stats` | Capture performance stats (durations, sizes, ratio) |
 
 ### Runtime configuration
 
-| Method | Path                    | Description                                         |
-| ------ | ----------------------- | --------------------------------------------------- |
-| GET    | `/rpi/config`           | Return effective config (toml + runtime overrides)  |
-| PATCH  | `/rpi/config`           | Update one or more values at runtime (no restart)   |
-| DELETE | `/rpi/config/<key>`     | Remove a runtime override, reverting to toml value  |
+| Method | Path                       | Description                                        |
+| ------ | -------------------------- | -------------------------------------------------- |
+| GET    | `/api/system/config`       | Return effective config (toml + runtime overrides) |
+| PATCH  | `/api/system/config`       | Update one or more values at runtime (no restart)  |
+| DELETE | `/api/system/config/<key>` | Remove a runtime override, reverting to toml value |
 
-PATCH body is a JSON object of `"section.key": value` pairs. Keys that can be updated at runtime:
+Overrides are persisted to `runtime_config.json` (gitignored) and survive restarts. See [docs/api.md](docs/api.md#system-configuration) for the full list of patchable keys.
 
-| Key                              | Type   |
-| -------------------------------- | ------ |
-| `stream.fps`                     | int    |
-| `stream.quality`                 | int    |
-| `hw_trigger.destination_url`     | string |
-| `hw_trigger.destination_api_key` | string |
-| `hw_trigger.retry_attempts`      | int    |
-| `hw_trigger.timeout_seconds`     | int    |
-| `hw_trigger.save_local`          | bool   |
-| `hw_trigger.local_max_files`     | int    |
-| `hw_trigger.local_max_mb`        | int    |
+### MindVision endpoints
 
-Overrides are persisted to `runtime_config.json` (gitignored) and survive restarts.
-
-### MindVision-specific endpoints
-
-Registered only when `camera.type = "mindvision"`. All routes are prefixed `/rpi/mindvision`. Pass `?camera_id=N` to target a specific camera (default `0`).
-
-| Method | Path                                       | Description                                                         |
-| ------ | ------------------------------------------ | ------------------------------------------------------------------- |
-| GET    | `/rpi/mindvision/cameras`                  | List all connected cameras (index, serial, model, port type)        |
-| GET    | `/rpi/mindvision/mode`                     | Get the active mode for a camera                                    |
-| POST   | `/rpi/mindvision/mode`                     | Set the active mode (`stream`, `capture`, or `hardware_trigger`)    |
-| GET    | `/rpi/mindvision/white-balance`            | Return current white balance gains                                  |
-| POST   | `/rpi/mindvision/calibrate-wb`             | Run one-shot white balance calibration and persist gains            |
-| POST   | `/rpi/mindvision/capture-all`              | Capture from all cameras simultaneously; returns a ZIP archive      |
-| GET    | `/rpi/mindvision/orientation`              | Get current rotation and mirror state                               |
-| POST   | `/rpi/mindvision/rotation`                 | Set SDK rotation (0°/90°/180°/270°) and persist                    |
-| POST   | `/rpi/mindvision/mirror`                   | Set SDK horizontal or vertical mirror and persist                   |
-| GET    | `/rpi/mindvision/calibration/stream`       | MJPEG stream with focus peaking overlay, sharpness score, and optional ChArUco detection (`?charuco=1`) |
-| GET    | `/rpi/mindvision/calibration/score`        | Current sharpness score and trend as JSON (single frame)            |
-
-#### Camera modes
-
-| Mode               | Behaviour                                                                         |
-| ------------------ | --------------------------------------------------------------------------------- |
-| `stream`           | Continuous grab loop; optimised for low-latency MJPEG preview                    |
-| `capture`          | Triggered grab; each `POST /rpi/capture` pulls one frame                          |
-| `hardware_trigger` | Camera waits for a physical signal; each trigger posts the image to `hw_trigger.destination_url` |
-
-Switch modes with:
-
-```bash
-curl -X POST http://localhost:8080/rpi/mindvision/mode \
-     -H 'Content-Type: application/json' \
-     -d '{"mode": "hardware_trigger"}'
-```
-
-### `POST /rpi/capture`
-
-Optional query parameters to override capture resolution:
-
-| Parameter | Type | Description             |
-| --------- | ---- | ----------------------- |
-| `width`   | int  | Output width in pixels  |
-| `height`  | int  | Output height in pixels |
-
-Both must be provided together. Defaults to the camera profile's `capture_size` (e.g. `4624×3472` for Arducam 64MP).
-
-Returns `400` if only one dimension is provided, `429` if a capture is already in progress, `503` if no camera is detected.
-
-### `GET /rpi/stream`
-
-Returns a continuous MJPEG stream. Frame rate and JPEG quality are configured in `configuration.toml` under `[stream]`.
+Registered only when `camera.type = "mindvision"`. See [docs/api.md](docs/api.md) for the full reference covering cameras, white balance, orientation, settings, calibration streams, lens calibration, stitch, and decoder endpoints.
 
 ## Calibration
 
-See **[docs/calibration.md](docs/calibration.md)** for full procedures covering:
+- General procedures (focus, white balance, lens distortion, stitch): **[docs/calibration.md](docs/calibration.md)**
+- Fabric station step-by-step guide (includes UI screenshots and machine prerequisites): **[docs/frabic-station/calibration.md](docs/frabic-station/calibration.md)**
 
-- White balance (one-push, gains persisted automatically)
-- Focus (live stream with peaking overlay and sharpness trend)
-- Camera orientation (rotation and mirror, persisted to device config)
-- Multi-camera stitch calibration (ChArUco board, homography-based, supports non-overlapping camera arrangements)
+## Hardware Trigger Mode (MindVision)
 
----
-
-## Hardware trigger mode (MindVision)
-
-Hardware trigger mode is used when a physical signal — not a software call — fires the camera sensor. An Arduino reads a quadrature encoder (or manual button) and pulses pin D9 directly to the camera's trigger input. At the same moment it sends a JSON line over serial so the Pi knows a frame was captured and can collect it.
+An Arduino reads a quadrature encoder and pulses pin D9 directly to the camera's trigger input. The Pi collects the frame over serial and uploads/saves it.
 
 ```
 Encoder/button → Arduino D9 ──► Camera trigger pin  (frame captured by hardware)
                  Arduino TX  ──► Pi serial RX        (JSON notification → collect & upload)
 ```
 
-### 1. Configure `configuration.toml`
-
-Uncomment and fill in the `[hw_trigger]` section:
-
-```toml
-[hw_trigger]
-serial_port         = "/dev/ttyACM0"                      # serial port the Arduino is connected to
-serial_baud         = 115200                              # must match the Arduino sketch (default 115200)
-destination_url     = "https://yoursite.com/api/captures" # where to POST triggered images (leave blank to skip upload)
-destination_api_key = ""                                  # sent as Authorization: Bearer <key>; leave blank if not needed
-save_local          = true                                # also write a copy to local_save_dir
-local_save_dir      = "data/hw_captures"                  # created automatically
-local_max_files     = 200                                 # oldest files deleted first (0 = unlimited)
-local_max_mb        = 500                                 # oldest files deleted first (0 = unlimited)
-```
-
-`destination_url` and `destination_api_key` can also be changed live without a restart:
-
-```bash
-curl -X PATCH http://localhost:8080/rpi/config \
-     -H 'Content-Type: application/json' \
-     -d '{"hw_trigger.destination_url": "https://yoursite.com/api/captures"}'
-```
-
-### 2. Start the listener
-
-```bash
-curl -X POST http://localhost:8080/rpi/mindvision/serial-trigger/start
-```
-
-This switches every connected MindVision camera to `hardware_trigger` mode (SDK waits for the physical pin, no software trigger is issued) and starts reading JSON lines from the serial port. Each trigger event grabs the already-captured frame from the SDK buffer and uploads/saves it.
-
-To override the serial port or baud rate at start time without changing the config file:
-
-```bash
-curl -X POST http://localhost:8080/rpi/mindvision/serial-trigger/start \
-     -H 'Content-Type: application/json' \
-     -d '{"port": "/dev/ttyUSB1", "baud": 115200}'
-```
-
-### 3. Check status
-
-```bash
-curl http://localhost:8080/rpi/mindvision/serial-trigger/status
-```
-
-```json
-{
-  "running": true,
-  "uptime_seconds": 42.3,
-  "triggers_received": 12,
-  "captures_ok": 12,
-  "captures_failed": 0,
-  "uploads_ok": 12,
-  "uploads_failed": 0
-}
-```
-
-### 4. Stop the listener
-
-```bash
-curl -X POST http://localhost:8080/rpi/mindvision/serial-trigger/stop
-```
-
-This stops the serial listener and reverts all cameras back to `capture` mode (software trigger).
-
-### Serial trigger endpoints
-
-| Method | Path                                      | Description                                              |
-| ------ | ----------------------------------------- | -------------------------------------------------------- |
-| POST   | `/rpi/mindvision/serial-trigger/start`    | Start listening; switches cameras to `hardware_trigger`  |
-| POST   | `/rpi/mindvision/serial-trigger/stop`     | Stop listening; reverts cameras to `capture` mode        |
-| GET    | `/rpi/mindvision/serial-trigger/status`   | Running state, uptime, and capture/upload counters       |
-| GET    | `/rpi/mindvision/hw-trigger/server-health`| Check reachability of the configured `health_check_url`  |
-
-### Arduino sketch
-
-The sketch lives at `arduino/decoder_trigger.ino`. Key wiring:
-
-| Pin | Connection |
-| --- | ---------- |
-| D2  | Encoder channel A |
-| D3  | Encoder channel B |
-| D4  | Manual trigger button (other end to GND) |
-| D9  | Camera trigger output (LOW = trigger active) |
-
-Serial output is 115200 baud. Each trigger event emits one JSON line:
-
-```json
-{"type":"trigger","source":"encoder","count":118,"trigger":1}
-{"type":"trigger","source":"manual","count":0,"trigger":1}
-```
-
-`source` is `"encoder"` for distance-based triggers or `"manual"` for the button. `count` is the cumulative encoder count and `trigger` is the trigger sequence number.
-
----
+See **[docs/hardware-trigger.md](docs/hardware-trigger.md)** for full setup, configuration, curl examples, and Arduino wiring.
 
 ## Configuration
 
@@ -325,7 +104,6 @@ type = "picamera2"         # "picamera2" (CSI cameras) or "mindvision" (MindVisi
 sharpness = 1.0            # ISP sharpness; 0 = off (picamera2 only)
 lock_exposure = false      # Lock AE/AWB after startup for consistent captures (picamera2 only)
 # lens_position = 2.0      # Manual focus in dioptres; omit for continuous autofocus (picamera2 only)
-
 
 [stream]
 fps = 15                   # Max MJPEG stream frame rate
@@ -355,7 +133,7 @@ max_age_seconds  = 300     # Minimum age before removal
 
 Camera-specific capture and stream resolutions are defined under `[camera_profiles.*]` — see the file for per-model defaults. These profiles apply to `picamera2` only; MindVision cameras use their native sensor resolution.
 
-The `hw_trigger.destination_url` and `destination_api_key` can be changed without a restart using `PATCH /rpi/config`.
+Runtime keys (`destination_url`, `destination_api_key`, etc.) can be changed without a restart via `PATCH /api/system/config`.
 
 ## Make Targets
 
@@ -376,10 +154,10 @@ The `hw_trigger.destination_url` and `destination_api_key` can be changed withou
 
 > Applies to Arducam only. Standard Pi Cameras are detected automatically — no port selection needed.
 
-| Port | Overlay in `config.txt`          | When to use                                     |
-| ---- | -------------------------------- | ----------------------------------------------- |
-| CAM1 | `dtoverlay=arducam-64mp`         | Single CSI connector (default)                  |
-| CAM0 | `dtoverlay=arducam-64mp,cam0`    | Dual-port boards: Raspberry Pi 5, CM4 carriers  |
+| Port | Overlay in `config.txt`       | When to use                                    |
+| ---- | ----------------------------- | ---------------------------------------------- |
+| CAM1 | `dtoverlay=arducam-64mp`      | Single CSI connector (default)                 |
+| CAM0 | `dtoverlay=arducam-64mp,cam0` | Dual-port boards: Raspberry Pi 5, CM4 carriers |
 
 To change after installation, edit the `dtoverlay` line in `/boot/firmware/config.txt` (Bookworm/Trixie) or `/boot/config.txt` (Bullseye) and reboot.
 
@@ -405,7 +183,7 @@ rpi-capture-api/
 │   └── calibrate.sh        # Live camera preview for lens calibration
 ├── app.py                  # Flask application and route handlers
 ├── config.py               # TOML config loader — typed module-level constants
-├── runtime_config.py       # Runtime override persistence (GET/PATCH/DELETE /rpi/config)
+├── runtime_config.py       # Runtime override persistence (GET/PATCH/DELETE /api/system/config)
 ├── calibration.py          # Calibration data persistence (calibration.json)
 ├── camera/
 │   ├── __init__.py         # create_camera() factory — returns the right BaseCamera
@@ -414,10 +192,15 @@ rpi-capture-api/
 │   ├── mindvision.py       # MindVisionCamera — wraps mvsdk; supports stream/capture/hardware_trigger modes
 │   └── mindvision_trigger.py  # SerialTriggerListener — reads Arduino JSON over serial, captures on each trigger
 ├── blueprints/
-│   ├── mindvision.py       # MindVision-specific routes (/rpi/mindvision/*); registered only for MindVision cameras
-│   └── stitch.py           # Multi-camera stitch calibration and composite view (/rpi/mindvision/stitch/*)
+│   ├── mindvision.py       # MindVision-specific routes (/api/cameras/*); registered only for MindVision cameras
+│   └── stitch.py           # Multi-camera stitch calibration and composite view (/api/stitch/*)
 ├── docs/
-│   └── calibration.md      # Full calibration procedures (WB, focus, orientation, stitch)
+│   ├── api.md              # Full API reference
+│   ├── calibration.md      # General calibration procedures (WB, focus, orientation, stitch)
+│   ├── hardware-trigger.md # Hardware trigger mode setup guide
+│   ├── tls-setup.md        # TLS certificate installation and troubleshooting
+│   ├── integration.md      # Integration guide for receiving captures
+│   └── frabic-station/     # Fabric station specific guides
 ├── mvsdk.py                # MindVision SDK Python bindings
 ├── log_config.py           # structlog configuration
 ├── metrics.py              # SQLite-backed capture performance metrics

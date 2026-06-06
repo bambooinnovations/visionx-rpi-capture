@@ -223,13 +223,23 @@ def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | 
 class SerialTriggerListener:
     """Background thread that reads Arduino trigger events and sends commands."""
 
-    def __init__(self, cameras: dict[int, "MindVisionCamera"]) -> None:
+    def __init__(
+        self,
+        cameras: dict[int, "MindVisionCamera"],
+        load_calibration=None,
+        stitch_frames=None,
+    ) -> None:
         self._cameras = cameras
+        # Optional stitch helpers injected by the caller so this module does not
+        # import from the blueprints layer (avoids a circular dependency).
+        self._load_calibration = load_calibration
+        self._stitch_frames = stitch_frames
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._send_queue: queue.SimpleQueue = queue.SimpleQueue()
         self._state_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
         # Captures and uploads run in a thread pool so the serial I/O loop is
         # never blocked waiting for image grabs or network uploads.
         self._capture_pool = concurrent.futures.ThreadPoolExecutor(
@@ -324,15 +334,17 @@ class SerialTriggerListener:
         return self._load_file_config()
 
     def status(self) -> dict:
-        uptime = None
-        if self._stats["started_at"] is not None and self.running:
-            uptime = round(time.time() - self._stats["started_at"], 1)
+        with self._stats_lock:
+            uptime = None
+            if self._stats["started_at"] is not None and self.running:
+                uptime = round(time.time() - self._stats["started_at"], 1)
+            stats_snapshot = {k: v for k, v in self._stats.items() if k != "started_at"}
         with self._state_lock:
             state = dict(self._arduino_state)
         return {
             "running": self.running,
             "uptime_seconds": uptime,
-            **{k: v for k, v in self._stats.items() if k != "started_at"},
+            **stats_snapshot,
             **state,
         }
 
@@ -443,7 +455,8 @@ class SerialTriggerListener:
                 self._arduino_state["speed_cms"] = event.get("speed_cms", 0.0)
                 self._arduino_state["encoder_count"] = event.get("count", 0)
 
-            self._stats["triggers_received"] += 1
+            with self._stats_lock:
+                self._stats["triggers_received"] += 1
             logger.info(
                 "serial_trigger_received",
                 source=event.get("source"),
@@ -477,7 +490,6 @@ class SerialTriggerListener:
         """Capture from all cameras, stitch, and upload. Called once per trigger event."""
         import cv2
         import numpy as np
-        from blueprints.stitch import _load_calibration, _stitch_frames
 
         ts_ms = int(time.time() * 1000)
         tmp_dir = config.CAPTURE_TMP_DIR / "hw_trigger"
@@ -492,10 +504,12 @@ class SerialTriggerListener:
                     jpeg_bytes = image_path.read_bytes()
                 serial = cam.serial_number or str(cam_id)
                 raw_captures[cam_id] = (jpeg_bytes, serial)
-                self._stats["captures_ok"] += 1
+                with self._stats_lock:
+                    self._stats["captures_ok"] += 1
                 logger.info("hw_trigger_captured", camera_id=cam_id, trigger=event)
             except Exception as exc:
-                self._stats["captures_failed"] += 1
+                with self._stats_lock:
+                    self._stats["captures_failed"] += 1
                 logger.warning("hw_trigger_capture_failed", camera_id=cam_id, error=str(exc))
 
         if not raw_captures:
@@ -510,17 +524,18 @@ class SerialTriggerListener:
                     _save_image_locally(jpeg_bytes, event, filename=filename)
                 if raw_url:
                     ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename)
-                    if ok:
-                        self._stats["uploads_ok"] += 1
-                    else:
-                        self._stats["uploads_failed"] += 1
+                    with self._stats_lock:
+                        if ok:
+                            self._stats["uploads_ok"] += 1
+                        else:
+                            self._stats["uploads_failed"] += 1
 
         # --- 3. Stitch and upload ---
         stitch_filename = f"{ts_ms}_stitch.jpg"
         stitch_bytes: bytes | None = None
 
-        if len(raw_captures) >= 2:
-            cal = _load_calibration()
+        if len(raw_captures) >= 2 and self._load_calibration and self._stitch_frames:
+            cal = self._load_calibration()
             if cal:
                 frames: dict[int, np.ndarray] = {}
                 for cam_id, (jpeg_bytes, _) in raw_captures.items():
@@ -529,7 +544,7 @@ class SerialTriggerListener:
                     if frame is not None:
                         frames[cam_id] = frame
 
-                stitched = _stitch_frames(frames, cal) if frames else None
+                stitched = self._stitch_frames(frames, cal) if frames else None
                 if stitched is not None:
                     ok_enc, buf = cv2.imencode(".jpg", stitched, [cv2.IMWRITE_JPEG_QUALITY, 90])
                     if ok_enc:
@@ -553,7 +568,8 @@ class SerialTriggerListener:
         url = _get_destination_url()
         if url:
             ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename)
-            if ok:
-                self._stats["uploads_ok"] += 1
-            else:
-                self._stats["uploads_failed"] += 1
+            with self._stats_lock:
+                if ok:
+                    self._stats["uploads_ok"] += 1
+                else:
+                    self._stats["uploads_failed"] += 1

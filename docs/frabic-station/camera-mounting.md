@@ -72,6 +72,7 @@ Each pair of neighbouring cameras should overlap just enough to cover the full w
 5. Repeat for all camera pairs.
 
 **Check the full roll width is covered:**
+
 - The left edge of Camera 1's image must reach the left edge of the roll.
 - The right edge of Camera 3's image must reach the right edge of the roll.
 - There must be no uncovered strip between any two cameras.

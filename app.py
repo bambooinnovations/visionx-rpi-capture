@@ -100,7 +100,12 @@ if not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
 
 if isinstance(camera, MindVisionCamera):
     from camera.mindvision_trigger import SerialTriggerListener
-    _serial_listener = SerialTriggerListener(cameras)
+    from blueprints.stitch import _load_calibration as _stitch_load_cal, _stitch_frames
+    _serial_listener = SerialTriggerListener(
+        cameras,
+        load_calibration=_stitch_load_cal,
+        stitch_frames=_stitch_frames,
+    )
 
     from blueprints.mindvision import create_blueprint
     from blueprints.stitch import create_blueprint as create_stitch_blueprint

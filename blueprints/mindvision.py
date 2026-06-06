@@ -1,7 +1,7 @@
 """Flask blueprint for MindVision-specific camera endpoints.
 
 Registered only when the active camera is a MindVisionCamera.
-All routes are prefixed with /rpi/mindvision.
+All routes are prefixed with /api/cameras.
 """
 from __future__ import annotations
 
@@ -46,17 +46,20 @@ def _get_charuco_board():
     return _charuco_board, _charuco_dict
 
 
-def _encode_raw_frame(frame: "np.ndarray", max_width: int) -> bytes:
-    """Resize frame and return a plain JPEG with no overlay."""
-    import io
+def _frame_to_pil(frame: "np.ndarray") -> "PilImage.Image":
+    """Convert a raw SDK frame (BGR/mono) to a PIL RGB image."""
     from PIL import Image as PilImage
-
     if frame.ndim == 3 and frame.shape[2] == 3:
-        pil_img = PilImage.fromarray(frame[:, :, ::-1])
-    elif frame.ndim == 3 and frame.shape[2] == 1:
-        pil_img = PilImage.fromarray(frame[:, :, 0], mode="L").convert("RGB")
-    else:
-        pil_img = PilImage.fromarray(frame, mode="L").convert("RGB")
+        return PilImage.fromarray(frame[:, :, ::-1])  # BGR → RGB
+    if frame.ndim == 3 and frame.shape[2] == 1:
+        return PilImage.fromarray(frame[:, :, 0], mode="L").convert("RGB")
+    return PilImage.fromarray(frame, mode="L").convert("RGB")
+
+
+def _encode_raw_frame(frame: "np.ndarray", max_width: int, quality: int = 85) -> bytes:
+    """Resize frame and return a plain JPEG with no overlay."""
+    from PIL import Image as PilImage
+    pil_img = _frame_to_pil(frame)
 
     orig_w, orig_h = pil_img.size
     if orig_w > max_width:
@@ -64,7 +67,7 @@ def _encode_raw_frame(frame: "np.ndarray", max_width: int) -> bytes:
         pil_img = pil_img.resize((max_width, new_h), PilImage.BILINEAR)
 
     buf = io.BytesIO()
-    pil_img.save(buf, format="JPEG", quality=85)
+    pil_img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
 
 
@@ -91,12 +94,7 @@ def _render_calibration_overlay(
     from PIL import Image as PilImage, ImageDraw, ImageFont
 
     # frame is HxWx3 BGR (color) or HxWx1 (mono) from the SDK.
-    if frame.ndim == 3 and frame.shape[2] == 3:
-        pil_img = PilImage.fromarray(frame[:, :, ::-1])  # BGR -> RGB
-    elif frame.ndim == 3 and frame.shape[2] == 1:
-        pil_img = PilImage.fromarray(frame[:, :, 0], mode="L").convert("RGB")
-    else:
-        pil_img = PilImage.fromarray(frame, mode="L").convert("RGB")
+    pil_img = _frame_to_pil(frame)
 
     orig_w, orig_h = pil_img.size
     if orig_w > max_width:
@@ -322,12 +320,7 @@ def _render_lens_stream_frame(
     import numpy as np
     from PIL import Image as PilImage, ImageDraw, ImageFont
 
-    if frame.ndim == 3 and frame.shape[2] == 3:
-        pil_img = PilImage.fromarray(frame[:, :, ::-1])
-    elif frame.ndim == 3 and frame.shape[2] == 1:
-        pil_img = PilImage.fromarray(frame[:, :, 0], mode="L").convert("RGB")
-    else:
-        pil_img = PilImage.fromarray(frame, mode="L").convert("RGB")
+    pil_img = _frame_to_pil(frame)
 
     orig_w, orig_h = pil_img.size
     if orig_w > max_width:
@@ -520,8 +513,8 @@ def _read_mv_settings(h: int, cap) -> dict:
 
     try:
         s["analog_gain"] = mvsdk.CameraGetAnalogGain(h)
-        s["analog_gain_min"] = cap.sWbAttr.uiAnalogGainMin if cap else 16
-        s["analog_gain_max"] = cap.sWbAttr.uiAnalogGainMax if cap else 128
+        s["analog_gain_min"] = cap.sExposeDesc.uiAnalogGainMin if cap else 16
+        s["analog_gain_max"] = cap.sExposeDesc.uiAnalogGainMax if cap else 128
     except Exception:
         s.update(analog_gain=16, analog_gain_min=16, analog_gain_max=128)
 
@@ -888,6 +881,75 @@ def _read_full_config(h: int, cam: "MindVisionCamera") -> dict:
     }
 
 
+def _make_mjpeg_stream(cam, cam_id: int, fps: float, render_fn, timeout_fn=None):
+    """Return a generator function that streams MJPEG frames.
+
+    Increments _calibration_stream_count before returning so callers don't
+    need to manage the counter separately.
+
+    render_fn(frame) -> bytes  — encode one frame to JPEG bytes.
+    timeout_fn(h_camera, frame_interval) -> (timeout_ms, effective_interval)
+        — dynamic grab timeout; if None, uses (1000, frame_interval).
+    """
+    _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 0) + 1
+    frame_interval = 1.0 / fps
+
+    def generate():
+        _continuous_started = False
+        try:
+            while True:
+                loop_start = time.monotonic()
+
+                if cam._h_camera is None:
+                    time.sleep(1.0)
+                    continue
+
+                if (
+                    not cam._streaming
+                    and not _continuous_started
+                    and cam.mode != CameraMode.HARDWARE_TRIGGER
+                ):
+                    cam.set_trigger_mode(0)  # preserves AE
+                    _continuous_started = True
+                    time.sleep(0.1)
+
+                if timeout_fn is not None and cam._h_camera is not None:
+                    grab_timeout_ms, effective_interval = timeout_fn(cam._h_camera, frame_interval)
+                else:
+                    grab_timeout_ms, effective_interval = 1000, frame_interval
+
+                with cam._lock:
+                    frame, _head = cam._grab_frame(timeout_ms=grab_timeout_ms)
+
+                if frame is not None:
+                    jpeg = render_fn(frame)
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n"
+                        + jpeg
+                        + b"\r\n"
+                    )
+
+                elapsed = time.monotonic() - loop_start
+                remaining = effective_interval - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
+        finally:
+            _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 1) - 1
+            if (
+                _continuous_started
+                and _calibration_stream_count.get(cam_id, 0) == 0
+                and cam._h_camera is not None
+                and not cam._streaming
+            ):
+                try:
+                    cam.set_trigger_mode(1)  # preserves AE
+                except Exception:
+                    pass
+
+    return generate
+
+
 def create_blueprint(
     cameras: dict[int, MindVisionCamera],
     serial_listener: "SerialTriggerListener | None" = None,
@@ -1082,14 +1144,24 @@ def create_blueprint(
                 with mu:
                     errors[cam_id] = str(e)
 
+        cam_ids = list(cameras.keys())
         threads = [
-            threading.Thread(target=grab_one, args=(cam_id, cam), daemon=True)
-            for cam_id, cam in cameras.items()
+            threading.Thread(target=grab_one, args=(cam_id, cameras[cam_id]), daemon=True)
+            for cam_id in cam_ids
         ]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=15)
+
+        timed_out = [cam_id for cam_id, t in zip(cam_ids, threads) if t.is_alive()]
+        if timed_out:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            logger.warning("capture_all_timed_out", camera_ids=timed_out)
+            return jsonify({
+                "error": "Capture timed out waiting for camera(s)",
+                "details": {str(k): "timed out after 15 s" for k in timed_out},
+            }), 504
 
         if errors:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1159,64 +1231,16 @@ def create_blueprint(
         _peak_scores.pop(cam_id, None)
         history.clear()
 
-        _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 0) + 1
-
-        frame_interval = 1.0 / fps
-
-        def generate():
-            _continuous_started = False
-            try:
-                while True:
-                    loop_start = time.monotonic()
-
-                    if cam._h_camera is None:
-                        time.sleep(1.0)
-                        continue
-
-                    # Switch to continuous mode if the main stream isn't already running.
-                    if (
-                        not cam._streaming
-                        and not _continuous_started
-                        and cam.mode != CameraMode.HARDWARE_TRIGGER
-                    ):
-                        cam.set_trigger_mode(0)  # preserves AE
-                        _continuous_started = True
-                        time.sleep(0.1)
-
-                    with cam._lock:
-                        frame, _head = cam._grab_frame()
-
-                    if frame is not None:
-                        if show_overlay:
-                            jpeg = _render_calibration_overlay(frame, history, peak_threshold, max_width, cam_id, detect_charuco, clip_highlight)
-                        else:
-                            jpeg = _encode_raw_frame(frame, max_width)
-                        yield (
-                            b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n\r\n"
-                            + jpeg
-                            + b"\r\n"
-                        )
-
-                    elapsed = time.monotonic() - loop_start
-                    remaining = frame_interval - elapsed
-                    if remaining > 0:
-                        time.sleep(remaining)
-            finally:
-                _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 1) - 1
-                if (
-                    _continuous_started
-                    and _calibration_stream_count.get(cam_id, 0) == 0
-                    and cam._h_camera is not None
-                    and not cam._streaming
-                ):
-                    try:
-                        cam.set_trigger_mode(1)  # preserves AE
-                    except Exception:
-                        pass
+        def _render_cal(frame):
+            if show_overlay:
+                return _render_calibration_overlay(
+                    frame, history, peak_threshold, max_width,
+                    cam_id, detect_charuco, clip_highlight,
+                )
+            return _encode_raw_frame(frame, max_width)
 
         return Response(
-            generate(),
+            _make_mjpeg_stream(cam, cam_id, fps, _render_cal)(),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
 
@@ -1247,59 +1271,11 @@ def create_blueprint(
         cx_frac = max(0.05, min(0.95, request.args.get("cx", 0.5, type=float)))
         cy_frac = max(0.05, min(0.95, request.args.get("cy", 0.5, type=float)))
 
-        _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 0) + 1
-        frame_interval = 1.0 / fps
-
-        def generate():
-            _continuous_started = False
-            try:
-                while True:
-                    loop_start = time.monotonic()
-
-                    if cam._h_camera is None:
-                        time.sleep(1.0)
-                        continue
-
-                    if (
-                        not cam._streaming
-                        and not _continuous_started
-                        and cam.mode != CameraMode.HARDWARE_TRIGGER
-                    ):
-                        cam.set_trigger_mode(0)  # preserves AE
-                        _continuous_started = True
-                        time.sleep(0.1)
-
-                    with cam._lock:
-                        frame, _head = cam._grab_frame()
-
-                    if frame is not None:
-                        jpeg = _render_lens_stream_frame(frame, max_width, guide_pct, cam_id, cx_frac, cy_frac)
-                        yield (
-                            b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n\r\n"
-                            + jpeg
-                            + b"\r\n"
-                        )
-
-                    elapsed = time.monotonic() - loop_start
-                    remaining = frame_interval - elapsed
-                    if remaining > 0:
-                        time.sleep(remaining)
-            finally:
-                _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 1) - 1
-                if (
-                    _continuous_started
-                    and _calibration_stream_count.get(cam_id, 0) == 0
-                    and cam._h_camera is not None
-                    and not cam._streaming
-                ):
-                    try:
-                        cam.set_trigger_mode(1)  # preserves AE
-                    except Exception:
-                        pass
+        def _render_lens(frame):
+            return _render_lens_stream_frame(frame, max_width, guide_pct, cam_id, cx_frac, cy_frac)
 
         return Response(
-            generate(),
+            _make_mjpeg_stream(cam, cam_id, fps, _render_lens)(),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
 
@@ -1362,7 +1338,7 @@ def create_blueprint(
         defaults = {
             "ae_enabled": True,
             "ae_target": 100,
-            "analog_gain": cap.sWbAttr.uiAnalogGainMin if cap else 16,
+            "analog_gain": cap.sExposeDesc.uiAnalogGainMin if cap else 16,
             "r_gain": 100, "g_gain": 100, "b_gain": 100,
             "sharpness": cap.sSharpnessRange.iMin if cap else 0,
             "gamma": 100,
@@ -1394,86 +1370,23 @@ def create_blueprint(
 
         fps = max(0.5, min(request.args.get("fps", 5.0, type=float), 10.0))
         max_width = request.args.get("max_width", 1280, type=int)
-        frame_interval = 1.0 / fps
 
-        _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 0) + 1
-
-        def generate():
-            import io
+        def _settings_timeout(h_camera, frame_interval):
             import mvsdk
-            from PIL import Image as PilImage
-
-            _continuous_started = False
             try:
-                while True:
-                    loop_start = time.monotonic()
+                exp_us = mvsdk.CameraGetExposureTime(h_camera)
+            except Exception:
+                exp_us = 0.0
+            # Pad the grab timeout so a long exposure doesn't kill the stream.
+            return max(1000, int(exp_us / 1000) + 500), max(frame_interval, exp_us / 1_000_000)
 
-                    if cam._h_camera is None:
-                        time.sleep(1.0)
-                        continue
+        def _render_settings(frame):
+            return _encode_raw_frame(frame, max_width, quality=80)
 
-                    if (
-                        not cam._streaming
-                        and not _continuous_started
-                        and cam.mode != CameraMode.HARDWARE_TRIGGER
-                    ):
-                        cam.set_trigger_mode(0)  # preserves AE
-                        _continuous_started = True
-                        time.sleep(0.1)
-
-                    # Compute a grab timeout that accounts for the current
-                    # exposure time so long exposures don't kill the stream.
-                    try:
-                        exp_us = mvsdk.CameraGetExposureTime(cam._h_camera)
-                    except Exception:
-                        exp_us = 0.0
-                    grab_timeout_ms = max(1000, int(exp_us / 1000) + 500)
-                    # Don't poll faster than the camera can deliver frames.
-                    effective_interval = max(frame_interval, exp_us / 1_000_000)
-
-                    with cam._lock:
-                        frame, _head = cam._grab_frame(timeout_ms=grab_timeout_ms)
-
-                    if frame is not None:
-                        if frame.ndim == 3 and frame.shape[2] == 3:
-                            pil_img = PilImage.fromarray(frame[:, :, ::-1])
-                        elif frame.ndim == 3 and frame.shape[2] == 1:
-                            pil_img = PilImage.fromarray(frame[:, :, 0], mode="L").convert("RGB")
-                        else:
-                            pil_img = PilImage.fromarray(frame, mode="L").convert("RGB")
-
-                        orig_w, orig_h = pil_img.size
-                        if orig_w > max_width:
-                            new_h = int(orig_h * max_width / orig_w)
-                            pil_img = pil_img.resize((max_width, new_h), PilImage.BILINEAR)
-
-                        buf = io.BytesIO()
-                        pil_img.save(buf, format="JPEG", quality=80)
-                        yield (
-                            b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n\r\n"
-                            + buf.getvalue()
-                            + b"\r\n"
-                        )
-
-                    elapsed = time.monotonic() - loop_start
-                    remaining = effective_interval - elapsed
-                    if remaining > 0:
-                        time.sleep(remaining)
-            finally:
-                _calibration_stream_count[cam_id] = _calibration_stream_count.get(cam_id, 1) - 1
-                if (
-                    _continuous_started
-                    and _calibration_stream_count.get(cam_id, 0) == 0
-                    and cam._h_camera is not None
-                    and not cam._streaming
-                ):
-                    try:
-                        cam.set_trigger_mode(1)  # preserves AE
-                    except Exception:
-                        pass
-
-        return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+        return Response(
+            _make_mjpeg_stream(cam, cam_id, fps, _render_settings, timeout_fn=_settings_timeout)(),
+            mimetype="multipart/x-mixed-replace; boundary=frame",
+        )
 
     @bp.route("/settings/snapshot")
     def settings_snapshot():
@@ -1483,7 +1396,6 @@ def create_blueprint(
           camera_id  int  Camera index (default 0)
           max_width  int  Downscale width (default 1280)
         """
-        from PIL import Image as PilImage
         import mvsdk as _mvsdk
 
         cam, cam_id = _resolve_camera()
@@ -1510,23 +1422,8 @@ def create_blueprint(
         if frame is None:
             return jsonify({"error": "No frame available — camera may still be exposing"}), 503
 
-        if frame.ndim == 3 and frame.shape[2] == 3:
-            pil_img = PilImage.fromarray(frame[:, :, ::-1])
-        elif frame.ndim == 3 and frame.shape[2] == 1:
-            pil_img = PilImage.fromarray(frame[:, :, 0], mode="L").convert("RGB")
-        else:
-            pil_img = PilImage.fromarray(frame, mode="L").convert("RGB")
-
-        orig_w, orig_h = pil_img.size
-        if orig_w > max_width:
-            new_h = int(orig_h * max_width / orig_w)
-            pil_img = pil_img.resize((max_width, new_h), PilImage.BILINEAR)
-
-        buf = io.BytesIO()
-        pil_img.save(buf, format="JPEG", quality=90)
-        buf.seek(0)
-        return Response(buf.getvalue(), mimetype="image/jpeg",
-                        headers={"Cache-Control": "no-store"})
+        jpeg = _encode_raw_frame(frame, max_width, quality=90)
+        return Response(jpeg, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @bp.route("/calibration/score")
     def calibration_score():

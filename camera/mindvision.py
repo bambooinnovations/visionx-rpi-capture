@@ -285,7 +285,13 @@ class MindVisionCamera(BaseCamera):
         logger.info("camera_mode_changed", mode=mode.value)
 
     def apply_config(self, key: str, value) -> None:
-        """Apply a runtime config change to the live camera hardware."""
+        """Apply a runtime config change to the live camera hardware.
+
+        Most runtime-updatable keys (stream.*, hw_trigger.*) control upload/save
+        behaviour and do not need to be applied to the camera SDK. If a key ever
+        needs to translate to a live SDK call, add it here.
+        """
+        logger.debug("apply_config_noop", key=key, value=value)
 
     def get_orientation(self) -> dict:
         """Return current rotation and mirror settings from the SDK."""

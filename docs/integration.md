@@ -16,7 +16,7 @@ Everything you need to start receiving captures from the RPi.
 
 On every trigger event the RPi POSTs to your configured `destination_url`.
 
-### Stitched capture *(always sent)*
+### Stitched capture _(always sent)_
 
 ```
 POST {destination_url}
@@ -29,7 +29,7 @@ trigger_number   — sequential trigger index since decoder start (string)
 trigger_source   — "encoder" or "manual"
 ```
 
-### Raw per-camera capture *(opt-in)*
+### Raw per-camera capture _(opt-in)_
 
 Enabled by setting `hw_trigger.send_raw_images = true`. One POST per camera per trigger, sent before the stitched upload.
 
@@ -67,8 +67,18 @@ Returns a top-level `ready` flag and a per-subsystem breakdown so you can pinpoi
     "cameras": {
       "ready": true,
       "cameras": [
-        {"id": 0, "open": true, "mode": "hardware_trigger", "serial": "ABC123"},
-        {"id": 1, "open": true, "mode": "hardware_trigger", "serial": "DEF456"}
+        {
+          "id": 0,
+          "open": true,
+          "mode": "hardware_trigger",
+          "serial": "ABC123"
+        },
+        {
+          "id": 1,
+          "open": true,
+          "mode": "hardware_trigger",
+          "serial": "DEF456"
+        }
       ]
     },
     "decoder": {
@@ -91,12 +101,12 @@ Returns a top-level `ready` flag and a per-subsystem breakdown so you can pinpoi
 
 **Subsystem breakdown:**
 
-| Subsystem | `ready` when… |
-| --------- | ------------- |
-| `cameras` | All cameras are open and in `hardware_trigger` mode |
-| `decoder` | Decoder is running, Arduino serial is connected, and triggers are enabled |
-| `config` | `destination_url` is set |
-| `stitching` | All connected cameras have stitch calibration *(multi-camera only; not required for `ready: true` — falls back to single-camera if uncalibrated)* |
+| Subsystem   | `ready` when…                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cameras`   | All cameras are open and in `hardware_trigger` mode                                                                                               |
+| `decoder`   | Decoder is running, Arduino serial is connected, and triggers are enabled                                                                         |
+| `config`    | `destination_url` is set                                                                                                                          |
+| `stitching` | All connected cameras have stitch calibration _(multi-camera only; not required for `ready: true` — falls back to single-camera if uncalibrated)_ |
 
 The top-level `ready` is `true` when `cameras`, `decoder`, and `config` are all ready. `stitching` is informational only.
 
@@ -107,9 +117,9 @@ POST /api/system/mode
 {"mode": "fabric" | "regular"}
 ```
 
-| Mode | What it does |
-| ---- | ------------ |
-| `fabric` | Opens cameras, switches to hardware trigger, starts the decoder — full stitched production pipeline |
+| Mode      | What it does                                                                                        |
+| --------- | --------------------------------------------------------------------------------------------------- |
+| `fabric`  | Opens cameras, switches to hardware trigger, starts the decoder — full stitched production pipeline |
 | `regular` | Stops the decoder, reverts cameras to capture mode — for calibration and software trigger workflows |
 
 The response includes every action attempted, whether it succeeded, and the final subsystem state:
@@ -157,27 +167,27 @@ uv run --group test-server python test_server/server.py
 
 Then open `http://<host>:8888/` in a browser — new captures appear instantly without page refresh.
 
-| Method | Path | Description |
-| ------ | ---- | ----------- |
-| `POST` | `/upload` | Receive stitched captures — set as `destination_url` |
-| `POST` | `/upload-raw` | Receive raw per-camera captures — set as `raw_destination_url` |
-| `GET`  | `/health` | Health probe — set as `health_check_url` |
-| `GET`  | `/` | Real-time monitor UI |
-| `GET`  | `/images/{filename}` | Serve a received image |
+| Method | Path                 | Description                                                    |
+| ------ | -------------------- | -------------------------------------------------------------- |
+| `POST` | `/upload`            | Receive stitched captures — set as `destination_url`           |
+| `POST` | `/upload-raw`        | Receive raw per-camera captures — set as `raw_destination_url` |
+| `GET`  | `/health`            | Health probe — set as `health_check_url`                       |
+| `GET`  | `/`                  | Real-time monitor UI                                           |
+| `GET`  | `/images/{filename}` | Serve a received image                                         |
 
 ---
 
 ## RPi endpoint reference
 
-| Method | Path | Description |
-| ------ | ---- | ----------- |
-| `GET`  | `/api/health` | Liveness check |
-| `GET`  | `/api/system/ready` | Readiness check with per-subsystem breakdown |
-| `POST` | `/api/system/mode` | Switch to `fabric` (hw trigger + stitch) or `regular` (calibration / software trigger) |
+| Method | Path                | Description                                                                            |
+| ------ | ------------------- | -------------------------------------------------------------------------------------- |
+| `GET`  | `/api/health`       | Liveness check                                                                         |
+| `GET`  | `/api/system/ready` | Readiness check with per-subsystem breakdown                                           |
+| `POST` | `/api/system/mode`  | Switch to `fabric` (hw trigger + stitch) or `regular` (calibration / software trigger) |
 
 | `POST` | `/api/decoder/trigger/fire` | Fire a one-shot test trigger (same upload pipeline as hardware) |
 | `PATCH`| `/api/system/config` | Update `destination_url`, `send_raw_images`, etc. at runtime |
-| `GET`  | `/api/decoder/status` | Detailed trigger stats and Arduino state |
-| `GET`  | `/api/metrics/stats` | Capture performance statistics |
+| `GET` | `/api/decoder/status` | Detailed trigger stats and Arduino state |
+| `GET` | `/api/metrics/stats` | Capture performance statistics |
 
 See [api.md](api.md) for full parameter and response documentation.

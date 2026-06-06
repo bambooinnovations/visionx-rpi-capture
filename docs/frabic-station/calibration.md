@@ -25,7 +25,6 @@ The cameras are mounted above the roll, not above a flat table. The top surface 
 
 ### 2. Disable HW Trigger Mode
 
-
 By default, both cameras run in **Hardware Trigger mode** (controlled by the decoder). In this mode the cameras only capture frames when the decoder sends a trigger signal, so the live stream and calibration tools will not work.
 
 **Before starting any calibration, disable HW Trigger:**
@@ -42,11 +41,11 @@ By default, both cameras run in **Hardware Trigger mode** (controlled by the dec
 
 You will need two printed targets:
 
-| Target            | Purpose                              | File                                                                  |
-| ----------------- | ------------------------------------ | --------------------------------------------------------------------- |
-| **Siemens star**  | Focus tuning                         | Generate with `scripts/gen_siemens_star.py`                           |
+| Target            | Purpose                              | File                                                                                                                                               |
+| ----------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Siemens star**  | Focus tuning                         | Generate with `scripts/gen_siemens_star.py`                                                                                                        |
 | **ChArUco board** | Lens distortion + stitch calibration | [`targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png`](../../targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png) |
-| **Siemens star**  | Focus tuning | [`targets/siemens_star_letter.png`](../../targets/siemens_star_letter.png) |
+| **Siemens star**  | Focus tuning                         | [`targets/siemens_star_letter.png`](../../targets/siemens_star_letter.png)                                                                         |
 
 Print both at **100% scale** (no "fit to page"). Place them flat and perpendicular to the cameras.
 
