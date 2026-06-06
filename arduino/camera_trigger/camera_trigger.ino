@@ -40,7 +40,7 @@ const int manualButton = 4;   // Push-button to GND; LOW when pressed
 const int triggerOut   = 9;   // Camera shutter trigger + LED
 
 // ── Configurable parameters (defaults; overridable via serial commands) ──────
-long          triggerInterval        = 118;    // Encoder counts between triggers (≈1 cm)
+long          triggerInterval        = 1180;    // Encoder counts between triggers (≈10 cm)
 float         countsPerCm            = 118.0;  // Encoder counts per centimeter of travel
 int           pulseWidthMs           = 20;     // Trigger pulse width in milliseconds
 unsigned long speedReportIntervalMs  = 500;    // Heartbeat period in milliseconds
