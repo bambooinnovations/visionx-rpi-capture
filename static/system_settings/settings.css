@@ -1,0 +1,200 @@
+.error-banner {
+  background: #fee2e2;
+  color: #991b1b;
+  border-bottom: 1px solid #fca5a5;
+  padding: 10px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+}
+.error-banner button { background: none; border: none; cursor: pointer; font-size: 16px; color: #991b1b; }
+
+.success-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: #166534;
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  z-index: 300;
+  transition: opacity 0.2s;
+}
+
+/* ── Page layout ─────────────────────────────────────────────────────── */
+.sys-page {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 32px 24px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sys-header { margin-bottom: 4px; }
+.sys-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+.sys-subtitle { font-size: 13px; color: var(--text-muted); }
+.sys-subtitle code { font-family: monospace; background: var(--bg); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); }
+
+/* ── Cards ───────────────────────────────────────────────────────────── */
+.sys-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.sys-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: #f8fafc;
+}
+.sys-card-header h2 { font-size: 14px; font-weight: 700; color: var(--text); flex: 1; }
+
+.sys-readonly-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* ── Editable fields ─────────────────────────────────────────────────── */
+.sys-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #f4f6f9;
+  transition: opacity 0.15s;
+}
+.sys-field:last-of-type { border-bottom: none; }
+
+.sys-field--disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.sys-field-label {
+  flex: 1;
+  min-width: 0;
+}
+.sys-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.sys-desc {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.sys-desc code { font-family: monospace; font-size: 11px; }
+
+.sys-field-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sys-field-control--toggle {
+  padding-top: 2px;
+}
+
+.sys-input {
+  width: 240px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: monospace;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+}
+.sys-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+}
+.sys-input:disabled {
+  background: #f1f5f9;
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+.sys-input-password { letter-spacing: 0.1em; }
+
+.sys-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0 20px;
+}
+
+/* ── Toggle ──────────────────────────────────────────────────────────── */
+.sys-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.sys-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.sys-toggle-track {
+  width: 40px;
+  height: 22px;
+  background: #d1d5db;
+  border-radius: 99px;
+  transition: background 0.2s;
+  position: relative;
+}
+.sys-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.sys-toggle input:checked + .sys-toggle-track { background: var(--primary); }
+.sys-toggle input:checked + .sys-toggle-track::after { transform: translateX(18px); }
+
+/* ── Save button row ─────────────────────────────────────────────────── */
+.sys-card-actions {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  background: #f8fafc;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ── Read-only table ─────────────────────────────────────────────────── */
+.sys-ro-table {
+  padding: 4px 0;
+}
+.sys-ro-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 20px;
+  border-bottom: 1px solid #f4f6f9;
+  font-size: 13px;
+}
+.sys-ro-row:last-child { border-bottom: none; }
+.sys-ro-key { color: var(--text-muted); }
+.sys-ro-val { font-family: monospace; font-weight: 600; color: var(--text); }
+
+@media (max-width: 600px) {
+  .sys-field { flex-direction: column; gap: 10px; }
+  .sys-input  { width: 100%; }
+  .sys-field-control { width: 100%; }
+}

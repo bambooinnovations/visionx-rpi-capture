@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX Portal</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/portal/index.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link active" href="/">Home</a>
+  <a class="nav-link" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+  <span class="nav-spacer"></span>
+  <span class="nav-divider"></span>
+  <a class="nav-link nav-link-settings" href="/settings">Settings</a>
+  <button class="nav-dev-btn" id="dev-mode-btn" onclick="toggleDevMode()">Dev</button>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<main class="page-content">
+
+  <!-- ── Cameras ──────────────────────────────────────────────────────── -->
+  <section class="section">
+    <div class="section-header">
+      <h2>Connected Cameras</h2>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="camera-count" class="pill pill-info">Loading…</span>
+        <button class="btn btn-secondary btn-sm" onclick="refreshAll()">↺ Refresh</button>
+        <button class="btn btn-secondary btn-sm" onclick="downloadAllConfig()" id="btn-download-config">Download Config</button>
+      </div>
+    </div>
+    <div id="camera-grid" class="camera-grid">
+      <div class="loading-placeholder">Loading cameras…</div>
+    </div>
+  </section>
+
+  <!-- ── Decoder ───────────────────────────────────────────────────────── -->
+  <section class="section">
+    <div class="section-header">
+      <h2>Decoder</h2>
+    </div>
+    <div class="decoder-card" id="decoder-card" onclick="openDecoderModal()" role="button" tabindex="0">
+      <div class="decoder-summary">
+        <span class="status-dot status-dot-gray" id="decoder-connected-dot"></span>
+        <span class="decoder-label" id="decoder-connected-label">Checking…</span>
+        <span class="decoder-speed" id="decoder-speed" style="display:none"></span>
+        <button class="btn btn-secondary btn-sm" id="decoder-check-btn" style="display:none"
+                onclick="event.stopPropagation(); decoderCheckAgain()">Check Again</button>
+      </div>
+      <label class="decoder-mode-toggle" id="decoder-mode-toggle" onclick="event.stopPropagation()" title="Hardware Trigger / Calibration mode">
+        <span class="decoder-mode-label" id="decoder-mode-label">Calibration</span>
+        <span class="toggle-track" id="decoder-toggle-track">
+          <input type="checkbox" id="decoder-trigger-checkbox" onchange="decoderToggleMode(this.checked)" disabled>
+          <span class="toggle-thumb"></span>
+        </span>
+        <span class="decoder-mode-label">HW Trigger</span>
+      </label>
+    </div>
+  </section>
+
+  <!-- ── Dev Tools ────────────────────────────────────────────────────── -->
+  <section class="section hidden" id="dev-tools-section">
+    <div class="dev-panel">
+      <div class="dev-panel-header">
+        <h2>Dev Tools</h2>
+        <span class="pill pill-yellow">dev mode</span>
+      </div>
+      <div class="dev-groups">
+
+        <div class="dev-group">
+          <div class="dev-group-title">Camera Mode</div>
+          <div class="dev-group-sub" id="dev-cam-mode-label">Current: —</div>
+          <div class="dev-group-btns">
+            <button class="btn btn-secondary btn-sm" onclick="devSetCamMode('hardware_trigger')">Hardware Trigger</button>
+            <button class="btn btn-secondary btn-sm" onclick="devSetCamMode('capture')">Software Trigger</button>
+            <button class="btn btn-secondary btn-sm" onclick="devSetCamMode('stream')">Stream</button>
+          </div>
+        </div>
+
+        <div class="dev-group">
+          <div class="dev-group-title">Decoder</div>
+          <div class="dev-group-btns">
+            <button class="btn btn-primary btn-sm" onclick="decoderStart(); devRefreshAfterDecoderOp()">Start</button>
+            <button class="btn btn-danger btn-sm" onclick="decoderStop(); devRefreshAfterDecoderOp()">Stop</button>
+            <button class="btn btn-secondary btn-sm" onclick="decoderSetModeHwTrigger()">HW Trigger Mode</button>
+            <button class="btn btn-secondary btn-sm" onclick="decoderSetModeCalibration()">Calibration Mode</button>
+            <button class="btn btn-secondary btn-sm" onclick="decoderFireTrigger()">Fire Trigger</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Quick Links ───────────────────────────────────────────────────── -->
+  <section class="section quick-links">
+    <a href="/calibrate" class="quick-card">
+      <div class="quick-icon">⚙</div>
+      <div>
+        <div class="quick-title">Calibration Wizard</div>
+        <div class="quick-desc">White balance, focus, lens distortion — per camera</div>
+      </div>
+    </a>
+    <a href="/stitch" class="quick-card">
+      <div class="quick-icon">⊞</div>
+      <div>
+        <div class="quick-title">Stitch Setup</div>
+        <div class="quick-desc">Side-by-side streams with overlap overlay for camera placement</div>
+      </div>
+    </a>
+  </section>
+
+</main>
+
+<!-- ── Camera Config Modal ──────────────────────────────────────────── -->
+<div id="config-modal-overlay" class="modal-overlay hidden" onclick="closeConfigModal(event)">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-header">
+      <div>
+        <h2 id="modal-title">Camera Config</h2>
+        <p id="modal-subtitle" class="modal-subtitle"></p>
+      </div>
+      <button class="modal-close" onclick="closeConfigModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body">
+      <div class="modal-loading">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Decoder Modal ────────────────────────────────────────────────── -->
+<div id="decoder-modal-overlay" class="modal-overlay hidden" onclick="closeDecoderModal(event)">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width:560px">
+    <div class="modal-header">
+      <div>
+        <h2>Decoder</h2>
+        <p class="modal-subtitle">Arduino encoder trigger controller</p>
+      </div>
+      <button class="modal-close" onclick="closeDecoderModal()">&times;</button>
+    </div>
+    <div class="modal-body" style="padding:0">
+      <div class="dcfg-tab-bar" style="padding:0 16px">
+        <button class="dcfg-tab active" data-tab="status" onclick="switchDecoderModalTab('status')">Status</button>
+        <button class="dcfg-tab" data-tab="config" onclick="switchDecoderModalTab('config')">Configuration</button>
+      </div>
+      <div class="dcfg-pane active" data-tab="status" style="padding:12px 16px">
+        <div id="decoder-modal-stats"><div class="modal-loading">Loading…</div></div>
+      </div>
+      <div class="dcfg-pane" data-tab="config" style="padding:12px 16px">
+        <div id="decoder-modal-config"><div class="modal-loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/portal/index.js"></script>
+</body>
+</html>

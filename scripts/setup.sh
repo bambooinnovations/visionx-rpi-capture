@@ -1,18 +1,6 @@
 #!/usr/bin/env bash
-# Complete one-command setup for visionX-rpi-capture on Raspberry Pi.
+# setup.sh — Interactive setup menu for visionX-rpi-capture on Raspberry Pi.
 # Usage: sudo bash scripts/setup.sh  (or: sudo make setup)
-#
-# This script:
-#   1. Detects OS version and sets the correct boot config path
-#   2. Installs Caddy internal CA certs (system CA store + Chrome NSS)
-#   3. Prompts for camera type (Arducam 64MP or standard Pi Camera)
-#   4. Arducam only: prompts for CSI port, downloads and installs drivers,
-#      patches the boot config with the camera overlay
-#   5. Installs system packages (python3-libcamera, python3-kms++)
-#   6. Installs uv (if not present) and creates a virtual environment
-#   7. Installs Python dependencies
-#   8. Installs and enables the rpi-capture systemd service
-#   9. Prompts to reboot (the service starts automatically after reboot)
 
 set -euo pipefail
 
@@ -25,11 +13,12 @@ source "$SCRIPT_DIR/lib/utils.sh"
 source "$SCRIPT_DIR/modules/camera.sh"
 # shellcheck source=modules/certs.sh
 source "$SCRIPT_DIR/modules/certs.sh"
+# shellcheck source=modules/mindvision.sh
+source "$SCRIPT_DIR/modules/mindvision.sh"
+# shellcheck source=modules/arduino.sh
+source "$SCRIPT_DIR/modules/arduino.sh"
 
 # ── User context ──────────────────────────────────────────────────────────────
-# Detect the real (non-root) user for owning uv, venv, and the systemd service.
-# If run from a root shell (SUDO_USER is empty or "root"), fall back to the
-# first regular user on the system (UID >= 1000).
 if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
     REAL_USER="${SUDO_USER}"
 else
@@ -43,7 +32,6 @@ fi
 
 REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 
-# Run a command as the real user with the correct HOME and PATH.
 as_user() {
     sudo -u "$REAL_USER" \
         HOME="$REAL_HOME" \
@@ -126,7 +114,7 @@ EOF
 # ── Reboot prompt ─────────────────────────────────────────────────────────────
 _prompt_reboot() {
     echo ""
-    log SUCCESS "Setup complete! A reboot is required for all changes to take effect."
+    log SUCCESS "A reboot is required for all changes to take effect."
     echo ""
     echo "  After rebooting, the rpi-capture service starts automatically."
     echo "  To check status:"
@@ -146,20 +134,91 @@ _prompt_reboot() {
     esac
 }
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-main() {
+# ── Menu helpers ──────────────────────────────────────────────────────────────
+_print_banner() {
+    clear
     echo ""
     echo "  ┌──────────────────────────────────────┐"
     echo "  │     visionX-rpi-capture  setup       │"
     echo "  └──────────────────────────────────────┘"
     echo ""
+}
 
+_pause() {
+    echo ""
+    read -rp "  Press Enter to return to menu..." _
+}
+
+# ── Check status submenu ──────────────────────────────────────────────────────
+_menu_check_status() {
+    while true; do
+        _print_banner
+        echo "  Check Installation Status"
+        echo ""
+        echo "    1.  ArduCam 64MP Hawkeye"
+        echo "    2.  MindVision"
+        echo "    3.  Arduino IDE"
+        echo "    0.  Back"
+        echo ""
+        read -rp "  Enter choice: " choice
+        echo ""
+        case "$choice" in
+            1) check_arducam;    _pause ;;
+            2) check_mindvision; _pause ;;
+            3) check_arduino;    _pause ;;
+            0) return ;;
+            *) log WARN "Invalid choice '${choice}'." ; _pause ;;
+        esac
+    done
+}
+
+# ── Main menu ─────────────────────────────────────────────────────────────────
+main() {
     check_root
     detect_os
-    setup_certs
-    setup_camera
-    _setup_app
-    _prompt_reboot
+
+    while true; do
+        _print_banner
+        echo "    1.  Check installation status"
+        echo "    2.  Install ArduCam"
+        echo "    3.  Install MindVision"
+        echo "    4.  Install Arduino IDE"
+        echo "    5.  Setup TLS certificates"
+        echo "    0.  Exit"
+        echo ""
+        read -rp "  Enter choice: " choice
+        echo ""
+        case "$choice" in
+            1)
+                _menu_check_status
+                ;;
+            2)
+                install_arducam
+                _setup_app
+                _prompt_reboot
+                ;;
+            3)
+                install_mindvision
+                _prompt_reboot
+                ;;
+            4)
+                install_arduino
+                _prompt_reboot
+                ;;
+            5)
+                setup_certs
+                _pause
+                ;;
+            0)
+                log INFO "Exiting."
+                exit 0
+                ;;
+            *)
+                log WARN "Invalid choice '${choice}'."
+                _pause
+                ;;
+        esac
+    done
 }
 
 main "$@"

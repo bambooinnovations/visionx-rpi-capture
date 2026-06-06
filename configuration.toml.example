@@ -1,0 +1,96 @@
+# configuration.toml — visionX-rpi-capture
+#
+# Copy this file to configuration.toml and edit for your environment.
+#   cp configuration.toml.example configuration.toml
+#
+# configuration.toml is gitignored — each deployment keeps its own copy.
+
+# Runtime environment.
+# "dev"  — coloured human-readable console logs
+# "prod" — structured JSON logs (one line per event)
+[server]
+env = "dev"
+
+# Camera type and shared settings.
+# type = "picamera2"  — Raspberry Pi CSI cameras via libcamera (default)
+# type = "mindvision" — MindVision USB or GigE cameras via mvsdk
+[camera]
+type = "picamera2"
+sharpness = 1.0        # ISP sharpness multiplier; 0 = off, 1.0 = IPA default (picamera2 only)
+lock_exposure = false  # Lock AE/AWB after startup — set true for stable rig lighting (picamera2 only)
+# lens_position = 2.0  # Manual fixed focus in dioptres (1 / distance_metres). (picamera2 only)
+#                      # Run scripts/focus_calibration.py to find your value.
+#                      # Uncomment to enable; comment out to use continuous autofocus.
+
+
+
+# Live preview stream (GET /rpi/stream).
+[stream]
+fps = 15       # Max frames per second
+quality = 60   # JPEG quality 1–95; lower = smaller frames / more bandwidth tolerance
+
+# Per-request temporary files created during capture.
+[capture]
+tmp_dir = "/tmp/visionx_captures"
+
+# SQLite capture-metrics database.
+# Change to a persistent path (e.g. "./data/metrics.db") to retain data across restarts.
+[metrics]
+db_path = "/tmp/visionx_metrics.db"
+
+# Hardware trigger mode (MindVision only).
+# Serial trigger: POST /rpi/mindvision/serial-trigger/start to begin listening.
+# The listener reads JSON lines from the Arduino decoder_trigger.ino sketch and
+# captures + uploads an image on each trigger event.
+# destination_url and destination_api_key can also be updated live via PATCH /rpi/config.
+[hw_trigger]
+# serial_port         = "/dev/ttyACM0"   # serial port the Arduino is connected to
+# serial_baud         = 115200           # must match the Arduino sketch (default 115200)
+# destination_url     = "https://yoursite.com/api/captures"  # where to POST triggered images
+# destination_api_key = ""       # sent as Authorization: Bearer <key>; leave blank if not needed
+# retry_attempts      = 3        # retry count on network failure
+# timeout_seconds     = 10       # HTTP timeout per attempt
+# save_local          = true     # also save a local copy in local_save_dir
+# local_save_dir      = "data/hw_captures"  # directory for local copies (created automatically)
+# local_max_files     = 200      # max number of files to keep; oldest deleted first (0 = unlimited)
+# local_max_mb        = 500      # max total size in MB; oldest deleted first (0 = unlimited)
+# health_check_url    = "https://yoursite.com/health"  # GET this before starting; omit to skip check
+# raw_destination_url = ""       # where to POST raw (per-camera) images; leave blank to disable
+# send_raw_images     = false    # set true during debug to also upload raw images alongside the stitch
+
+# Background task that removes stale capture temp directories.
+[cleanup]
+interval_seconds = 300   # How often the cleanup task runs
+max_age_seconds  = 300   # Minimum age before a temp directory is deleted
+
+# ─── Camera profiles ──────────────────────────────────────────────────────────
+# Applies to picamera2 only. Model names match cam.camera_properties["Model"].
+# Cameras not listed here fall back to auto-detection (largest full-FOV sensor mode).
+# MindVision cameras always capture at their native sensor resolution.
+#
+# capture_size = [width, height]  default still-capture resolution
+# stream_size  = [width, height]  preview stream output resolution
+
+[camera_profiles.arducam_64mp]
+capture_size = [6240, 4160]   # 16MP 2x2 binned full-sensor mode, 10fps
+stream_size  = [1620, 1215]   # full-sensor 30fps native mode
+
+[camera_profiles.imx477]
+capture_size = [4056, 3040]   # 12MP full-sensor, Raspberry Pi HQ Camera
+stream_size  = [1280, 960]    # 4:3
+
+[camera_profiles.imx708]
+capture_size = [4608, 2592]   # 12MP full-sensor, Raspberry Pi Camera Module 3
+stream_size  = [1280, 720]    # 16:9 — native sensor aspect ratio
+
+[camera_profiles.imx219]
+capture_size = [3280, 2464]   # 8MP full-sensor, Raspberry Pi Camera Module v2
+stream_size  = [1280, 960]    # 4:3
+
+[camera_profiles.ov5647]
+capture_size = [2592, 1944]   # 5MP full-sensor, Raspberry Pi Camera Module v1
+stream_size  = [1280, 960]    # 4:3
+
+[camera_profiles.mv-sus50gc]
+capture_size = [2448, 2048]   # 5MP full-sensor.
+stream_size  = [1224, 1024]  

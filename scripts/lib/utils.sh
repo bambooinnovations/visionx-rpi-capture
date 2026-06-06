@@ -25,7 +25,7 @@ log() {
 # ── Root check ────────────────────────────────────────────────────────────────
 check_root() {
     if [[ "$EUID" -ne 0 ]]; then
-        log ERROR "This script must be run as root. Use: sudo bash install.sh"
+        log ERROR "This script must be run as root. Use: sudo bash scripts/setup.sh"
         exit 1
     fi
     log SUCCESS "Running as root."

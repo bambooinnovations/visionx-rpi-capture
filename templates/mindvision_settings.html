@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX — Camera Settings</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/mindvision_settings/settings.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+  <span class="nav-spacer"></span>
+  <span class="nav-divider"></span>
+  <a class="nav-link nav-link-settings active" href="/settings">Settings</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<div id="success-toast" class="success-toast hidden">Settings saved</div>
+
+<div class="page-header">
+  <div class="page-header-left">
+    <a href="/" class="btn-back">← Home</a>
+    <div>
+      <h1 id="page-title">Camera {{ camera_id }} Settings</h1>
+      <p class="page-subtitle">MindVision — SDK parameters</p>
+    </div>
+  </div>
+  <div class="page-header-right">
+    <span id="unsaved-badge" class="pill pill-yellow hidden">Unsaved changes</span>
+  </div>
+</div>
+
+<div class="settings-layout">
+
+  <!-- ── Left: settings controls ──────────────────────────────────────── -->
+  <div class="settings-panel">
+
+    <!-- Exposure -->
+    <section class="settings-section">
+      <h2 class="section-title">Exposure</h2>
+
+      <div class="setting-row">
+        <label class="setting-label" for="ae-enabled">Auto Exposure</label>
+        <label class="toggle">
+          <input type="checkbox" id="ae-enabled">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+
+      <div id="manual-exposure-row" class="setting-row indent hidden">
+        <label class="setting-label">
+          Exposure Time
+          <span class="setting-value" id="exposure-value">—</span>
+        </label>
+        <input type="range" class="slider" id="exposure-us" min="26" max="1000000" step="1000" value="30000">
+      </div>
+      <div id="exposure-warning" class="exposure-warning hidden"></div>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          AE Target Brightness
+          <span class="setting-value" id="ae-target-value">—</span>
+        </label>
+        <input type="range" class="slider" id="ae-target" min="0" max="255" step="1" value="100">
+      </div>
+    </section>
+
+    <!-- Gain -->
+    <section class="settings-section">
+      <h2 class="section-title">Gain &amp; White Balance</h2>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          Analog Gain
+          <span class="setting-value" id="analog-gain-value">—</span>
+        </label>
+        <input type="range" class="slider" id="analog-gain" min="16" max="128" step="1" value="16">
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          Red Gain
+          <span class="setting-value" id="r-gain-value">—</span>
+        </label>
+        <input type="range" class="slider slider-red" id="r-gain" min="0" max="400" step="1" value="100">
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          Green Gain
+          <span class="setting-value" id="g-gain-value">—</span>
+        </label>
+        <input type="range" class="slider slider-green" id="g-gain" min="0" max="400" step="1" value="100">
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          Blue Gain
+          <span class="setting-value" id="b-gain-value">—</span>
+        </label>
+        <input type="range" class="slider slider-blue" id="b-gain" min="0" max="400" step="1" value="100">
+      </div>
+
+      <div id="wb-stitch-warning" class="wb-stitch-warning hidden">
+        White balance is calibrated as a stitch group — changing individual WB will break colour matching.
+        <a href="/stitch">Recalibrate on the Stitch page.</a>
+      </div>
+      <div class="setting-row wb-row">
+        <div class="wb-hint">Point at a neutral white/grey surface under working lights</div>
+        <button id="btn-wb" class="btn btn-secondary" onclick="autoTuneWB()">Auto Tune WB</button>
+      </div>
+    </section>
+
+    <!-- Image Processing -->
+    <section class="settings-section">
+      <h2 class="section-title">Image Processing</h2>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          Sharpness
+          <span class="setting-value" id="sharpness-value">—</span>
+        </label>
+        <input type="range" class="slider" id="sharpness" min="0" max="100" step="1" value="0">
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          Gamma
+          <span class="setting-value" id="gamma-value">—</span>
+        </label>
+        <input type="range" class="slider" id="gamma" min="0" max="250" step="1" value="100">
+      </div>
+    </section>
+
+    <!-- Orientation -->
+    <section class="settings-section">
+      <h2 class="section-title">Orientation</h2>
+
+      <div class="setting-row">
+        <label class="setting-label">Rotation</label>
+        <div class="btn-group" id="rotation-group">
+          <button class="btn-seg" data-rotation="0">0°</button>
+          <button class="btn-seg" data-rotation="1">90°</button>
+          <button class="btn-seg" data-rotation="2">180°</button>
+          <button class="btn-seg" data-rotation="3">270°</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-label" for="h-mirror">Horizontal Mirror</label>
+        <label class="toggle">
+          <input type="checkbox" id="h-mirror">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-label" for="v-mirror">Vertical Mirror</label>
+        <label class="toggle">
+          <input type="checkbox" id="v-mirror">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- ── Right: preview ───────────────────────────────────────────────── -->
+  <div class="preview-panel">
+
+    <div class="preview-controls">
+      <div class="mode-selector">
+        <label class="mode-option">
+          <input type="radio" name="preview-mode" value="live" checked>
+          Live
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="preview-mode" value="manual">
+          Manual Apply
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="preview-mode" value="photo">
+          Photo
+        </label>
+      </div>
+      <button id="btn-action" class="btn btn-secondary" style="visibility:hidden">Apply</button>
+    </div>
+
+    <div class="stream-wrap">
+      <img id="preview-stream" class="stream-img" alt="Camera stream">
+      <img id="snapshot-img" class="stream-img hidden" alt="Snapshot">
+      <div id="snapshot-placeholder" class="snapshot-placeholder hidden">
+        <p>Press "Take Snapshot" to capture a frame</p>
+      </div>
+    </div>
+
+    <p class="stream-hint" id="preview-hint">Changes visible in stream within a few frames.</p>
+
+  </div>
+
+</div>
+
+<!-- ── Action bar ──────────────────────────────────────────────────────── -->
+<div class="action-bar">
+  <button class="btn btn-danger-outline" onclick="confirmFactoryReset()">Factory Reset</button>
+  <div class="action-bar-right">
+    <button class="btn btn-secondary" onclick="resetChanges()">Reset</button>
+    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+  </div>
+</div>
+
+<!-- ── Factory reset confirm dialog ───────────────────────────────────── -->
+<div id="factory-reset-dialog" class="dialog-backdrop hidden">
+  <div class="dialog">
+    <h3>Factory Reset Camera {{ camera_id }}</h3>
+    <p>This will reset all camera parameters to factory defaults:</p>
+    <ul>
+      <li>Auto-exposure on, target brightness 100</li>
+      <li>Analog gain and RGB gains reset to neutral</li>
+      <li>Sharpness and gamma reset</li>
+      <li>Rotation 0°, mirrors off</li>
+    </ul>
+    <p class="dialog-safe-note">Lens distortion and stitch calibration are <strong>not affected</strong>.</p>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" onclick="closeDialog()">Cancel</button>
+      <button class="btn btn-danger" onclick="doFactoryReset()">Reset to Factory Defaults</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const CAMERA_ID = {{ camera_id }};
+</script>
+<script src="/static/mindvision_settings/settings.js"></script>
+</body>
+</html>
