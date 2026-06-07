@@ -495,7 +495,10 @@ Switch to calibration mode: cameras → `CAPTURE`, sends `set_trigger_enabled=fa
 
 ### `POST /api/decoder/trigger/fire`
 
-Send a software trigger over serial — fires one pulse immediately on the Arduino. Returns `409` if listener is not running or not connected.
+Send a software trigger over serial — fires one pulse immediately on the Arduino.
+
+Returns `409 Conflict` if the listener is not running (`"Decoder listener is not running"`) — call `POST /api/decoder/start` first.
+Returns `503 Service Unavailable` if the serial port is not connected (`"Arduino serial port not connected"`) — hardware is absent; wait for auto-reconnect or check the cable.
 
 ---
 

@@ -191,7 +191,7 @@ def create_blueprint(
         if not listener.running:
             return jsonify({"error": "Decoder listener is not running"}), 409
         if not listener.serial_connected:
-            return jsonify({"error": "Arduino serial port not connected"}), 409
+            return jsonify({"error": "Arduino serial port not connected"}), 503
         try:
             listener.send_command({"cmd": "fire_trigger"})
         except RuntimeError as exc:

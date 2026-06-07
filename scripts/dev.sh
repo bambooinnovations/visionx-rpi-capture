@@ -25,7 +25,9 @@ if ! command -v uv &>/dev/null; then
 fi
 
 # Use the system CA bundle so requests trusts local/private CAs (e.g. Caddy).
-export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+    export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+fi
 
 echo "Starting visionx-rpi-capture (dev mode) — Ctrl+C to stop"
 exec uv run flask --app app run \
