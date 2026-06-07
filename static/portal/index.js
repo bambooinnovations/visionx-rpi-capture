@@ -373,7 +373,8 @@ async function refreshDecoderModalConfig() {
         <button class="btn btn-primary btn-sm" onclick="decoderApplyAllCfg()">Apply</button>
         <button class="btn btn-secondary btn-sm" onclick="decoderResetCount()">Reset encoder count</button>
         <button class="btn btn-secondary btn-sm" onclick="decoderResetConfig()">Reset to defaults</button>
-      </div>`;
+      </div>
+      <div id="dcfg-toast" class="dcfg-toast hidden"></div>`;
   } catch (err) {
     el.innerHTML = `<div class="modal-error">Failed: ${err.message}</div>`;
   }
@@ -397,6 +398,15 @@ async function decoderApplyAllCfg() {
   }
   if (!Object.keys(body).length) return;
 
+  const toast = document.getElementById('dcfg-toast');
+  const showToast = (msg, ok) => {
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.className = `dcfg-toast ${ok ? 'dcfg-toast-ok' : 'dcfg-toast-err'}`;
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => toast.classList.add('hidden'), 2500);
+  };
+
   try {
     const res = await fetch('/api/decoder/config', {
       method: 'PATCH',
@@ -404,10 +414,11 @@ async function decoderApplyAllCfg() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Failed to apply config'); return; }
+    if (!res.ok) { showToast(data.error || 'Failed to apply config', false); return; }
+    showToast('Config saved', true);
     setTimeout(refreshDecoderModalConfig, 600);
   } catch (err) {
-    alert('Error: ' + err.message);
+    showToast('Error: ' + err.message, false);
   }
 }
 

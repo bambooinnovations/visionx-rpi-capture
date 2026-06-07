@@ -500,6 +500,18 @@
   border-top: 1px solid var(--border);
 }
 
+.dcfg-toast {
+  margin-top: 10px;
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.3s;
+}
+.dcfg-toast.hidden { display: none; }
+.dcfg-toast-ok  { background: rgba(22,163,74,0.12); color: var(--success); border: 1px solid rgba(22,163,74,0.25); }
+.dcfg-toast-err { background: rgba(220,38,38,0.10); color: var(--danger);  border: 1px solid rgba(220,38,38,0.22); }
+
 /* ── Dev Mode toggle (in nav) ────────────────────────────────────────── */
 .nav-dev-btn {
   background: transparent;

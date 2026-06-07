@@ -4,8 +4,9 @@ import shutil
 import tempfile
 import threading
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
+import requests as _requests
 import structlog
 
 import config
@@ -520,6 +521,29 @@ def patch_config():
 
     logger.info("runtime_config_updated", keys=list(updates.keys()))
     return jsonify({"updated": list(updates.keys()), "config": _effective_config()})
+
+
+@app.route("/api/system/check-url", methods=["GET"])
+def check_url():
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "url parameter required"}), 400
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return jsonify({"ok": False, "error": "Invalid URL"}), 200
+        health_url = f"{parsed.scheme}://{parsed.netloc}/health"
+        r = _requests.get(health_url, timeout=5)
+        data = r.json()
+        if data.get("status") == "ok":
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Server responded but health check failed"})
+    except _requests.exceptions.ConnectionError:
+        return jsonify({"ok": False, "error": "Could not connect to server"})
+    except _requests.exceptions.Timeout:
+        return jsonify({"ok": False, "error": "Connection timed out"})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)})
 
 
 @app.route("/api/system/config/<string:key>", methods=["DELETE"])
