@@ -265,9 +265,18 @@ class SerialTriggerListener:
             "arduino_config": {},
         }
 
+        # Simulator state (independent of the serial listener).
+        self._sim_thread: threading.Thread | None = None
+        self._sim_stop_event = threading.Event()
+        self._sim_speed_cms: float = 0.0
+
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def simulator_running(self) -> bool:
+        return self._sim_thread is not None and self._sim_thread.is_alive()
 
     @property
     def serial_connected(self) -> bool:
@@ -300,6 +309,36 @@ class SerialTriggerListener:
         with self._state_lock:
             self._arduino_state["serial_connected"] = False
         logger.info("serial_trigger_listener_stopped")
+
+    def start_simulator(self, speed_cms: float) -> None:
+        """Start the simulator.
+
+        Sends fire_trigger commands to the Arduino over serial at the interval
+        derived from capture_interval_mm ÷ speed_cms. Requires the serial
+        listener to already be running.
+        """
+        if self.simulator_running:
+            raise RuntimeError("Simulator is already running")
+        if not self.running:
+            raise RuntimeError("Serial listener must be running before starting the simulator")
+        self._sim_stop_event.clear()
+        self._sim_speed_cms = speed_cms
+        self._sim_thread = threading.Thread(
+            target=self._run_simulator,
+            args=(speed_cms,),
+            daemon=True,
+            name="hw-trigger-sim",
+        )
+        self._sim_thread.start()
+        logger.info("decoder_simulator_started", speed_cms=speed_cms)
+
+    def stop_simulator(self) -> None:
+        """Stop the simulator timer."""
+        self._sim_stop_event.set()
+        if self._sim_thread is not None:
+            self._sim_thread.join(timeout=5)
+        self._sim_thread = None
+        logger.info("decoder_simulator_stopped")
 
     def send_command(self, cmd: dict) -> None:
         """Queue a JSON command to be sent to the Arduino on the next loop tick."""
@@ -344,6 +383,8 @@ class SerialTriggerListener:
         return {
             "running": self.running,
             "uptime_seconds": uptime,
+            "simulator_running": self.simulator_running,
+            "simulator_speed_cms": self._sim_speed_cms if self.simulator_running else None,
             **stats_snapshot,
             **state,
         }
@@ -381,6 +422,26 @@ class SerialTriggerListener:
 
         if cfg:
             logger.info("arduino_config_pushed", keys=list(cfg.keys()))
+
+    def _run_simulator(self, speed_cms: float) -> None:
+        """Send fire_trigger to the Arduino at the interval matching speed_cms."""
+        try:
+            while not self._sim_stop_event.is_set():
+                cfg = self._load_file_config()
+                interval_mm = float(cfg.get("capture_interval_mm", PHYSICAL_DEFAULTS["capture_interval_mm"]))
+                interval_s = (interval_mm / 10.0) / speed_cms
+
+                self._sim_stop_event.wait(timeout=interval_s)
+                if self._sim_stop_event.is_set():
+                    break
+
+                try:
+                    self.send_command({"cmd": "fire_trigger"})
+                except RuntimeError:
+                    logger.warning("simulator_stopped_listener_not_running")
+                    break
+        except Exception:
+            logger.exception("decoder_simulator_error")
 
     def _run(self, port: str, baud: int) -> None:
         import serial

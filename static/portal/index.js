@@ -254,11 +254,12 @@ async function pollDecoder() {
 
   if (_decoderPollTimer) { clearInterval(_decoderPollTimer); _decoderPollTimer = null; }
 
-  // Stop polling entirely when the Arduino is not detected — the "Check Again"
-  // button lets the user re-probe manually.
-  if (!portPresent && !running) return;
+  const simRunning = !!status?.simulator_running;
 
-  const next = running ? 2000 : 10000;
+  // Stop polling entirely when nothing is active and the Arduino is not detected.
+  if (!portPresent && !running && !simRunning) return;
+
+  const next = (running || simRunning) ? 2000 : 10000;
   _decoderPollInterval = next;
   _decoderPollTimer = setInterval(pollDecoder, next);
 }
@@ -471,6 +472,7 @@ async function decoderResetConfig() {
 
 // ── Dev Mode ───────────────────────────────────────────────────────────
 let _devCameraIds = [];
+let _devSimPollTimer = null;
 
 function initDevMode() {
   const active = localStorage.getItem('visionx_dev_mode') === 'true';
@@ -489,7 +491,14 @@ function _applyDevMode(active) {
   const section = document.getElementById('dev-tools-section');
   if (btn)     btn.classList.toggle('dev-btn-active', active);
   if (section) section.classList.toggle('hidden', !active);
-  if (active)  refreshDevCamMode();
+  if (active) {
+    refreshDevCamMode();
+    devRefreshSimStatus();
+    if (_devSimPollTimer) clearInterval(_devSimPollTimer);
+    _devSimPollTimer = setInterval(devRefreshSimStatus, 2000);
+  } else {
+    if (_devSimPollTimer) { clearInterval(_devSimPollTimer); _devSimPollTimer = null; }
+  }
 }
 
 async function refreshDevCamMode() {
@@ -519,7 +528,53 @@ function devRefreshAfterDecoderOp() {
   const section = document.getElementById('dev-tools-section');
   if (section && !section.classList.contains('hidden')) {
     setTimeout(refreshDevCamMode, 600);
+    setTimeout(devRefreshSimStatus, 600);
   }
+}
+
+async function devRefreshSimStatus() {
+  const label = document.getElementById('dev-sim-status');
+  if (!label) return;
+  try {
+    const s = await apiFetch('/api/decoder/status');
+    if (s.simulator_running) {
+      label.textContent = `Running · ${s.simulator_speed_cms?.toFixed(1)} cm/s · ${s.triggers_received ?? 0} triggers`;
+      label.style.color = 'var(--success)';
+    } else {
+      label.textContent = 'Stopped';
+      label.style.color = '';
+    }
+  } catch (_) {
+    label.textContent = '—';
+    label.style.color = '';
+  }
+}
+
+async function decoderSimStart() {
+  const speedInput = document.getElementById('dev-sim-speed');
+  const speed_cms = parseFloat(speedInput?.value || '5');
+  if (isNaN(speed_cms) || speed_cms <= 0) { alert('Enter a valid speed (cm/s)'); return; }
+  try {
+    const res = await fetch('/api/decoder/simulator/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speed_cms }),
+    });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to start simulator'); return; }
+  } catch (err) { alert('Error: ' + err.message); return; }
+  devRefreshSimStatus();
+  devRefreshAfterDecoderOp();
+  pollDecoder();
+}
+
+async function decoderSimStop() {
+  try {
+    const res = await fetch('/api/decoder/simulator/stop', { method: 'POST' });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to stop simulator'); return; }
+  } catch (err) { alert('Error: ' + err.message); return; }
+  devRefreshSimStatus();
+  devRefreshAfterDecoderOp();
+  pollDecoder();
 }
 
 // ── Init ───────────────────────────────────────────────────────────────
