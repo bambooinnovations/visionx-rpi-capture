@@ -464,6 +464,10 @@ Full listener status including live Arduino state and capture statistics.
   "uploads_ok": 12,
   "uploads_failed": 0,
   "port_present": true,
+  "serial_connected": true,
+  "speed_cms": 5.2,
+  "encoder_count": 118,
+  "last_message_at": 1749340189.056,
   "arduino_config": {...},
   "trigger_enabled": true
 }

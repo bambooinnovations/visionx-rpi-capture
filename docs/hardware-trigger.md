@@ -98,8 +98,8 @@ The sketch lives at `arduino/decoder_trigger.ino`. Key wiring:
 Serial output is 115200 baud. Each trigger event emits one JSON line:
 
 ```json
-{"type":"trigger","source":"encoder","count":118,"trigger":1}
-{"type":"trigger","source":"manual","count":0,"trigger":1}
+{"type":"trigger","source":"encoder","count":118,"trigger":1,"speed_cms":5.20}
+{"type":"trigger","source":"manual","count":0,"trigger":1,"speed_cms":0.00}
 ```
 
-`source` is `"encoder"` for distance-based triggers or `"manual"` for the button. `count` is the cumulative encoder count and `trigger` is the trigger sequence number.
+`source` is `"encoder"` for distance-based triggers or `"manual"` for the button. `count` is the cumulative encoder count, `trigger` is the trigger sequence number, and `speed_cms` is the belt speed in cm/s at the moment of the trigger.

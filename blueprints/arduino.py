@@ -191,7 +191,7 @@ def create_blueprint(
         if not listener.running:
             return jsonify({"error": "Decoder listener is not running"}), 409
         if not listener.serial_connected:
-            return jsonify({"error": "Arduino serial port not connected"}), 503
+            return jsonify({"error": "Arduino serial port not connected"}), 409
         try:
             listener.send_command({"cmd": "fire_trigger"})
         except RuntimeError as exc:
@@ -227,7 +227,7 @@ def create_blueprint(
     def patch_config():
         """Update physical wheel/encoder params or raw Arduino params.
 
-        Physical keys (wheel_circumference_mm, encoder_ppr, capture_interval_mm)
+        Physical keys (wheel_diameter_mm, encoder_ppr, capture_interval_mm)
         automatically recompute and push counts_per_cm + trigger_interval to the Arduino.
 
         Raw keys (pulse_width_ms, speed_report_interval_ms) are sent directly.
