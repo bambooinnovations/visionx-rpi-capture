@@ -27,6 +27,11 @@ if ! command -v uv &>/dev/null; then
     fi
 fi
 
+# Use the system CA bundle so requests trusts local/private CAs (e.g. Caddy).
+if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+    export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+fi
+
 echo "Starting visionx-rpi-capture..."
 exec uv run gunicorn \
     --bind 0.0.0.0:8080 \

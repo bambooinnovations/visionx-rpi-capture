@@ -171,7 +171,7 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
                 data={
                     "trigger_count": str(trigger_event.get("count", "")),
                     "trigger_number": str(trigger_event.get("trigger", "")),
-                    "trigger_source": trigger_event.get("source", ""),
+                    "trigger_source": "manual" if trigger_event.get("source") == "serial" else trigger_event.get("source", ""),
                 },
                 headers=headers,
                 timeout=timeout,

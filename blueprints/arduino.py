@@ -227,7 +227,7 @@ def create_blueprint(
     def patch_config():
         """Update physical wheel/encoder params or raw Arduino params.
 
-        Physical keys (wheel_circumference_mm, encoder_ppr, capture_interval_mm)
+        Physical keys (wheel_diameter_mm, encoder_ppr, capture_interval_mm)
         automatically recompute and push counts_per_cm + trigger_interval to the Arduino.
 
         Raw keys (pulse_width_ms, speed_report_interval_ms) are sent directly.
