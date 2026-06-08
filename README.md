@@ -126,6 +126,12 @@ db_path = "/tmp/visionx_metrics.db"
 # local_max_files     = 200      # oldest deleted first (0 = unlimited)
 # local_max_mb        = 500      # oldest deleted first (0 = unlimited)
 
+# The keys below are runtime-only (PATCH /api/system/config) — not read from this file.
+# trigger_queue_maxsize    = 30    # max triggers per camera queue before dropping with warning
+# stitch_memory_budget_mb  = 1024  # RAM cap for pending stitch jobs; excess spills to disk
+# raw_memory_budget_mb     = 2048  # RAM cap for pending raw-upload jobs; excess spills to disk
+# max_queue_age_s          = 5.0   # drop triggers that have waited longer than this
+
 [cleanup]
 interval_seconds = 300     # How often stale temp dirs are cleaned up
 max_age_seconds  = 300     # Minimum age before removal
@@ -133,7 +139,7 @@ max_age_seconds  = 300     # Minimum age before removal
 
 Camera-specific capture and stream resolutions are defined under `[camera_profiles.*]` — see the file for per-model defaults. These profiles apply to `picamera2` only; MindVision cameras use their native sensor resolution.
 
-Runtime keys (`destination_url`, `destination_api_key`, etc.) can be changed without a restart via `PATCH /api/system/config`.
+Runtime keys (`destination_url`, `destination_api_key`, queue/memory budgets, etc.) can be changed without a restart via `PATCH /api/system/config`. See [docs/hardware-trigger.md](docs/hardware-trigger.md#memory-and-queue-protection) for memory and queue tuning details.
 
 ## Make Targets
 

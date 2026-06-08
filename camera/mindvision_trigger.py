@@ -313,8 +313,11 @@ class SerialTriggerListener:
 
         # One dedicated queue + thread per camera so each camera fires immediately
         # on trigger receipt with zero queueing delay regardless of upload backlog.
+        # Bounded: triggers are dropped (with a warning) when the queue is full so a
+        # burst of Arduino pulses cannot grow the queue without bound.
+        _trigger_maxsize = int(runtime_config.get("hw_trigger.trigger_queue_maxsize", 30))
         self._camera_queues: dict[int, queue.Queue] = {
-            cam_id: queue.Queue() for cam_id in cameras
+            cam_id: queue.Queue(maxsize=_trigger_maxsize) for cam_id in cameras
         }
         self._camera_threads: list[threading.Thread] = []
         self._collector = _TriggerCollector(
@@ -331,6 +334,8 @@ class SerialTriggerListener:
         self._pool_counter_lock = threading.Lock()
         self._stitch_pending = 0
         self._raw_pending = 0
+        self._stitch_pending_bytes = 0
+        self._raw_pending_bytes = 0
 
         self._stats = {
             "triggers_received": 0,
@@ -534,49 +539,82 @@ class SerialTriggerListener:
     def queue_depths(self) -> dict:
         """Return a snapshot of backlog depths for all pipeline queues."""
         camera_queues = {cam_id: q.qsize() for cam_id, q in self._camera_queues.items()}
+        camera_queue_maxsize = next(iter(self._camera_queues.values())).maxsize if self._camera_queues else 0
         with self._pool_counter_lock:
             stitch_pending = self._stitch_pending
             raw_pending = self._raw_pending
+            stitch_pending_mb = round(self._stitch_pending_bytes / 1024 / 1024, 1)
+            raw_pending_mb = round(self._raw_pending_bytes / 1024 / 1024, 1)
         with self._collector._lock:
             collector_pending = len(self._collector._pending)
         save_dir = config.HW_TRIGGER_LOCAL_SAVE_DIR
         disk_retry = sum(1 for _ in save_dir.glob("*.jpg")) if save_dir.exists() else 0
+        spill_dir = config.CAPTURE_TMP_DIR / "hw_trigger" / "spill"
+        disk_spill = sum(1 for _ in spill_dir.glob("*.jpg")) if spill_dir.exists() else 0
         return {
             "camera_queues": camera_queues,
+            "camera_queue_maxsize": camera_queue_maxsize,
             "collector_pending": collector_pending,
             "stitch_pending": stitch_pending,
+            "stitch_pending_mb": stitch_pending_mb,
             "raw_pending": raw_pending,
+            "raw_pending_mb": raw_pending_mb,
             "disk_retry": disk_retry,
+            "disk_spill": disk_spill,
         }
 
     # ── Private ───────────────────────────────────────────────────────────────
 
-    def _stitch_submit(self, fn, *args) -> None:
+    def _spill_raw_captures_to_disk(
+        self,
+        raw_captures: dict,
+        ts_ms: int,
+        prefix: str,
+    ) -> dict:
+        """Write raw JPEG bytes to temp files and return a dict with Paths instead of bytes.
+
+        Called when a memory budget is exceeded so in-flight jobs hold file paths
+        rather than large byte buffers. Workers read and delete the files on use.
+        """
+        spill_dir = config.CAPTURE_TMP_DIR / "hw_trigger" / "spill"
+        spill_dir.mkdir(parents=True, exist_ok=True)
+        spilled: dict = {}
+        for cam_id, (jpeg_bytes, serial) in raw_captures.items():
+            path = spill_dir / f"{prefix}_{ts_ms}_{cam_id}.jpg"
+            path.write_bytes(jpeg_bytes)
+            spilled[cam_id] = (path, serial)
+        return spilled
+
+    def _stitch_submit(self, fn, *args, byte_count: int = 0) -> None:
         with self._pool_counter_lock:
             pool = self._stitch_pool
             if pool is None:
                 return
             self._stitch_pending += 1
+            self._stitch_pending_bytes += byte_count
         def _run():
             try:
                 fn(*args)
             finally:
                 with self._pool_counter_lock:
                     self._stitch_pending = max(0, self._stitch_pending - 1)
+                    self._stitch_pending_bytes = max(0, self._stitch_pending_bytes - byte_count)
         pool.submit(_run)
 
-    def _raw_submit(self, fn, *args) -> None:
+    def _raw_submit(self, fn, *args, byte_count: int = 0) -> None:
         with self._pool_counter_lock:
             pool = self._raw_pool
             if pool is None:
                 return
             self._raw_pending += 1
+            self._raw_pending_bytes += byte_count
         def _run():
             try:
                 fn(*args)
             finally:
                 with self._pool_counter_lock:
                     self._raw_pending = max(0, self._raw_pending - 1)
+                    self._raw_pending_bytes = max(0, self._raw_pending_bytes - byte_count)
         pool.submit(_run)
 
     def _load_file_config(self) -> dict:
@@ -715,8 +753,16 @@ class SerialTriggerListener:
             )
 
             event["_received_at"] = time.monotonic()
-            for q in self._camera_queues.values():
-                q.put(event)
+            for cam_id, q in self._camera_queues.items():
+                try:
+                    q.put_nowait(event)
+                except queue.Full:
+                    logger.warning(
+                        "hw_trigger_queue_full_dropped",
+                        camera_id=cam_id,
+                        queue_size=q.maxsize,
+                        trigger=event,
+                    )
 
         elif msg_type == "speed":
             with self._state_lock:
@@ -791,12 +837,29 @@ class SerialTriggerListener:
         ts_ms: int,
     ) -> None:
         """Called by _TriggerCollector once every camera has reported for a trigger."""
-        self._stitch_submit(self._stitch_and_upload, event, raw_captures, ts_ms)
+        total_bytes = sum(len(data) for data, _ in raw_captures.values())
+        budget_bytes = int(runtime_config.get("hw_trigger.stitch_memory_budget_mb", 1024)) * 1024 * 1024
+
+        with self._pool_counter_lock:
+            pending_bytes = self._stitch_pending_bytes
+
+        if pending_bytes + total_bytes > budget_bytes:
+            logger.warning(
+                "hw_trigger_stitch_memory_budget_exceeded",
+                trigger=event,
+                pending_mb=round(pending_bytes / 1024 / 1024, 1),
+                new_mb=round(total_bytes / 1024 / 1024, 1),
+                budget_mb=budget_bytes // 1024 // 1024,
+            )
+            raw_captures = self._spill_raw_captures_to_disk(raw_captures, ts_ms, "stitch")
+            total_bytes = 0  # spilled captures no longer held in RAM
+
+        self._stitch_submit(self._stitch_and_upload, event, raw_captures, ts_ms, byte_count=total_bytes)
 
     def _stitch_and_upload(
         self,
         event: dict,
-        raw_captures: dict[int, tuple[bytes, str]],
+        raw_captures: dict[int, tuple["bytes | Path", str]],
         ts_ms: int,
     ) -> None:
         """Compute stitch and upload it immediately. Raw uploads go to the lower-priority pool.
@@ -804,9 +867,26 @@ class SerialTriggerListener:
         Runs in _stitch_pool (dedicated workers) so stitch uploads are never queued
         behind pending raw uploads from earlier triggers.
         Images stay in memory; disk is only written if the upload fails completely.
+        raw_captures values may hold either bytes (normal path) or a Path (spilled to
+        disk when the memory budget was exceeded) — both are handled transparently.
         """
         import cv2
         import numpy as np
+
+        # Materialize any captures that were spilled to disk before processing.
+        materialized: dict[int, tuple[bytes, str]] = {}
+        for cam_id, (data, serial) in raw_captures.items():
+            if isinstance(data, Path):
+                try:
+                    materialized[cam_id] = (data.read_bytes(), serial)
+                finally:
+                    try:
+                        data.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            else:
+                materialized[cam_id] = (data, serial)
+        raw_captures = materialized
 
         stitch_filename = f"{ts_ms}_stitch.jpg"
         stitch_bytes: bytes | None = None
@@ -881,7 +961,23 @@ class SerialTriggerListener:
         # background and never contend with stitch uploads for network bandwidth.
         raw_url = _get_raw_destination_url() if _get_send_raw_images() else None
         if raw_url:
-            self._raw_submit(self._upload_raw_captures, raw_captures, event, ts_ms, raw_url)
+            raw_bytes = sum(len(data) for data, _ in raw_captures.values())
+            raw_budget_bytes = int(runtime_config.get("hw_trigger.raw_memory_budget_mb", 2048)) * 1024 * 1024
+            with self._pool_counter_lock:
+                raw_pending_bytes = self._raw_pending_bytes
+            if raw_pending_bytes + raw_bytes > raw_budget_bytes:
+                logger.warning(
+                    "hw_trigger_raw_memory_budget_exceeded",
+                    trigger=event,
+                    pending_mb=round(raw_pending_bytes / 1024 / 1024, 1),
+                    new_mb=round(raw_bytes / 1024 / 1024, 1),
+                    budget_mb=raw_budget_bytes // 1024 // 1024,
+                )
+                raw_captures_for_pool = self._spill_raw_captures_to_disk(raw_captures, ts_ms, "raw")
+                raw_bytes = 0
+            else:
+                raw_captures_for_pool = raw_captures
+            self._raw_submit(self._upload_raw_captures, raw_captures_for_pool, event, ts_ms, raw_url, byte_count=raw_bytes)
 
     def _wait_for_stitch_drain(self, poll_interval: float = 0.5) -> None:
         """Block until the stitch pool has no pending work, then return.
@@ -899,7 +995,7 @@ class SerialTriggerListener:
 
     def _upload_raw_captures(
         self,
-        raw_captures: dict[int, tuple[bytes, str]],
+        raw_captures: dict[int, tuple["bytes | Path", str]],
         event: dict,
         ts_ms: int,
         raw_url: str,
@@ -909,9 +1005,20 @@ class SerialTriggerListener:
         Yields to stitch uploads before starting: if the stitch pool has any
         pending work this method blocks until it drains, so raw traffic never
         competes with stitch for bandwidth.
+        raw_captures values may hold either bytes or a Path (spilled to disk).
         """
         self._wait_for_stitch_drain()
-        for cam_id, (jpeg_bytes, serial) in raw_captures.items():
+        for cam_id, (data, serial) in raw_captures.items():
+            if isinstance(data, Path):
+                try:
+                    jpeg_bytes = data.read_bytes()
+                finally:
+                    try:
+                        data.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            else:
+                jpeg_bytes = data
             filename = f"{ts_ms}_{serial}.jpg"
             ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename, is_raw=True)
             with self._stats_lock:
