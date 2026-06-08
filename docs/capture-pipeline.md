@@ -22,13 +22,15 @@ Serial listener thread  (JSON line received)
          (waits for both cameras to report)
                    │
                    ▼
-          _stitch_pool (2 workers)
-          ┌──────────────────────────┐
-          │ 1. compute stitch        │
-          │ 2. upload stitch  ◄──────┼── completes fully here
-          │    └─ on failure:        │
-          │       write to disk      │
-          └──────────────────────────┘
+          _stitch_pool (4 workers)
+          ┌──────────────────────────────────────┐
+          │ 1. apply colour correction            │
+          │ 2. cv2.remap (undistort + warp) × N  │
+          │    (maps precomputed on first trigger)│
+          │ 3. blend onto canvas                  │
+          │ 4. upload stitch  ◄───────────────────┼── completes fully here
+          │    └─ on failure: write to disk       │
+          └──────────────────────────────────────┘
                    │ submit (only after stitch upload returns)
                    ▼
           _raw_pool (1 worker — serial)
@@ -61,6 +63,18 @@ cam0 thread (always blocking) → grabs immediately
 cam1 thread (always blocking) → grabs immediately
 ```
 
+### Precomputed warp geometry
+
+The stitch computation was historically the dominant bottleneck (~2.3 s per trigger), consisting of:
+
+1. `cv2.undistort` × N cameras — full camera-frame pass through the lens distortion model
+2. `cv2.warpPerspective(bgr, H, canvas_size)` × N cameras — perspective warp to canvas
+3. `cv2.warpPerspective(src_mask, H, canvas_size)` × N cameras — weight mask warp, **identical every trigger** for fixed calibration and frame shape
+
+All 3N passes are now replaced by a single `cv2.remap` per camera. On the first trigger (and whenever calibration changes), `_build_stitch_geometry` precomputes per-camera `(map_x, map_y, mask)` arrays that map every canvas output pixel directly to the corresponding distorted camera pixel, composing the inverse perspective warp with the forward lens-distortion model in one step. These arrays are held in a module-level cache and reused for every subsequent trigger.
+
+The cache is keyed on `(stitch_cal_mtime, camera_order, scale, per_camera_frame_shapes)` and is automatically rebuilt whenever the stitch calibration file changes on disk.
+
 ### Stitch is the primary output; raw images are debug only
 
 The stitched image (both MindVision cameras combined) is the production output sent to the server. Individual raw camera images are sent only when `send_raw_images = true`, which is intended for debugging and calibration only.
@@ -69,8 +83,10 @@ This distinction drives the two-pool design:
 
 | Pool           | Workers | Purpose                                                                      |
 | -------------- | ------- | ---------------------------------------------------------------------------- |
-| `_stitch_pool` | 2       | Compute stitch + upload stitch. Dedicated — no other work enters here.       |
+| `_stitch_pool` | 4       | Compute stitch + upload stitch. Dedicated — no other work enters here.       |
 | `_raw_pool`    | 1       | Upload raw images. Single-threaded so it cannot saturate the network link.   |
+
+Worker count rationale: each stitch job takes ~720ms end-to-end (72ms decode + 510ms stitch compute + 35ms encode + 50ms upload) on a Raspberry Pi 5 with 2 cameras. At the typical trigger rate of ~0.91/s, 4 workers gives ~5.6/s capacity — over 500% headroom. The 3-camera production setup adds one extra remap + accum pass (~180ms), giving an estimated ~900ms per job and still ~4.4/s capacity with 4 workers.
 
 Raw uploads for trigger N are not submitted to the raw pool until the stitch upload for trigger N has fully returned. This means:
 

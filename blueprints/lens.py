@@ -62,18 +62,31 @@ _ARUCO_DICT_MAP: dict[str, int] = {
 
 # ── Persistence ────────────────────────────────────────────────────────────────
 
+_lens_cal_cache: dict = {}
+_lens_cal_cache_mtime: float = 0.0
+
+
 def _load_calibration() -> dict:
+    global _lens_cal_cache, _lens_cal_cache_mtime
     try:
+        mtime = _CALIBRATION_PATH.stat().st_mtime
+        if _lens_cal_cache and mtime == _lens_cal_cache_mtime:
+            return _lens_cal_cache
         with open(_CALIBRATION_PATH) as f:
-            return json.load(f)
+            _lens_cal_cache = json.load(f)
+        _lens_cal_cache_mtime = mtime
+        return _lens_cal_cache
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 
 def _save_calibration(data: dict) -> None:
+    global _lens_cal_cache, _lens_cal_cache_mtime
     _CALIBRATION_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(_CALIBRATION_PATH, "w") as f:
         json.dump(data, f, indent=2)
+    _lens_cal_cache = data
+    _lens_cal_cache_mtime = _CALIBRATION_PATH.stat().st_mtime
 
 
 def _load_buffer() -> dict:

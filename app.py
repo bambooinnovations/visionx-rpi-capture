@@ -20,8 +20,36 @@ from tasks import CAPTURE_TMP_DIR, start_cleanup_task
 from flask import Flask, Response, after_this_request, jsonify, redirect, request, send_file, render_template
 from flask_cors import CORS
 
-configure_logging(env=config.ENV)
+configure_logging(env=config.ENV, log_dir=Path(__file__).parent / "logs")
 logger = structlog.get_logger()
+
+def _startup_info() -> dict:
+    import platform, subprocess
+    info: dict = {"env": config.ENV}
+    try:
+        import cv2, numpy as np
+        info["opencv"] = cv2.__version__
+        info["numpy"] = np.__version__
+    except ImportError:
+        pass
+    info["python"] = platform.python_version()
+    info["platform"] = f"{platform.machine()} {platform.release()}"
+    try:
+        with open("/proc/cpuinfo") as _f:
+            for _line in _f:
+                if _line.startswith("Model"):
+                    info["board"] = _line.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        pass
+    try:
+        _r = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=2)
+        info["throttled"] = _r.stdout.strip()
+    except Exception:
+        pass
+    return info
+
+logger.info("app_startup", **_startup_info())
 
 app = Flask(__name__)
 CORS(app)

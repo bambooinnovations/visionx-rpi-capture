@@ -1,10 +1,12 @@
 import logging
+import logging.handlers
+from pathlib import Path
 
 import structlog
 from structlog.processors import CallsiteParameter, CallsiteParameterAdder
 
 
-def configure_logging(env: str, log_level: str = "INFO") -> None:
+def configure_logging(env: str, log_level: str = "INFO", log_dir: Path | None = None) -> None:
     """Configure structlog for the application.
 
     Dev:  coloured, human-readable console output with callsite info.
@@ -84,3 +86,25 @@ def configure_logging(env: str, log_level: str = "INFO") -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(log_level.upper())
+
+    # File handler — daily rotation, 30-day retention, always JSON.
+    if log_dir is not None:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        json_formatter = structlog.stdlib.ProcessorFormatter(
+            foreign_pre_chain=shared_processors,
+            processors=[
+                structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                structlog.processors.JSONRenderer(),
+            ],
+        )
+        file_handler = logging.handlers.TimedRotatingFileHandler(
+            filename=log_dir / "app.log",
+            when="midnight",
+            backupCount=30,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(json_formatter)
+        root.addHandler(file_handler)
+
+    # Suppress werkzeug HTTP access lines — one line per UI poll adds up fast.
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)

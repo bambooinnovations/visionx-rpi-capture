@@ -146,7 +146,7 @@ def check_server_health() -> dict:
         return {"reachable": False, "error": str(exc)}
 
 
-def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg") -> bool:
+def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg", is_raw: bool = False) -> bool:
     """POST jpeg_bytes to url (defaults to destination_url). Returns True on success."""
     import requests
 
@@ -177,7 +177,8 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
                 timeout=timeout,
             )
             resp.raise_for_status()
-            logger.info(
+            _log = logger.debug if is_raw else logger.info
+            _log(
                 "hw_trigger_upload_ok",
                 url=url,
                 filename=filename,
@@ -378,7 +379,7 @@ class SerialTriggerListener:
             # Stitch pool: compute stitch + upload stitch. Dedicated workers so this
             # critical path is never queued behind anything else.
             self._stitch_pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=2, thread_name_prefix="hw-stitch"
+                max_workers=4, thread_name_prefix="hw-stitch"
             )
             # Raw pool: single worker, intentionally serial and slow.
             # Raw image uploads are debug-only and must not compete with stitch
@@ -696,7 +697,7 @@ class SerialTriggerListener:
 
             with self._stats_lock:
                 self._stats["triggers_received"] += 1
-            logger.info(
+            logger.debug(
                 "serial_trigger_received",
                 source=event.get("source"),
                 count=event.get("count"),
@@ -767,7 +768,7 @@ class SerialTriggerListener:
                 serial = cam.serial_number or str(cam_id)
                 with self._stats_lock:
                     self._stats["captures_ok"] += 1
-                logger.info("hw_trigger_captured", camera_id=cam_id, trigger=event)
+                logger.debug("hw_trigger_captured", camera_id=cam_id, trigger=event)
                 self._collector.add_frame(event, cam_id, jpeg_bytes, serial)
             except Exception as exc:
                 with self._stats_lock:
@@ -806,19 +807,33 @@ class SerialTriggerListener:
         if len(raw_captures) >= 2 and self._load_calibration and self._stitch_frames:
             cal = self._load_calibration()
             if cal:
+                import time as _time
                 frames: dict[int, np.ndarray] = {}
+                t_decode = 0.0
                 for cam_id, (jpeg_bytes, _) in raw_captures.items():
                     arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+                    _t0 = _time.perf_counter()
                     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    t_decode += _time.perf_counter() - _t0
                     if frame is not None:
                         frames[cam_id] = frame
 
+                _t0 = _time.perf_counter()
                 stitched = self._stitch_frames(frames, cal) if frames else None
+                t_stitch = _time.perf_counter() - _t0
+
                 if stitched is not None:
+                    _t0 = _time.perf_counter()
                     ok_enc, buf = cv2.imencode(".jpg", stitched, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                    t_encode = _time.perf_counter() - _t0
                     if ok_enc:
                         stitch_bytes = buf.tobytes()
-                        logger.info("hw_trigger_stitched", trigger=event)
+                        logger.info("hw_trigger_stitched", trigger=event,
+                                    t_stitch_ms=round(t_stitch * 1000),
+                                    stitch_kb=round(len(stitch_bytes) / 1024))
+                        logger.debug("hw_trigger_stitch_phases", trigger=event,
+                                     t_decode_ms=round(t_decode * 1000),
+                                     t_encode_ms=round(t_encode * 1000))
                     else:
                         logger.warning("hw_trigger_stitch_encode_failed", trigger=event)
                 else:
@@ -888,7 +903,7 @@ class SerialTriggerListener:
         self._wait_for_stitch_drain()
         for cam_id, (jpeg_bytes, serial) in raw_captures.items():
             filename = f"{ts_ms}_{serial}.jpg"
-            ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename)
+            ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename, is_raw=True)
             with self._stats_lock:
                 if ok:
                     self._stats["uploads_ok"] += 1
