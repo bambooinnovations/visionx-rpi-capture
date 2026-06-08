@@ -58,8 +58,16 @@ def enforce_local_limits(save_dir: Path) -> None:
     max_files = runtime_config.get("hw_trigger.local_max_files", config.HW_TRIGGER_LOCAL_MAX_FILES)
     max_mb = runtime_config.get("hw_trigger.local_max_mb", config.HW_TRIGGER_LOCAL_MAX_MB)
 
+    def _mtime(f: Path) -> float:
+        try:
+            return f.stat().st_mtime
+        except OSError:
+            return 0.0
+
     # Sort oldest-first so we always remove the least recent captures.
-    files = sorted(save_dir.glob("*.jpg"), key=lambda f: f.stat().st_mtime)
+    # Use a safe mtime helper because concurrent enforce calls can delete a file
+    # between glob() and stat(), which would otherwise raise FileNotFoundError.
+    files = sorted(save_dir.glob("*.jpg"), key=_mtime)
 
     if max_files > 0:
         while len(files) > max_files:
@@ -69,7 +77,12 @@ def enforce_local_limits(save_dir: Path) -> None:
 
     if max_mb > 0:
         max_bytes = max_mb * 1024 * 1024
-        total = sum(f.stat().st_size for f in files if f.exists())
+        total = 0
+        for f in files:
+            try:
+                total += f.stat().st_size
+            except OSError:
+                pass
         while total > max_bytes and files:
             removed = files.pop(0)
             try:
