@@ -254,11 +254,12 @@ async function pollDecoder() {
 
   if (_decoderPollTimer) { clearInterval(_decoderPollTimer); _decoderPollTimer = null; }
 
-  // Stop polling entirely when the Arduino is not detected — the "Check Again"
-  // button lets the user re-probe manually.
-  if (!portPresent && !running) return;
+  const simRunning = !!status?.simulator_running;
 
-  const next = running ? 2000 : 10000;
+  // Stop polling entirely when nothing is active and the Arduino is not detected.
+  if (!portPresent && !running && !simRunning) return;
+
+  const next = (running || simRunning) ? 2000 : 10000;
   _decoderPollInterval = next;
   _decoderPollTimer = setInterval(pollDecoder, next);
 }
@@ -372,7 +373,8 @@ async function refreshDecoderModalConfig() {
         <button class="btn btn-primary btn-sm" onclick="decoderApplyAllCfg()">Apply</button>
         <button class="btn btn-secondary btn-sm" onclick="decoderResetCount()">Reset encoder count</button>
         <button class="btn btn-secondary btn-sm" onclick="decoderResetConfig()">Reset to defaults</button>
-      </div>`;
+      </div>
+      <div id="dcfg-toast" class="dcfg-toast hidden"></div>`;
   } catch (err) {
     el.innerHTML = `<div class="modal-error">Failed: ${err.message}</div>`;
   }
@@ -396,6 +398,15 @@ async function decoderApplyAllCfg() {
   }
   if (!Object.keys(body).length) return;
 
+  const toast = document.getElementById('dcfg-toast');
+  const showToast = (msg, ok) => {
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.className = `dcfg-toast ${ok ? 'dcfg-toast-ok' : 'dcfg-toast-err'}`;
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => toast.classList.add('hidden'), 2500);
+  };
+
   try {
     const res = await fetch('/api/decoder/config', {
       method: 'PATCH',
@@ -403,10 +414,11 @@ async function decoderApplyAllCfg() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) { alert(data.error || 'Failed to apply config'); return; }
+    if (!res.ok) { showToast(data.error || 'Failed to apply config', false); return; }
+    showToast('Config saved', true);
     setTimeout(refreshDecoderModalConfig, 600);
   } catch (err) {
-    alert('Error: ' + err.message);
+    showToast('Error: ' + err.message, false);
   }
 }
 
@@ -471,6 +483,41 @@ async function decoderResetConfig() {
 
 // ── Dev Mode ───────────────────────────────────────────────────────────
 let _devCameraIds = [];
+let _devSimPollTimer = null;
+let _queueStream = null;
+
+function startQueueStream() {
+  if (_queueStream) return;
+  _queueStream = new EventSource('/api/decoder/queues/stream');
+  _queueStream.onmessage = (e) => {
+    try { renderQueueDepths(JSON.parse(e.data)); } catch (_) {}
+  };
+}
+
+function stopQueueStream() {
+  if (_queueStream) { _queueStream.close(); _queueStream = null; }
+  const el = document.getElementById('dev-queue-depths');
+  if (el) el.innerHTML = '<div class="dev-queue-row"><span>—</span><span class="dev-queue-val">—</span></div>';
+}
+
+function renderQueueDepths(d) {
+  const el = document.getElementById('dev-queue-depths');
+  if (!el) return;
+  const rows = [];
+  for (const [id, depth] of Object.entries(d.camera_queues || {})) {
+    rows.push(`<div class="dev-queue-row"><span>Cam ${id} capture</span><span class="dev-queue-val${depth > 0 ? ' dev-queue-nonzero' : ''}">${depth}</span></div>`);
+  }
+  const items = [
+    ['Collector pending', d.collector_pending],
+    ['Stitch upload',     d.stitch_pending],
+    ['Raw upload',        d.raw_pending],
+    ['Disk retry',        d.disk_retry],
+  ];
+  for (const [label, depth] of items) {
+    rows.push(`<div class="dev-queue-row"><span>${label}</span><span class="dev-queue-val${depth > 0 ? ' dev-queue-nonzero' : ''}">${depth}</span></div>`);
+  }
+  el.innerHTML = rows.join('');
+}
 
 function initDevMode() {
   const active = localStorage.getItem('visionx_dev_mode') === 'true';
@@ -489,7 +536,16 @@ function _applyDevMode(active) {
   const section = document.getElementById('dev-tools-section');
   if (btn)     btn.classList.toggle('dev-btn-active', active);
   if (section) section.classList.toggle('hidden', !active);
-  if (active)  refreshDevCamMode();
+  if (active) {
+    refreshDevCamMode();
+    devRefreshSimStatus();
+    if (_devSimPollTimer) clearInterval(_devSimPollTimer);
+    _devSimPollTimer = setInterval(devRefreshSimStatus, 2000);
+    startQueueStream();
+  } else {
+    if (_devSimPollTimer) { clearInterval(_devSimPollTimer); _devSimPollTimer = null; }
+    stopQueueStream();
+  }
 }
 
 async function refreshDevCamMode() {
@@ -519,7 +575,53 @@ function devRefreshAfterDecoderOp() {
   const section = document.getElementById('dev-tools-section');
   if (section && !section.classList.contains('hidden')) {
     setTimeout(refreshDevCamMode, 600);
+    setTimeout(devRefreshSimStatus, 600);
   }
+}
+
+async function devRefreshSimStatus() {
+  const label = document.getElementById('dev-sim-status');
+  if (!label) return;
+  try {
+    const s = await apiFetch('/api/decoder/status');
+    if (s.simulator_running) {
+      label.textContent = `Running · ${s.simulator_speed_cms?.toFixed(1)} cm/s · ${s.triggers_received ?? 0} triggers`;
+      label.style.color = 'var(--success)';
+    } else {
+      label.textContent = 'Stopped';
+      label.style.color = '';
+    }
+  } catch (_) {
+    label.textContent = '—';
+    label.style.color = '';
+  }
+}
+
+async function decoderSimStart() {
+  const speedInput = document.getElementById('dev-sim-speed');
+  const speed_cms = parseFloat(speedInput?.value || '5');
+  if (isNaN(speed_cms) || speed_cms <= 0) { alert('Enter a valid speed (cm/s)'); return; }
+  try {
+    const res = await fetch('/api/decoder/simulator/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speed_cms }),
+    });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to start simulator'); return; }
+  } catch (err) { alert('Error: ' + err.message); return; }
+  devRefreshSimStatus();
+  devRefreshAfterDecoderOp();
+  pollDecoder();
+}
+
+async function decoderSimStop() {
+  try {
+    const res = await fetch('/api/decoder/simulator/stop', { method: 'POST' });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Failed to stop simulator'); return; }
+  } catch (err) { alert('Error: ' + err.message); return; }
+  devRefreshSimStatus();
+  devRefreshAfterDecoderOp();
+  pollDecoder();
 }
 
 // ── Init ───────────────────────────────────────────────────────────────

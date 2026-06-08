@@ -21,7 +21,10 @@
 
 <div id="error-banner" class="error-banner hidden">
   <span id="error-text"></span>
-  <button onclick="clearError()">✕</button>
+  <div class="error-banner-actions">
+    <button class="btn-save-anyway hidden" id="save-anyway-btn" onclick="saveUploadForce()">Save anyway</button>
+    <button class="error-close" onclick="clearError()">✕</button>
+  </div>
 </div>
 <div id="success-toast" class="success-toast hidden">Saved</div>
 
@@ -45,7 +48,10 @@
         <span class="sys-desc">POST destination for stitched captures</span>
       </div>
       <div class="sys-field-control">
-        <input class="sys-input" id="destination_url" type="url" placeholder="http://…/upload" autocomplete="off">
+        <div class="sys-input-wrap">
+          <input class="sys-input" id="destination_url" type="url" placeholder="http://…/upload" autocomplete="off">
+          <span class="sys-field-error hidden" id="err-destination_url"></span>
+        </div>
         <button class="btn btn-secondary btn-sm" onclick="resetField('hw_trigger.destination_url')" title="Reset to toml default">Reset</button>
       </div>
     </div>
@@ -82,13 +88,16 @@
         <span class="sys-desc">POST destination for per-camera raw images</span>
       </div>
       <div class="sys-field-control">
-        <input class="sys-input" id="raw_destination_url" type="url" placeholder="http://…/upload/raw" autocomplete="off">
+        <div class="sys-input-wrap">
+          <input class="sys-input" id="raw_destination_url" type="url" placeholder="http://…/upload/raw" autocomplete="off">
+          <span class="sys-field-error hidden" id="err-raw_destination_url"></span>
+        </div>
         <button class="btn btn-secondary btn-sm" onclick="resetField('hw_trigger.raw_destination_url')" title="Reset to toml default">Reset</button>
       </div>
     </div>
 
     <div class="sys-card-actions">
-      <button class="btn btn-primary btn-sm" onclick="saveUpload()">Save</button>
+      <button class="btn btn-primary btn-sm" id="save-btn" onclick="saveUpload()">Save</button>
     </div>
   </section>
 

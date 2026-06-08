@@ -4,8 +4,9 @@ import shutil
 import tempfile
 import threading
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
+import requests as _requests
 import structlog
 
 import config
@@ -19,8 +20,36 @@ from tasks import CAPTURE_TMP_DIR, start_cleanup_task
 from flask import Flask, Response, after_this_request, jsonify, redirect, request, send_file, render_template
 from flask_cors import CORS
 
-configure_logging(env=config.ENV)
+configure_logging(env=config.ENV, log_dir=Path(__file__).parent / "logs")
 logger = structlog.get_logger()
+
+def _startup_info() -> dict:
+    import platform, subprocess
+    info: dict = {"env": config.ENV}
+    try:
+        import cv2, numpy as np
+        info["opencv"] = cv2.__version__
+        info["numpy"] = np.__version__
+    except ImportError:
+        pass
+    info["python"] = platform.python_version()
+    info["platform"] = f"{platform.machine()} {platform.release()}"
+    try:
+        with open("/proc/cpuinfo") as _f:
+            for _line in _f:
+                if _line.startswith("Model"):
+                    info["board"] = _line.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        pass
+    try:
+        _r = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=2)
+        info["throttled"] = _r.stdout.strip()
+    except Exception:
+        pass
+    return info
+
+logger.info("app_startup", **_startup_info())
 
 app = Flask(__name__)
 CORS(app)
@@ -236,7 +265,7 @@ def mindvision_settings_page(camera_id):
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "healthy"})
 
 
 def _build_system_status() -> tuple[bool, dict]:
@@ -520,6 +549,32 @@ def patch_config():
 
     logger.info("runtime_config_updated", keys=list(updates.keys()))
     return jsonify({"updated": list(updates.keys()), "config": _effective_config()})
+
+
+@app.route("/api/system/check-url", methods=["GET"])
+def check_url():
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "url parameter required"}), 400
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return jsonify({"ok": False, "error": "Invalid URL — must use http:// or https://"}), 200
+        health_url = f"{parsed.scheme}://{parsed.netloc}/health"
+        r = _requests.get(health_url, timeout=5)
+        try:
+            data = r.json()
+        except ValueError:
+            return jsonify({"ok": False, "error": "Server responded but returned a non-JSON body"})
+        if data.get("status") in ("ok", "healthy"):
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Server responded but health check failed"})
+    except _requests.exceptions.ConnectionError:
+        return jsonify({"ok": False, "error": "Could not connect to server"})
+    except _requests.exceptions.Timeout:
+        return jsonify({"ok": False, "error": "Connection timed out"})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)})
 
 
 @app.route("/api/system/config/<string:key>", methods=["DELETE"])

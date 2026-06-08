@@ -232,23 +232,167 @@ def _compute_homography(
 
 # ── Calibration persistence ────────────────────────────────────────────────────
 
+_cal_cache: dict | None = None
+_cal_cache_mtime: float = 0.0
+_cal_save_lock = threading.Lock()
+
+
 def _load_calibration() -> dict | None:
+    global _cal_cache, _cal_cache_mtime
     try:
+        mtime = _CALIBRATION_PATH.stat().st_mtime
+        if _cal_cache is not None and mtime == _cal_cache_mtime:
+            return _cal_cache
         with open(_CALIBRATION_PATH) as f:
-            return json.load(f)
+            _cal_cache = json.load(f)
+        _cal_cache_mtime = mtime
+        return _cal_cache
     except (FileNotFoundError, json.JSONDecodeError):
+        _cal_cache = None
         return None
 
 
 def _save_calibration(data: dict) -> None:
+    global _cal_cache, _cal_cache_mtime
     _CALIBRATION_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(_CALIBRATION_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+    with _cal_save_lock:
+        with open(_CALIBRATION_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+        _cal_cache = data
+        _cal_cache_mtime = _CALIBRATION_PATH.stat().st_mtime
 
 
 # ── Stitching ──────────────────────────────────────────────────────────────────
 
 _MAX_CANVAS_PX = 16_000  # guard against degenerate homographies
+
+# ── Precomputed warp geometry cache ───────────────────────────────────────────
+# Per-camera remap maps (canvas px → distorted camera px) and weight masks are
+# built once per unique (calibration, camera-set, frame-shapes, scale) tuple and
+# reused for every subsequent frame.  The combined map encodes both the
+# perspective warp and the lens distortion model so each frame needs only one
+# cv2.remap instead of a separate cv2.undistort + cv2.warpPerspective.
+_stitch_geom: dict | None = None
+_stitch_geom_key: tuple | None = None
+_stitch_geom_lock = threading.Lock()
+
+
+def _build_stitch_geometry(
+    calibration: dict,
+    available: list[int],
+    frame_shapes: dict[int, tuple[int, int]],
+    scale: float,
+) -> dict | None:
+    """Build per-camera remap maps and weight masks for cv2.remap.
+
+    Returns None when canvas dimensions are degenerate or exceed _MAX_CANVAS_PX.
+    """
+    cam_data = calibration["cameras"]
+    ref_id = available[0]
+
+    H_ref = np.array(cam_data[str(ref_id)]["homography"], dtype=np.float64)
+    H_ref_inv = np.linalg.inv(H_ref)
+
+    S = np.array([[scale, 0, 0], [0, scale, 0], [0, 0, 1]], dtype=np.float64)
+    S_inv = np.diag([1.0 / scale, 1.0 / scale, 1.0]).astype(np.float64)
+
+    rel_homographies: dict[int, np.ndarray] = {ref_id: np.eye(3, dtype=np.float64)}
+    corner_pts: list[np.ndarray] = [
+        np.array(
+            [[0, 0], [frame_shapes[ref_id][1], 0],
+             [frame_shapes[ref_id][1], frame_shapes[ref_id][0]],
+             [0, frame_shapes[ref_id][0]]],
+            dtype=np.float32,
+        )
+    ]
+
+    for cam_id in available:
+        if cam_id == ref_id:
+            continue
+        H_i = np.array(cam_data[str(cam_id)]["homography"], dtype=np.float64)
+        H_rel = S @ (H_ref_inv @ H_i) @ S_inv
+        rel_homographies[cam_id] = H_rel
+
+        h_i, w_i = frame_shapes[cam_id]
+        corners_i = np.array(
+            [[0, 0], [w_i, 0], [w_i, h_i], [0, h_i]], dtype=np.float32
+        ).reshape(-1, 1, 2)
+        corner_pts.append(cv2.perspectiveTransform(corners_i, H_rel).reshape(-1, 2))
+
+    all_pts = np.concatenate(corner_pts, axis=0)
+    x_min, y_min = all_pts.min(axis=0)
+    x_max, y_max = all_pts.max(axis=0)
+    offset_x = float(-min(0.0, x_min))
+    offset_y = float(-min(0.0, y_min))
+    canvas_w = int(np.ceil(x_max + offset_x))
+    canvas_h = int(np.ceil(y_max + offset_y))
+
+    if canvas_w > _MAX_CANVAS_PX or canvas_h > _MAX_CANVAS_PX or canvas_w <= 0 or canvas_h <= 0:
+        logger.warning("stitch_canvas_size_rejected", w=canvas_w, h=canvas_h)
+        return None
+
+    T = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float64)
+
+    # Flat grid of all canvas pixel coordinates (x, y, 1).
+    n = canvas_w * canvas_h
+    yy, xx = np.mgrid[0:canvas_h, 0:canvas_w].astype(np.float64)
+    canvas_pts = np.stack([xx.ravel(), yy.ravel(), np.ones(n)], axis=0)  # (3, N)
+
+    per_cam: dict[int, tuple] = {}
+    for cam_id in available:
+        H_combined = T @ rel_homographies[cam_id]  # canvas → undistorted cam (scaled)
+        H_inv = np.linalg.inv(H_combined)
+
+        frame_h, frame_w = frame_shapes[cam_id]
+        intr = get_camera_intrinsics(cam_id)
+
+        # Map every canvas pixel back to undistorted camera pixel space.
+        cam_h = H_inv @ canvas_pts   # (3, N)
+        cam_h /= cam_h[2:3, :]
+        x_cam = cam_h[0]             # undistorted pixel x (scaled)
+        y_cam = cam_h[1]             # undistorted pixel y (scaled)
+
+        if intr is not None:
+            K, D = intr
+            # H already incorporates the uniform scale S so coordinates are in
+            # scaled pixel space.  Adjust K to match.
+            fx = K[0, 0] * scale
+            fy = K[1, 1] * scale
+            cx = K[0, 2] * scale
+            cy = K[1, 2] * scale
+
+            # Normalise to ideal (undistorted) camera coordinates.
+            x_n = (x_cam - cx) / fx
+            y_n = (y_cam - cy) / fy
+
+            # Apply forward distortion model (undistorted → distorted, normalised).
+            d = D.ravel()
+            k1, k2 = float(d[0]), float(d[1])
+            p1 = float(d[2]) if len(d) > 2 else 0.0
+            p2 = float(d[3]) if len(d) > 3 else 0.0
+            k3 = float(d[4]) if len(d) > 4 else 0.0
+            r2 = x_n * x_n + y_n * y_n
+            radial = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+            x_d = x_n * radial + 2.0 * p1 * x_n * y_n + p2 * (r2 + 2.0 * x_n * x_n)
+            y_d = y_n * radial + p1 * (r2 + 2.0 * y_n * y_n) + 2.0 * p2 * x_n * y_n
+
+            # Back to distorted pixel coordinates (scaled space).
+            map_x = (fx * x_d + cx).reshape(canvas_h, canvas_w).astype(np.float32)
+            map_y = (fy * y_d + cy).reshape(canvas_h, canvas_w).astype(np.float32)
+        else:
+            map_x = x_cam.reshape(canvas_h, canvas_w).astype(np.float32)
+            map_y = y_cam.reshape(canvas_h, canvas_w).astype(np.float32)
+
+        # Weight mask: 1.0 where the source lookup lands inside the camera frame.
+        mask = (
+            (map_x >= 0) & (map_x < frame_w) &
+            (map_y >= 0) & (map_y < frame_h)
+        ).astype(np.float32)
+
+        per_cam[cam_id] = (map_x, map_y, mask)
+
+    return {"canvas_w": canvas_w, "canvas_h": canvas_h, "per_cam": per_cam}
+
 
 def _stitch_frames(
     frames: dict[int, np.ndarray],
@@ -267,7 +411,14 @@ def _stitch_frames(
     max_width caps the reference camera's width before warping.  All frames are
     scaled by the same factor s = max_width / ref_w so the homographies remain
     consistent: H_rel_scaled = S @ H_rel @ S_inv where S = diag(s, s, 1).
+
+    Per-camera remap maps and weight masks are precomputed on the first call for
+    a given (calibration, camera-set, frame-shapes, scale) combination and reused
+    for every subsequent trigger, eliminating the per-frame cv2.undistort and
+    mask warpPerspective passes.
     """
+    global _stitch_geom, _stitch_geom_key
+
     cam_data = calibration["cameras"]
 
     available_set = {cid for cid in frames if str(cid) in cam_data}
@@ -285,112 +436,103 @@ def _stitch_frames(
         return None
 
     ref_id = available[0]
-    H_ref = np.array(cam_data[str(ref_id)]["homography"], dtype=np.float64)
-    H_ref_inv = np.linalg.inv(H_ref)  # board world → ref camera pixels
 
-    # Pre-undistort all frames if intrinsics are available.
-    undistorted: dict[int, np.ndarray] = {}
-    for cam_id in available:
-        intr = get_camera_intrinsics(cam_id)
-        if intr is not None:
-            K, D = intr
-            undistorted[cam_id] = cv2.undistort(frames[cam_id], K, D)
-        else:
-            undistorted[cam_id] = frames[cam_id]
-
-    # Apply per-camera colour correction if calibrated.
+    # Apply per-camera colour correction to the original (distorted) frames.
     color_correction = calibration.get("color_correction", {})
-    if color_correction:
-        for cam_id in available:
-            cc = color_correction.get(str(cam_id))
-            f = undistorted[cam_id]
-            if cc and f.ndim == 3 and f.shape[2] == 3:
-                f = f.astype(np.float32)
-                f[:, :, 0] *= cc["b"]
-                f[:, :, 1] *= cc["g"]
-                f[:, :, 2] *= cc["r"]
-                undistorted[cam_id] = np.clip(f, 0, 255).astype(np.uint8)
+    processed: dict[int, np.ndarray] = {}
+    for cam_id in available:
+        f = _to_bgr(frames[cam_id])
+        cc = color_correction.get(str(cam_id)) if color_correction else None
+        if cc and f.ndim == 3 and f.shape[2] == 3:
+            f = f.astype(np.float32)
+            f[:, :, 0] *= cc["b"]
+            f[:, :, 1] *= cc["g"]
+            f[:, :, 2] *= cc["r"]
+            f = np.clip(f, 0, 255).astype(np.uint8)
+        processed[cam_id] = f
 
-    # Downscale all frames uniformly so the warp operates on smaller images.
-    # All H_rel are adjusted: H_rel_scaled = S @ H_rel @ S_inv.
-    ref_h, ref_w = undistorted[ref_id].shape[:2]
+    # Uniform downscale if max_width is requested.
+    ref_w = processed[ref_id].shape[1]
     scale = (max_width / ref_w) if (max_width and max_width > 0 and ref_w > max_width) else 1.0
 
     if scale < 1.0:
         for cam_id in available:
-            h, w = undistorted[cam_id].shape[:2]
-            undistorted[cam_id] = cv2.resize(
-                undistorted[cam_id],
+            h, w = processed[cam_id].shape[:2]
+            processed[cam_id] = cv2.resize(
+                processed[cam_id],
                 (max(1, int(w * scale)), max(1, int(h * scale))),
                 interpolation=cv2.INTER_AREA,
             )
-        ref_h, ref_w = undistorted[ref_id].shape[:2]
 
-    S = np.array([[scale, 0, 0], [0, scale, 0], [0, 0, 1]], dtype=np.float64)
-    S_inv = np.diag([1.0 / scale, 1.0 / scale, 1.0]).astype(np.float64)
+    # Look up or build the precomputed warp geometry for this configuration.
+    frame_shapes = {cid: processed[cid].shape[:2] for cid in available}
+    geom_key = (
+        _cal_cache_mtime,
+        tuple(camera_order or []),
+        round(scale, 6),
+        tuple((cid, frame_shapes[cid]) for cid in sorted(available)),
+    )
+    if _stitch_geom_key != geom_key:
+        with _stitch_geom_lock:
+            if _stitch_geom_key != geom_key:  # re-check after acquiring lock
+                _stitch_geom = _build_stitch_geometry(calibration, available, frame_shapes, scale)
+                _stitch_geom_key = geom_key
+                if _stitch_geom is not None:
+                    logger.info(
+                        "stitch_geometry_rebuilt",
+                        canvas=(_stitch_geom["canvas_w"], _stitch_geom["canvas_h"]),
+                    )
 
-    # Build per-camera relative homographies (cam_i → ref space) and collect
-    # all projected corner points to size the canvas.
-    rel_homographies: dict[int, np.ndarray] = {ref_id: np.eye(3, dtype=np.float64)}
-    corner_pts: list[np.ndarray] = [
-        np.array([[0, 0], [ref_w, 0], [ref_w, ref_h], [0, ref_h]], dtype=np.float32)
-    ]
-
-    for cam_id in available:
-        if cam_id == ref_id:
-            continue
-        H_i = np.array(cam_data[str(cam_id)]["homography"], dtype=np.float64)
-        H_rel = S @ (H_ref_inv @ H_i) @ S_inv
-        rel_homographies[cam_id] = H_rel
-
-        h_i, w_i = undistorted[cam_id].shape[:2]
-        corners_i = np.array(
-            [[0, 0], [w_i, 0], [w_i, h_i], [0, h_i]], dtype=np.float32
-        ).reshape(-1, 1, 2)
-        projected = cv2.perspectiveTransform(corners_i, H_rel).reshape(-1, 2)
-        corner_pts.append(projected)
-
-    all_pts = np.concatenate(corner_pts, axis=0)
-    x_min, y_min = all_pts.min(axis=0)
-    x_max, y_max = all_pts.max(axis=0)
-
-    offset_x = float(-min(0.0, x_min))
-    offset_y = float(-min(0.0, y_min))
-
-    canvas_w = int(np.ceil(x_max + offset_x))
-    canvas_h = int(np.ceil(y_max + offset_y))
-
-    if canvas_w > _MAX_CANVAS_PX or canvas_h > _MAX_CANVAS_PX or canvas_w <= 0 or canvas_h <= 0:
-        logger.warning("stitch_canvas_size_rejected", w=canvas_w, h=canvas_h)
+    if _stitch_geom is None:
         return None
 
-    T = np.array([[1, 0, offset_x], [0, 1, offset_y], [0, 0, 1]], dtype=np.float64)
+    import time as _time
 
+    geom = _stitch_geom
+    canvas_w = geom["canvas_w"]
+    canvas_h = geom["canvas_h"]
     canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.float32)
     weight = np.zeros((canvas_h, canvas_w), dtype=np.float32)
 
+    t_remap_ms: dict[int, int] = {}
+    t_accum_total = 0.0
+
     for cam_id in available:
-        H = T @ rel_homographies[cam_id]
-        frame = undistorted[cam_id]
-        bgr = _to_bgr(frame).astype(np.float32)
-        src_mask = np.ones(frame.shape[:2], dtype=np.float32)
+        map_x, map_y, mask = geom["per_cam"][cam_id]
+        _t0 = _time.perf_counter()
+        warped = cv2.remap(
+            processed[cam_id], map_x, map_y,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        ).astype(np.float32)
+        t_remap_ms[cam_id] = round((_time.perf_counter() - _t0) * 1000)
 
-        warped = cv2.warpPerspective(bgr, H, (canvas_w, canvas_h),
-                                     flags=cv2.INTER_LINEAR,
-                                     borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-        warped_mask = cv2.warpPerspective(src_mask, H, (canvas_w, canvas_h),
-                                          flags=cv2.INTER_LINEAR,
-                                          borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-
-        canvas += warped * warped_mask[:, :, np.newaxis]
-        weight += warped_mask
+        _t0 = _time.perf_counter()
+        # In-place multiply avoids a 72 MB temporary allocation.
+        np.multiply(warped, mask[:, :, np.newaxis], out=warped)
+        canvas += warped
+        weight += mask
+        t_accum_total += _time.perf_counter() - _t0
 
     covered = weight > 0
     if not covered.any():
         return None
 
-    canvas[covered] /= weight[covered, np.newaxis]
-    return np.clip(canvas, 0, 255).astype(np.uint8)
+    _t0 = _time.perf_counter()
+    # Sequential division (no fancy indexing) — avoids scattered read/write
+    # across 6 M elements which thrashes the cache.
+    safe_weight = np.where(covered, weight, 1.0)
+    result = np.clip(canvas / safe_weight[:, :, np.newaxis], 0, 255).astype(np.uint8)
+    t_blend_ms = round((_time.perf_counter() - _t0) * 1000)
+
+    logger.debug("stitch_timing",
+                canvas_px=f"{canvas_w}×{canvas_h}",
+                remap_ms=t_remap_ms,
+                accum_ms=round(t_accum_total * 1000),
+                blend_ms=t_blend_ms)
+
+    return result
 
 
 # ── Blueprint ──────────────────────────────────────────────────────────────────
@@ -686,6 +828,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         cal, err_resp = _calibration_preflight()
         if err_resp is not None:
             return err_resp
+        assert cal is not None
 
         cam_ids = sorted(int(k) for k in cal["cameras"])
         frames, grab_errors = _grab_frames(cam_ids)

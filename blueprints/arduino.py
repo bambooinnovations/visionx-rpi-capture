@@ -8,10 +8,12 @@ so they need access to both the listener and the camera registry.
 """
 from __future__ import annotations
 
+import json
 import os
+import time
 
 import structlog
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 import config
 from camera.mindvision import CameraMode, MindVisionCamera
@@ -292,6 +294,45 @@ def create_blueprint(
                 pass
         return jsonify({"reset": True, "defaults": ARDUINO_DEFAULTS})
 
+    # ── Simulator ─────────────────────────────────────────────────────────────
+
+    @bp.route("/simulator/start", methods=["POST"])
+    def simulator_start():
+        """Start the decoder simulator.
+
+        Sends fire_trigger commands to the Arduino at the interval derived from
+        capture_interval_mm ÷ speed_cms. The serial listener must already be
+        running (i.e. Arduino connected and decoder started).
+
+        Optional JSON body:
+          speed_cms  float  Simulated belt speed in cm/s (default: 5.0)
+        """
+        body = request.get_json(silent=True) or {}
+        try:
+            speed_cms = float(body.get("speed_cms", 5.0))
+        except (ValueError, TypeError):
+            return jsonify({"error": "speed_cms must be a number"}), 400
+        if speed_cms <= 0:
+            return jsonify({"error": "speed_cms must be positive"}), 400
+
+        try:
+            listener.start_simulator(speed_cms)
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+
+        logger.info("simulator_start_api", speed_cms=speed_cms)
+        return jsonify({"simulator_running": True, "speed_cms": speed_cms})
+
+    @bp.route("/simulator/stop", methods=["POST"])
+    def simulator_stop():
+        """Stop the decoder simulator."""
+        if not listener.simulator_running:
+            return jsonify({"error": "Simulator is not running"}), 409
+
+        listener.stop_simulator()
+        logger.info("simulator_stop_api")
+        return jsonify({"simulator_running": False})
+
     # ── Diagnostics ───────────────────────────────────────────────────────────
 
     @bp.route("/diag", methods=["GET"])
@@ -330,6 +371,20 @@ def create_blueprint(
                 "sw_trigger_error": sw_error,
             }
         return jsonify(results)
+
+    @bp.route("/queues/stream")
+    def queues_stream():
+        """SSE stream of pipeline queue depths, updated every second."""
+        @stream_with_context
+        def generate():
+            while True:
+                yield f"data: {json.dumps(listener.queue_depths())}\n\n"
+                time.sleep(1)
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @bp.route("/server-health", methods=["GET"])
     def decoder_server_health():
