@@ -858,6 +858,20 @@ class SerialTriggerListener:
         if raw_url and self._raw_pool is not None:
             self._raw_submit(self._upload_raw_captures, raw_captures, event, ts_ms, raw_url)
 
+    def _wait_for_stitch_drain(self, poll_interval: float = 0.5) -> None:
+        """Block until the stitch pool has no pending work, then return.
+
+        Called by the raw upload worker before each upload so raw traffic
+        never competes with stitch uploads for bandwidth.
+        """
+        while True:
+            with self._pool_counter_lock:
+                pending = self._stitch_pending
+            if pending == 0:
+                return
+            if self._stop_event.wait(timeout=poll_interval):
+                return
+
     def _upload_raw_captures(
         self,
         raw_captures: dict[int, tuple[bytes, str]],
@@ -867,9 +881,11 @@ class SerialTriggerListener:
     ) -> None:
         """Upload individual camera images. Debug only — runs in the single-worker raw pool.
 
-        This method intentionally runs one upload at a time (serial) so that raw
-        image traffic cannot saturate the network link and slow down stitch uploads.
+        Yields to stitch uploads before starting: if the stitch pool has any
+        pending work this method blocks until it drains, so raw traffic never
+        competes with stitch for bandwidth.
         """
+        self._wait_for_stitch_drain()
         for cam_id, (jpeg_bytes, serial) in raw_captures.items():
             filename = f"{ts_ms}_{serial}.jpg"
             ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename)
