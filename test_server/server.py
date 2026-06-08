@@ -1,17 +1,17 @@
 """Minimal test server for hardware-trigger image ingestion.
 
 Start with:  uv run --group test-server python test_server/server.py
-             uv run --group test-server python test_server/server.py --lean
 Then open:   http://<pi-ip>:8888/
 
-POST /upload        — stitched capture endpoint; accepts any multipart form fields alongside the image
-POST /upload-raw    — raw per-camera capture endpoint; same behaviour as /upload
-GET  /              — real-time monitor page (WebSocket-updated, no refresh needed)
-GET  /images/{filename} — serve a received image (normal mode only)
+POST /upload             — stitched capture endpoint
+POST /upload-raw         — raw per-camera capture endpoint
+GET  /                   — real-time monitor page
+GET  /mode               — {"lean": bool}
+POST /mode               — {"lean": bool}  toggle lean mode at runtime
+GET  /images/{filename}  — serve a received image (normal mode only)
 
---lean  Skip disk writes and image display. Acknowledges every upload instantly
-        and pushes metadata-only cards to the monitor. Use this when throughput
-        is high enough to overwhelm disk I/O or the browser thumbnail grid.
+Lean mode skips disk writes and sends no image URLs so the browser
+renders text-only cards. Toggle it live from the monitor page.
 """
 from __future__ import annotations
 
@@ -27,16 +27,15 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
 _parser = argparse.ArgumentParser(add_help=False)
-_parser.add_argument("--lean", action="store_true", help="metadata-only mode; no disk writes, no images")
+_parser.add_argument("--lean", action="store_true", help="start in lean mode")
 _parser.add_argument("--port", type=int, default=8888)
 _args, _ = _parser.parse_known_args()
 
-LEAN: bool = _args.lean
-PORT: int  = _args.port
+PORT: int   = _args.port
+_lean: bool = _args.lean   # mutable — changed at runtime via POST /mode
 
 SAVE_DIR = Path(__file__).parent / "received"
-if not LEAN:
-    SAVE_DIR.mkdir(exist_ok=True)
+SAVE_DIR.mkdir(exist_ok=True)
 
 
 def _extract_exif(jpeg_bytes: bytes) -> dict:
@@ -46,8 +45,7 @@ def _extract_exif(jpeg_bytes: bytes) -> dict:
 
         exif = piexif.load(jpeg_bytes)
         out: dict = {}
-
-        ifd0 = exif.get("0th", {})
+        ifd0     = exif.get("0th", {})
         exif_ifd = exif.get("Exif", {})
 
         def _str(val):
@@ -55,25 +53,20 @@ def _extract_exif(jpeg_bytes: bytes) -> dict:
                 return val.decode(errors="replace").rstrip("\x00")
             return val
 
-        make = _str(ifd0.get(piexif.ImageIFD.Make, ""))
-        model = _str(ifd0.get(piexif.ImageIFD.Model, ""))
+        make   = _str(ifd0.get(piexif.ImageIFD.Make, ""))
+        model  = _str(ifd0.get(piexif.ImageIFD.Model, ""))
         serial = _str(ifd0.get(piexif.ImageIFD.CameraSerialNumber, ""))
-        dt = _str(ifd0.get(piexif.ImageIFD.DateTime, ""))
+        dt     = _str(ifd0.get(piexif.ImageIFD.DateTime, ""))
 
-        if make:
-            out["make"] = make
-        if model:
-            out["model"] = model
-        if serial:
-            out["serial_number"] = serial
-        if dt:
-            out["datetime"] = dt
+        if make:   out["make"]   = make
+        if model:  out["model"]  = model
+        if serial: out["serial_number"] = serial
+        if dt:     out["datetime"] = dt
 
         exp = exif_ifd.get(piexif.ExifIFD.ExposureTime)
         if exp and isinstance(exp, tuple) and exp[1]:
             us = exp[0]
-            ms = us / 1000
-            out["exposure_time"] = f"{us} µs ({ms:.2f} ms)"
+            out["exposure_time"] = f"{us} µs ({us / 1000:.2f} ms)"
 
         iso = exif_ifd.get(piexif.ExifIFD.ISOSpeedRatings)
         if iso is not None:
@@ -107,45 +100,34 @@ async def _broadcast(payload: dict) -> None:
 async def _handle_upload(request: Request, kind: str):
     form = await request.form()
 
-    # Find the image file — accept any field name, fall back to first file found.
     image_field = form.get("image") or next(
         (v for v in form.values() if hasattr(v, "read")), None
     )
     if image_field is None:
         return {"error": "no image file found in form data"}, 400
 
-    content = await image_field.read()
+    content  = await image_field.read()
     image_id = str(uuid.uuid4())[:8]
-    meta = {k: v for k, v in form.items() if not hasattr(v, "read")}
+    meta     = {k: v for k, v in form.items() if not hasattr(v, "read")}
 
-    if LEAN:
-        payload = {
-            "id": image_id,
-            "kind": kind,
-            "received_at": datetime.now(timezone.utc).isoformat(),
-            "original_filename": image_field.filename,
-            "content_type": image_field.content_type,
-            "file_size_bytes": len(content),
-            "meta": meta,
-            "exif": _extract_exif(content),
-            "headers": dict(request.headers),
-        }
-    else:
+    payload: dict = {
+        "type":              "capture",
+        "id":                image_id,
+        "kind":              kind,
+        "received_at":       datetime.now(timezone.utc).isoformat(),
+        "original_filename": image_field.filename,
+        "content_type":      image_field.content_type,
+        "file_size_bytes":   len(content),
+        "meta":              meta,
+        "exif":              _extract_exif(content),
+        "headers":           dict(request.headers),
+    }
+
+    if not _lean:
         filename = f"{int(time.time())}_{image_id}.jpg"
         (SAVE_DIR / filename).write_bytes(content)
-        payload = {
-            "id": image_id,
-            "kind": kind,
-            "received_at": datetime.now(timezone.utc).isoformat(),
-            "filename": filename,
-            "original_filename": image_field.filename,
-            "content_type": image_field.content_type,
-            "file_size_bytes": len(content),
-            "meta": meta,
-            "exif": _extract_exif(content),
-            "headers": dict(request.headers),
-            "image_url": f"/images/{filename}",
-        }
+        payload["filename"]  = filename
+        payload["image_url"] = f"/images/{filename}"
 
     await _broadcast(payload)
     return {"status": "received", **payload}
@@ -166,6 +148,20 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/mode")
+async def get_mode():
+    return {"lean": _lean}
+
+
+@app.post("/mode")
+async def set_mode(request: Request):
+    global _lean
+    body  = await request.json()
+    _lean = bool(body.get("lean", _lean))
+    await _broadcast({"type": "mode", "lean": _lean})
+    return {"lean": _lean}
+
+
 @app.get("/images/{filename}")
 async def serve_image(filename: str):
     path = SAVE_DIR / filename
@@ -178,6 +174,8 @@ async def serve_image(filename: str):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     _clients.append(websocket)
+    # Sync the current mode to the newly connected client.
+    await websocket.send_text(json.dumps({"type": "mode", "lean": _lean}))
     try:
         while True:
             await websocket.receive_text()
@@ -195,11 +193,33 @@ _HTML = """<!DOCTYPE html>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: monospace; background: #0f0f0f; color: #d4d4d4; padding: 24px; }
 
-  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
+  header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
   h1 { color: #4ade80; font-size: 1.1rem; letter-spacing: 0.05em; }
   #count { font-size: 0.75rem; color: #555; }
   #status { font-size: 0.75rem; color: #666; margin-left: auto; }
   #status.connected { color: #4ade80; }
+
+  /* lean toggle */
+  .lean-toggle { display: flex; align-items: center; gap: 8px; margin-left: 8px; }
+  .lean-toggle label { font-size: 0.72rem; color: #888; cursor: pointer; user-select: none; }
+  .lean-toggle label.active { color: #facc15; }
+  .switch { position: relative; width: 32px; height: 18px; cursor: pointer; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0;
+    background: #333; border-radius: 18px;
+    transition: background 0.2s;
+  }
+  .slider::before {
+    content: "";
+    position: absolute;
+    width: 12px; height: 12px;
+    left: 3px; top: 3px;
+    background: #888; border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+  }
+  input:checked + .slider { background: #854d0e; }
+  input:checked + .slider::before { transform: translateX(14px); background: #facc15; }
 
   #feed { display: flex; flex-direction: column; gap: 14px; }
 
@@ -214,44 +234,36 @@ _HTML = """<!DOCTYPE html>
     padding: 14px;
     animation: pop 0.15s ease;
   }
-  .card.raw    { border-left-color: #fb923c; }
-  .card.lean   { grid-template-columns: 1fr; }
+  .card.raw  { border-left-color: #fb923c; }
+  .card.lean { grid-template-columns: 1fr; }
 
   .badge {
     display: inline-block;
-    font-size: 0.6rem;
-    font-weight: bold;
+    font-size: 0.6rem; font-weight: bold;
     letter-spacing: 0.08em;
-    padding: 2px 6px;
-    border-radius: 3px;
-    vertical-align: middle;
-    margin-left: 6px;
+    padding: 2px 6px; border-radius: 3px;
+    vertical-align: middle; margin-left: 6px;
   }
   .badge-stitch { background: #14532d; color: #4ade80; }
   .badge-raw    { background: #431407; color: #fb923c; }
+
   @keyframes pop {
     from { opacity: 0; transform: translateY(-6px); }
     to   { opacity: 1; transform: translateY(0); }
   }
 
   .thumb {
-    width: 240px;
-    height: 180px;
-    object-fit: cover;
-    border-radius: 3px;
-    border: 1px solid #333;
-    cursor: zoom-in;
-    display: block;
+    width: 240px; height: 180px;
+    object-fit: cover; border-radius: 3px;
+    border: 1px solid #333; cursor: zoom-in; display: block;
   }
 
   .meta-wrap { min-width: 0; }
   .capture-id { font-size: 0.7rem; color: #4ade80; margin-bottom: 10px; }
 
   .section-label {
-    font-size: 0.65rem;
-    color: #555;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+    font-size: 0.65rem; color: #555;
+    text-transform: uppercase; letter-spacing: 0.08em;
     margin: 10px 0 4px;
   }
   .section-label:first-of-type { margin-top: 0; }
@@ -262,25 +274,16 @@ _HTML = """<!DOCTYPE html>
   td.v { word-break: break-all; }
 
   .toggle {
-    display: inline-block;
-    margin-top: 10px;
-    font-size: 0.68rem;
-    color: #555;
-    cursor: pointer;
-    user-select: none;
+    display: inline-block; margin-top: 10px;
+    font-size: 0.68rem; color: #555;
+    cursor: pointer; user-select: none;
   }
   .toggle:hover { color: #999; }
   .collapsible {
-    display: none;
-    margin-top: 6px;
-    padding: 8px;
-    background: #111;
-    border-radius: 3px;
-    font-size: 0.67rem;
-    color: #888;
-    white-space: pre-wrap;
-    word-break: break-all;
-    line-height: 1.6;
+    display: none; margin-top: 6px; padding: 8px;
+    background: #111; border-radius: 3px;
+    font-size: 0.67rem; color: #888;
+    white-space: pre-wrap; word-break: break-all; line-height: 1.6;
   }
 
   .empty { color: #333; font-size: 0.85rem; text-align: center; padding: 60px 0; }
@@ -289,7 +292,13 @@ _HTML = """<!DOCTYPE html>
 <body>
 <header>
   <h1>VisionX HW Trigger Monitor</h1>
-  <span id="mode-badge"></span>
+  <div class="lean-toggle">
+    <label id="lean-label" for="lean-cb">lean</label>
+    <label class="switch">
+      <input type="checkbox" id="lean-cb" onchange="onLeanToggle(this.checked)">
+      <span class="slider"></span>
+    </label>
+  </div>
   <span id="count"></span>
   <span id="status">connecting…</span>
 </header>
@@ -299,10 +308,25 @@ _HTML = """<!DOCTYPE html>
 
 <script>
 let received = 0;
-const feed    = document.getElementById("feed");
-const status  = document.getElementById("status");
-const counter = document.getElementById("count");
-const modeBadge = document.getElementById("mode-badge");
+const feed     = document.getElementById("feed");
+const status   = document.getElementById("status");
+const counter  = document.getElementById("count");
+const leanCb   = document.getElementById("lean-cb");
+const leanLabel = document.getElementById("lean-label");
+
+function applyLeanUI(lean) {
+  leanCb.checked = lean;
+  leanLabel.className = lean ? "active" : "";
+}
+
+async function onLeanToggle(lean) {
+  applyLeanUI(lean);
+  await fetch("/mode", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lean }),
+  }).catch(() => {});
+}
 
 function fmtSize(bytes) {
   return bytes >= 1048576
@@ -314,7 +338,7 @@ function row(k, v) {
   return `<tr><td class="k">${k}</td><td class="v">${v ?? "—"}</td></tr>`;
 }
 
-function toggle(label, contentId) {
+function collapsible(label, contentId) {
   return `<span class="toggle" onclick="
     const el = document.getElementById('${contentId}');
     const open = el.style.display === 'block';
@@ -334,13 +358,6 @@ function addCard(d) {
   const badgeClass = isRaw ? "badge-raw" : "badge-stitch";
   const badgeLabel = isRaw ? "RAW" : "STITCH";
 
-  if (modeBadge && !modeBadge.textContent) {
-    modeBadge.textContent = isLean ? "lean mode" : "normal mode";
-    modeBadge.style.cssText = isLean
-      ? "font-size:0.7rem;color:#facc15;border:1px solid #854d0e;padding:1px 7px;border-radius:3px;"
-      : "font-size:0.7rem;color:#555;";
-  }
-
   const serverRows = [
     row("received_at",       d.received_at),
     row("file_size",         fmtSize(d.file_size_bytes)),
@@ -359,8 +376,8 @@ function addCard(d) {
 
   const exifEntries = Object.entries(d.exif || {});
   const exifSection = exifEntries.length ? `
-      <div class="section-label">camera exif</div>
-      <table>${exifEntries.map(([k, v]) => row(k, v)).join("")}</table>` : "";
+    <div class="section-label">camera exif</div>
+    <table>${exifEntries.map(([k, v]) => row(k, v)).join("")}</table>` : "";
 
   const meta = `
     <div class="capture-id">#${uid}<span class="badge ${badgeClass}">${badgeLabel}</span></div>
@@ -369,7 +386,7 @@ function addCard(d) {
     ${exifSection}
     <div class="section-label">form fields</div>
     <table>${metaRows}</table>
-    ${toggle("request headers", "hdr-" + uid)}
+    ${collapsible("request headers", "hdr-" + uid)}
     <pre class="collapsible" id="hdr-${uid}">${headersText}</pre>`;
 
   const card = document.createElement("div");
@@ -386,11 +403,21 @@ function addCard(d) {
 
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen    = () => { status.textContent = "● connected"; status.className = "connected"; };
-  ws.onmessage = (e) => addCard(JSON.parse(e.data));
-  ws.onclose   = () => {
+  ws.onopen = () => {
+    status.textContent = "● connected";
+    status.className   = "connected";
+  };
+  ws.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.type === "mode") {
+      applyLeanUI(d.lean);
+    } else if (d.type === "capture") {
+      addCard(d);
+    }
+  };
+  ws.onclose = () => {
     status.textContent = "○ disconnected — reconnecting…";
-    status.className = "";
+    status.className   = "";
     setTimeout(connect, 2000);
   };
 }
@@ -406,7 +433,5 @@ async def monitor():
 
 
 if __name__ == "__main__":
-    mode = "LEAN (no disk writes, no images)" if LEAN else "NORMAL (saves images to disk)"
-    print(f"[server] mode: {mode}")
-    print(f"[server] listening on http://0.0.0.0:{PORT}")
+    print(f"[server] starting in {'lean' if _lean else 'normal'} mode on http://0.0.0.0:{PORT}")
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
