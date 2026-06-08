@@ -558,11 +558,14 @@ def check_url():
         return jsonify({"ok": False, "error": "url parameter required"}), 400
     try:
         parsed = urlparse(url)
-        if not parsed.scheme or not parsed.netloc:
-            return jsonify({"ok": False, "error": "Invalid URL"}), 200
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return jsonify({"ok": False, "error": "Invalid URL — must use http:// or https://"}), 200
         health_url = f"{parsed.scheme}://{parsed.netloc}/health"
         r = _requests.get(health_url, timeout=5)
-        data = r.json()
+        try:
+            data = r.json()
+        except ValueError:
+            return jsonify({"ok": False, "error": "Server responded but returned a non-JSON body"})
         if data.get("status") in ("ok", "healthy"):
             return jsonify({"ok": True})
         return jsonify({"ok": False, "error": "Server responded but health check failed"})

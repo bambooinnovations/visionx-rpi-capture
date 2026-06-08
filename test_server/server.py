@@ -133,6 +133,7 @@ async def _handle_upload(request: Request, kind: str):
 
     else:
         filename = f"{int(time.time())}_{image_id}.jpg"
+        exif_info = _extract_exif(content)
         (SAVE_DIR / filename).write_bytes(content)
         del content
 
@@ -146,7 +147,7 @@ async def _handle_upload(request: Request, kind: str):
             "content_type":      image_field.content_type,
             "file_size_bytes":   file_size,
             "meta":              meta,
-            "exif":              _extract_exif((SAVE_DIR / filename).read_bytes()),
+            "exif":              exif_info,
             "headers":           dict(request.headers),
             "image_url":         f"/images/{filename}",
         }

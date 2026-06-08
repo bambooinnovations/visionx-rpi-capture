@@ -19,6 +19,7 @@ marker, DICT_4X4_250.
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -64,6 +65,7 @@ _ARUCO_DICT_MAP: dict[str, int] = {
 
 _lens_cal_cache: dict = {}
 _lens_cal_cache_mtime: float = 0.0
+_lens_cal_save_lock = threading.Lock()
 
 
 def _load_calibration() -> dict:
@@ -83,10 +85,11 @@ def _load_calibration() -> dict:
 def _save_calibration(data: dict) -> None:
     global _lens_cal_cache, _lens_cal_cache_mtime
     _CALIBRATION_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(_CALIBRATION_PATH, "w") as f:
-        json.dump(data, f, indent=2)
-    _lens_cal_cache = data
-    _lens_cal_cache_mtime = _CALIBRATION_PATH.stat().st_mtime
+    with _lens_cal_save_lock:
+        with open(_CALIBRATION_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+        _lens_cal_cache = data
+        _lens_cal_cache_mtime = _CALIBRATION_PATH.stat().st_mtime
 
 
 def _load_buffer() -> dict:

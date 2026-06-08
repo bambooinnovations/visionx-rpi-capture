@@ -445,7 +445,10 @@ class SerialTriggerListener:
         if self._raw_pool is not None:
             self._raw_pool.shutdown(wait=False, cancel_futures=True)
             self._raw_pool = None
-        # _disk_retry_thread is a daemon and will exit when _stop_event is set.
+
+        if self._disk_retry_thread is not None:
+            self._disk_retry_thread.join(timeout=5)
+            self._disk_retry_thread = None
 
         logger.info("serial_trigger_listener_stopped")
 
@@ -550,6 +553,9 @@ class SerialTriggerListener:
 
     def _stitch_submit(self, fn, *args) -> None:
         with self._pool_counter_lock:
+            pool = self._stitch_pool
+            if pool is None:
+                return
             self._stitch_pending += 1
         def _run():
             try:
@@ -557,10 +563,13 @@ class SerialTriggerListener:
             finally:
                 with self._pool_counter_lock:
                     self._stitch_pending = max(0, self._stitch_pending - 1)
-        self._stitch_pool.submit(_run)
+        pool.submit(_run)
 
     def _raw_submit(self, fn, *args) -> None:
         with self._pool_counter_lock:
+            pool = self._raw_pool
+            if pool is None:
+                return
             self._raw_pending += 1
         def _run():
             try:
@@ -568,7 +577,7 @@ class SerialTriggerListener:
             finally:
                 with self._pool_counter_lock:
                     self._raw_pending = max(0, self._raw_pending - 1)
-        self._raw_pool.submit(_run)
+        pool.submit(_run)
 
     def _load_file_config(self) -> dict:
         try:
@@ -735,7 +744,6 @@ class SerialTriggerListener:
         Never waits on uploads or other cameras — guaranteed zero queueing delay.
         """
         tmp_dir = config.CAPTURE_TMP_DIR / "hw_trigger"
-        max_age = float(runtime_config.get("hw_trigger.max_queue_age_s", 5.0))
 
         while not self._stop_event.is_set():
             try:
@@ -783,8 +791,7 @@ class SerialTriggerListener:
         ts_ms: int,
     ) -> None:
         """Called by _TriggerCollector once every camera has reported for a trigger."""
-        if self._stitch_pool is not None:
-            self._stitch_submit(self._stitch_and_upload, event, raw_captures, ts_ms)
+        self._stitch_submit(self._stitch_and_upload, event, raw_captures, ts_ms)
 
     def _stitch_and_upload(
         self,
@@ -858,19 +865,22 @@ class SerialTriggerListener:
                     self._stats["uploads_ok"] += 1
                 else:
                     self._stats["uploads_failed"] += 1
-                    # Network is persistently down — write to disk so we can retry later.
-                    _save_image_locally(stitch_bytes, event, filename=stitch_filename)
-                    logger.warning(
-                        "hw_trigger_stitch_fallback_local",
-                        filename=stitch_filename,
-                        trigger=event,
-                    )
+
+        # Save locally if explicitly requested OR as fallback when upload failed.
+        if not stitch_ok and _get_save_local():
+            _save_image_locally(stitch_bytes, event, filename=stitch_filename)
+            if url:
+                logger.warning(
+                    "hw_trigger_stitch_fallback_local",
+                    filename=stitch_filename,
+                    trigger=event,
+                )
 
         # === RAW UPLOADS — debug only, enqueued after stitch is done ===
         # Submitted to the single-worker raw pool so they drain slowly in the
         # background and never contend with stitch uploads for network bandwidth.
         raw_url = _get_raw_destination_url() if _get_send_raw_images() else None
-        if raw_url and self._raw_pool is not None:
+        if raw_url:
             self._raw_submit(self._upload_raw_captures, raw_captures, event, ts_ms, raw_url)
 
     def _wait_for_stitch_drain(self, poll_interval: float = 0.5) -> None:

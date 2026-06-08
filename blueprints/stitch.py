@@ -234,6 +234,7 @@ def _compute_homography(
 
 _cal_cache: dict | None = None
 _cal_cache_mtime: float = 0.0
+_cal_save_lock = threading.Lock()
 
 
 def _load_calibration() -> dict | None:
@@ -254,10 +255,11 @@ def _load_calibration() -> dict | None:
 def _save_calibration(data: dict) -> None:
     global _cal_cache, _cal_cache_mtime
     _CALIBRATION_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(_CALIBRATION_PATH, "w") as f:
-        json.dump(data, f, indent=2)
-    _cal_cache = data
-    _cal_cache_mtime = _CALIBRATION_PATH.stat().st_mtime
+    with _cal_save_lock:
+        with open(_CALIBRATION_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+        _cal_cache = data
+        _cal_cache_mtime = _CALIBRATION_PATH.stat().st_mtime
 
 
 # ── Stitching ──────────────────────────────────────────────────────────────────
