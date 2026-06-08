@@ -577,6 +577,17 @@
   gap: 8px;
 }
 
+.dev-queue-depths { display: flex; flex-direction: column; gap: 2px; }
+.dev-queue-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.dev-queue-val { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text); min-width: 20px; text-align: right; }
+.dev-queue-nonzero { color: var(--warning); }
+
 @media (max-width: 600px) {
   .camera-grid { grid-template-columns: 1fr; }
   .quick-links  { grid-template-columns: 1fr; }

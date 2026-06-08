@@ -327,6 +327,10 @@ class SerialTriggerListener:
         self._raw_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._disk_retry_thread: threading.Thread | None = None
 
+        self._pool_counter_lock = threading.Lock()
+        self._stitch_pending = 0
+        self._raw_pending = 0
+
         self._stats = {
             "triggers_received": 0,
             "captures_ok": 0,
@@ -523,7 +527,47 @@ class SerialTriggerListener:
             **state,
         }
 
+    def queue_depths(self) -> dict:
+        """Return a snapshot of backlog depths for all pipeline queues."""
+        camera_queues = {cam_id: q.qsize() for cam_id, q in self._camera_queues.items()}
+        with self._pool_counter_lock:
+            stitch_pending = self._stitch_pending
+            raw_pending = self._raw_pending
+        with self._collector._lock:
+            collector_pending = len(self._collector._pending)
+        save_dir = config.HW_TRIGGER_LOCAL_SAVE_DIR
+        disk_retry = sum(1 for _ in save_dir.glob("*.jpg")) if save_dir.exists() else 0
+        return {
+            "camera_queues": camera_queues,
+            "collector_pending": collector_pending,
+            "stitch_pending": stitch_pending,
+            "raw_pending": raw_pending,
+            "disk_retry": disk_retry,
+        }
+
     # ── Private ───────────────────────────────────────────────────────────────
+
+    def _stitch_submit(self, fn, *args) -> None:
+        with self._pool_counter_lock:
+            self._stitch_pending += 1
+        def _run():
+            try:
+                fn(*args)
+            finally:
+                with self._pool_counter_lock:
+                    self._stitch_pending = max(0, self._stitch_pending - 1)
+        self._stitch_pool.submit(_run)
+
+    def _raw_submit(self, fn, *args) -> None:
+        with self._pool_counter_lock:
+            self._raw_pending += 1
+        def _run():
+            try:
+                fn(*args)
+            finally:
+                with self._pool_counter_lock:
+                    self._raw_pending = max(0, self._raw_pending - 1)
+        self._raw_pool.submit(_run)
 
     def _load_file_config(self) -> dict:
         try:
@@ -739,7 +783,7 @@ class SerialTriggerListener:
     ) -> None:
         """Called by _TriggerCollector once every camera has reported for a trigger."""
         if self._stitch_pool is not None:
-            self._stitch_pool.submit(self._stitch_and_upload, event, raw_captures, ts_ms)
+            self._stitch_submit(self._stitch_and_upload, event, raw_captures, ts_ms)
 
     def _stitch_and_upload(
         self,
@@ -812,7 +856,7 @@ class SerialTriggerListener:
         # background and never contend with stitch uploads for network bandwidth.
         raw_url = _get_raw_destination_url() if _get_send_raw_images() else None
         if raw_url and self._raw_pool is not None:
-            self._raw_pool.submit(self._upload_raw_captures, raw_captures, event, ts_ms, raw_url)
+            self._raw_submit(self._upload_raw_captures, raw_captures, event, ts_ms, raw_url)
 
     def _upload_raw_captures(
         self,
