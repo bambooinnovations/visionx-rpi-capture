@@ -237,7 +237,7 @@ def mindvision_settings_page(camera_id):
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "healthy"})
 
 
 def _build_system_status() -> tuple[bool, dict]:
@@ -535,7 +535,7 @@ def check_url():
         health_url = f"{parsed.scheme}://{parsed.netloc}/health"
         r = _requests.get(health_url, timeout=5)
         data = r.json()
-        if data.get("status") == "ok":
+        if data.get("status") in ("ok", "healthy"):
             return jsonify({"ok": True})
         return jsonify({"ok": False, "error": "Server responded but health check failed"})
     except _requests.exceptions.ConnectionError:
