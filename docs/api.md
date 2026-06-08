@@ -102,6 +102,10 @@ Update one or more values at runtime without a server restart. Overrides are per
 | `hw_trigger.local_max_mb` | int |
 | `hw_trigger.raw_destination_url` | string |
 | `hw_trigger.send_raw_images` | bool |
+| `hw_trigger.trigger_queue_maxsize` | int |
+| `hw_trigger.stitch_memory_budget_mb` | int |
+| `hw_trigger.raw_memory_budget_mb` | int |
+| `hw_trigger.max_queue_age_s` | float |
 
 ---
 
