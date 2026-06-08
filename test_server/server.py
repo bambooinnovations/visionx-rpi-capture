@@ -1,15 +1,21 @@
 """Minimal test server for hardware-trigger image ingestion.
 
 Start with:  uv run --group test-server python test_server/server.py
+             uv run --group test-server python test_server/server.py --lean
 Then open:   http://<pi-ip>:8888/
 
 POST /upload        — stitched capture endpoint; accepts any multipart form fields alongside the image
 POST /upload-raw    — raw per-camera capture endpoint; same behaviour as /upload
 GET  /              — real-time monitor page (WebSocket-updated, no refresh needed)
-GET  /images/{filename} — serve a received image
+GET  /images/{filename} — serve a received image (normal mode only)
+
+--lean  Skip disk writes and image display. Acknowledges every upload instantly
+        and pushes metadata-only cards to the monitor. Use this when throughput
+        is high enough to overwhelm disk I/O or the browser thumbnail grid.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import time
 import uuid
@@ -20,8 +26,17 @@ import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--lean", action="store_true", help="metadata-only mode; no disk writes, no images")
+_parser.add_argument("--port", type=int, default=8888)
+_args, _ = _parser.parse_known_args()
+
+LEAN: bool = _args.lean
+PORT: int  = _args.port
+
 SAVE_DIR = Path(__file__).parent / "received"
-SAVE_DIR.mkdir(exist_ok=True)
+if not LEAN:
+    SAVE_DIR.mkdir(exist_ok=True)
 
 
 def _extract_exif(jpeg_bytes: bytes) -> dict:
@@ -101,25 +116,36 @@ async def _handle_upload(request: Request, kind: str):
 
     content = await image_field.read()
     image_id = str(uuid.uuid4())[:8]
-    filename = f"{int(time.time())}_{image_id}.jpg"
-    (SAVE_DIR / filename).write_bytes(content)
-
     meta = {k: v for k, v in form.items() if not hasattr(v, "read")}
-    exif_info = _extract_exif(content)
 
-    payload = {
-        "id": image_id,
-        "kind": kind,
-        "received_at": datetime.now(timezone.utc).isoformat(),
-        "filename": filename,
-        "original_filename": image_field.filename,
-        "content_type": image_field.content_type,
-        "file_size_bytes": len(content),
-        "meta": meta,
-        "exif": exif_info,
-        "headers": dict(request.headers),
-        "image_url": f"/images/{filename}",
-    }
+    if LEAN:
+        payload = {
+            "id": image_id,
+            "kind": kind,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "original_filename": image_field.filename,
+            "content_type": image_field.content_type,
+            "file_size_bytes": len(content),
+            "meta": meta,
+            "exif": _extract_exif(content),
+            "headers": dict(request.headers),
+        }
+    else:
+        filename = f"{int(time.time())}_{image_id}.jpg"
+        (SAVE_DIR / filename).write_bytes(content)
+        payload = {
+            "id": image_id,
+            "kind": kind,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "filename": filename,
+            "original_filename": image_field.filename,
+            "content_type": image_field.content_type,
+            "file_size_bytes": len(content),
+            "meta": meta,
+            "exif": _extract_exif(content),
+            "headers": dict(request.headers),
+            "image_url": f"/images/{filename}",
+        }
 
     await _broadcast(payload)
     return {"status": "received", **payload}
@@ -188,7 +214,8 @@ _HTML = """<!DOCTYPE html>
     padding: 14px;
     animation: pop 0.15s ease;
   }
-  .card.raw { border-left-color: #fb923c; }
+  .card.raw    { border-left-color: #fb923c; }
+  .card.lean   { grid-template-columns: 1fr; }
 
   .badge {
     display: inline-block;
@@ -262,6 +289,7 @@ _HTML = """<!DOCTYPE html>
 <body>
 <header>
   <h1>VisionX HW Trigger Monitor</h1>
+  <span id="mode-badge"></span>
   <span id="count"></span>
   <span id="status">connecting…</span>
 </header>
@@ -274,6 +302,7 @@ let received = 0;
 const feed    = document.getElementById("feed");
 const status  = document.getElementById("status");
 const counter = document.getElementById("count");
+const modeBadge = document.getElementById("mode-badge");
 
 function fmtSize(bytes) {
   return bytes >= 1048576
@@ -299,18 +328,27 @@ function addCard(d) {
   received++;
   counter.textContent = `(${received} received)`;
 
-  const uid = d.id;
+  const uid      = d.id;
+  const isRaw    = d.kind === "raw";
+  const isLean   = !d.image_url;
+  const badgeClass = isRaw ? "badge-raw" : "badge-stitch";
+  const badgeLabel = isRaw ? "RAW" : "STITCH";
 
-  // Server-added fields shown at top
+  if (modeBadge && !modeBadge.textContent) {
+    modeBadge.textContent = isLean ? "lean mode" : "normal mode";
+    modeBadge.style.cssText = isLean
+      ? "font-size:0.7rem;color:#facc15;border:1px solid #854d0e;padding:1px 7px;border-radius:3px;"
+      : "font-size:0.7rem;color:#555;";
+  }
+
   const serverRows = [
     row("received_at",       d.received_at),
     row("file_size",         fmtSize(d.file_size_bytes)),
     row("content_type",      d.content_type),
     row("original_filename", d.original_filename),
-    row("saved_as",          d.filename),
+    ...(d.filename ? [row("saved_as", d.filename)] : []),
   ].join("");
 
-  // Whatever form fields were sent — dynamic, no assumptions
   const metaEntries = Object.entries(d.meta || {});
   const metaRows = metaEntries.length
     ? metaEntries.map(([k, v]) => row(k, v)).join("")
@@ -319,36 +357,29 @@ function addCard(d) {
   const headersText = Object.entries(d.headers || {})
     .map(([k, v]) => `${k}: ${v}`).join("\\n");
 
-  // EXIF section — only shown when the image carries embedded metadata
   const exifEntries = Object.entries(d.exif || {});
   const exifSection = exifEntries.length ? `
       <div class="section-label">camera exif</div>
       <table>${exifEntries.map(([k, v]) => row(k, v)).join("")}</table>` : "";
 
-  const isRaw   = d.kind === "raw";
-  const badgeClass = isRaw ? "badge-raw" : "badge-stitch";
-  const badgeLabel = isRaw ? "RAW" : "STITCH";
+  const meta = `
+    <div class="capture-id">#${uid}<span class="badge ${badgeClass}">${badgeLabel}</span></div>
+    <div class="section-label">server</div>
+    <table>${serverRows}</table>
+    ${exifSection}
+    <div class="section-label">form fields</div>
+    <table>${metaRows}</table>
+    ${toggle("request headers", "hdr-" + uid)}
+    <pre class="collapsible" id="hdr-${uid}">${headersText}</pre>`;
 
   const card = document.createElement("div");
-  card.className = "card" + (isRaw ? " raw" : "");
-  card.innerHTML = `
-    <img class="thumb" src="${d.image_url}" loading="lazy"
-         alt="capture ${uid}" onclick="window.open(this.src)"
-         title="Click to open full size">
-    <div class="meta-wrap">
-      <div class="capture-id">#${uid}<span class="badge ${badgeClass}">${badgeLabel}</span></div>
-
-      <div class="section-label">server</div>
-      <table>${serverRows}</table>
-
-      ${exifSection}
-
-      <div class="section-label">form fields</div>
-      <table>${metaRows}</table>
-
-      ${toggle("request headers", "hdr-" + uid)}
-      <pre class="collapsible" id="hdr-${uid}">${headersText}</pre>
-    </div>`;
+  card.className = "card" + (isRaw ? " raw" : "") + (isLean ? " lean" : "");
+  card.innerHTML = isLean
+    ? `<div class="meta-wrap">${meta}</div>`
+    : `<img class="thumb" src="${d.image_url}" loading="lazy"
+           alt="capture ${uid}" onclick="window.open(this.src)"
+           title="Click to open full size">
+       <div class="meta-wrap">${meta}</div>`;
 
   feed.insertBefore(card, feed.firstChild);
 }
@@ -375,4 +406,7 @@ async def monitor():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8888, log_level="info")
+    mode = "LEAN (no disk writes, no images)" if LEAN else "NORMAL (saves images to disk)"
+    print(f"[server] mode: {mode}")
+    print(f"[server] listening on http://0.0.0.0:{PORT}")
+    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
