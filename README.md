@@ -93,11 +93,14 @@ See **[docs/hardware-trigger.md](docs/hardware-trigger.md)** for full setup, con
 cp configuration.toml.example configuration.toml
 ```
 
-All settings live in `configuration.toml`:
+All settings live in `configuration.toml`. Whenever a new key is added here, mirror it into `configuration.toml.example` and this block together — they're kept in sync by hand, not by tooling.
 
 ```toml
 [server]
 env = "dev"                # "dev" = coloured console logs, "prod" = JSON
+
+[station]
+type = "fabric"            # "fabric" (production line, hardware-trigger) or "qc" (workstation, software-trigger capture) — MindVision only
 
 [camera]
 type = "picamera2"         # "picamera2" (CSI cameras) or "mindvision" (MindVision USB/GigE)

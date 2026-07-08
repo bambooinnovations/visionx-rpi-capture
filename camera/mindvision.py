@@ -357,6 +357,22 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CameraAlignFree(self._frame_buffer)
             self._frame_buffer = 0
 
+    def exposure_grab_timeout_ms(self) -> int:
+        """Grab timeout (ms) scaled to the camera's current exposure time.
+
+        A fixed short timeout can expire before a long exposure (auto or
+        manual) finishes reading out, e.g. in low light. Callers doing a
+        single triggered grab should pass this instead of relying on
+        _grab_frame's short default, which assumes a frame is already
+        sitting in the SDK's ring buffer (true while streaming, not
+        guaranteed right after a fresh soft trigger).
+        """
+        try:
+            exp_us = mvsdk.CameraGetExposureTime(self._h_camera)
+        except Exception:
+            exp_us = 0.0
+        return max(2000, int(exp_us / 1000) + 1000)
+
     def _grab_frame(self, timeout_ms: int = 1000) -> "tuple[np.ndarray, object] | tuple[None, None]":
         """Grab one processed frame as a numpy array plus the raw SDK frame header.
 
@@ -558,7 +574,7 @@ class MindVisionCamera(BaseCamera):
             if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
                 mvsdk.CameraSoftTrigger(self._h_camera)
             t0 = time.perf_counter()
-            frame, head = self._grab_frame()
+            frame, head = self._grab_frame(timeout_ms=self.exposure_grab_timeout_ms())
             capture_duration_ms = (time.perf_counter() - t0) * 1000
 
         if frame is None:

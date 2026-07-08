@@ -1378,7 +1378,7 @@ def create_blueprint(
             except Exception:
                 exp_us = 0.0
             # Pad the grab timeout so a long exposure doesn't kill the stream.
-            return max(1000, int(exp_us / 1000) + 500), max(frame_interval, exp_us / 1_000_000)
+            return cam.exposure_grab_timeout_ms(), max(frame_interval, exp_us / 1_000_000)
 
         def _render_settings(frame):
             return _encode_raw_frame(frame, max_width, quality=80)
@@ -1405,17 +1405,10 @@ def create_blueprint(
         max_width = request.args.get("max_width", 1280, type=int)
 
         try:
-            exp_us = _mvsdk.CameraGetExposureTime(cam._h_camera)
-        except Exception:
-            exp_us = 0.0
-        # Give a generous buffer on top of the exposure time.
-        grab_timeout_ms = max(2000, int(exp_us / 1000) + 1000)
-
-        try:
             with cam._lock:
                 if not cam._streaming and cam.mode != CameraMode.HARDWARE_TRIGGER:
                     _mvsdk.CameraSoftTrigger(cam._h_camera)
-                frame, _head = cam._grab_frame(timeout_ms=grab_timeout_ms)
+                frame, _head = cam._grab_frame(timeout_ms=cam.exposure_grab_timeout_ms())
         except Exception as exc:
             return jsonify({"error": str(exc)}), 503
 

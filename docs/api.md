@@ -432,6 +432,8 @@ Download full config for every camera as an attached JSON file (`camera_config_<
 
 ## Decoder (Arduino)
 
+All routes in this section are unavailable on a `qc` station (`[station] type = "qc"` in `configuration.toml`) — they return `409` immediately. QC stations never run the decoder or use hardware-trigger mode; see [Configuration](../README.md#configuration).
+
 ### `POST /api/decoder/start`
 
 Start the serial trigger listener and switch every camera to `hardware_trigger` mode.
@@ -442,7 +444,7 @@ Start the serial trigger listener and switch every camera to `hardware_trigger` 
 {"port": "/dev/ttyACM0", "baud": 115200}
 ```
 
-Returns `409` if already running. On success returns `{"running": true, "port": "...", "baud": 115200, "camera_mode": "hardware_trigger", "server_health": {...}}`.
+Returns `409` if already running or if the station is a `qc` station. On success returns `{"running": true, "port": "...", "baud": 115200, "camera_mode": "hardware_trigger", "server_health": {...}}`.
 
 ---
 
@@ -481,13 +483,13 @@ Full listener status including live Arduino state and capture statistics.
 
 ### `POST /api/decoder/detect`
 
-Probe the configured serial port. If the Arduino is found and the listener is not yet running, automatically sets cameras to `hardware_trigger` mode and starts the listener. No-op if already running or port absent.
+Probe the configured serial port. If the Arduino is found and the listener is not yet running, automatically sets cameras to `hardware_trigger` mode and starts the listener. No-op if already running or port absent. Returns `409` if the station is a `qc` station.
 
 ---
 
 ### `POST /api/decoder/mode/hw-trigger`
 
-Switch to hardware trigger mode: cameras → `HARDWARE_TRIGGER`, sends `set_trigger_enabled=true` to the Arduino. Requires the listener to be running.
+Switch to hardware trigger mode: cameras → `HARDWARE_TRIGGER`, sends `set_trigger_enabled=true` to the Arduino. Requires the listener to be running. Returns `409` if the station is a `qc` station.
 
 ---
 
