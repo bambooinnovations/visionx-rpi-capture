@@ -145,26 +145,42 @@ if isinstance(camera, MindVisionCamera):
     app.register_blueprint(create_lens_blueprint(cameras))
     app.register_blueprint(create_arduino_blueprint(_serial_listener, cameras))
 
-    # Auto-start decoder if the Arduino serial port is already present at boot.
-    if (not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true") \
-            and os.path.exists(config.HW_TRIGGER_SERIAL_PORT):
-        _mode_errors = {}
-        for _cam_id, _cam in cameras.items():
-            try:
-                _cam.set_mode(CameraMode.HARDWARE_TRIGGER)
-            except Exception as _e:
-                _mode_errors[_cam_id] = str(_e)
-        if not _mode_errors:
-            try:
-                _serial_listener.start(
-                    port=config.HW_TRIGGER_SERIAL_PORT,
-                    baud=config.HW_TRIGGER_SERIAL_BAUD,
-                )
-                logger.info("decoder_auto_started", port=config.HW_TRIGGER_SERIAL_PORT)
-            except Exception as _e:
-                logger.warning("decoder_auto_start_failed", error=str(_e))
+    if (not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
+        if config.STATION_TYPE == "qc":
+            # QC station: boot cameras straight into software-trigger capture
+            # mode so POST /rpi/capture works immediately with no manual mode
+            # switch. The decoder never auto-starts on a QC station.
+            _mode_errors = {}
+            for _cam_id, _cam in cameras.items():
+                try:
+                    _cam.set_mode(CameraMode.CAPTURE)
+                except Exception as _e:
+                    _mode_errors[_cam_id] = str(_e)
+            if _mode_errors:
+                logger.warning("qc_capture_mode_failed", mode_errors=_mode_errors)
+            else:
+                logger.info("qc_station_ready", camera_ids=sorted(cameras.keys()))
         else:
-            logger.warning("decoder_auto_start_skipped", mode_errors=_mode_errors)
+            # Fabric station (default): auto-start decoder if the Arduino serial
+            # port is already present at boot.
+            if os.path.exists(config.HW_TRIGGER_SERIAL_PORT):
+                _mode_errors = {}
+                for _cam_id, _cam in cameras.items():
+                    try:
+                        _cam.set_mode(CameraMode.HARDWARE_TRIGGER)
+                    except Exception as _e:
+                        _mode_errors[_cam_id] = str(_e)
+                if not _mode_errors:
+                    try:
+                        _serial_listener.start(
+                            port=config.HW_TRIGGER_SERIAL_PORT,
+                            baud=config.HW_TRIGGER_SERIAL_BAUD,
+                        )
+                        logger.info("decoder_auto_started", port=config.HW_TRIGGER_SERIAL_PORT)
+                    except Exception as _e:
+                        logger.warning("decoder_auto_start_failed", error=str(_e))
+                else:
+                    logger.warning("decoder_auto_start_skipped", mode_errors=_mode_errors)
 
 
 def _resolve_camera(default_id: int = 0):
@@ -283,16 +299,22 @@ def _build_system_status() -> tuple[bool, dict]:
             entry["mode"] = cam.mode.value
         cam_list.append(entry)
 
+    # QC stations run cameras in software-trigger capture mode; fabric stations
+    # expect hardware-trigger mode. Readiness must reflect whichever applies.
+    _expected_mode = (
+        CameraMode.CAPTURE.value if config.STATION_TYPE == "qc"
+        else CameraMode.HARDWARE_TRIGGER.value
+    )
     cameras_ready = all(c["open"] for c in cam_list)
     if isinstance(camera, MindVisionCamera):
         cameras_ready = cameras_ready and all(
-            c.get("mode") == CameraMode.HARDWARE_TRIGGER.value for c in cam_list
+            c.get("mode") == _expected_mode for c in cam_list
         )
     cameras_subsystem = {"ready": cameras_ready, "cameras": cam_list}
 
-    # --- decoder (MindVision only) ---
+    # --- decoder (fabric station, MindVision only — QC stations have no decoder) ---
     decoder_subsystem = None
-    if isinstance(camera, MindVisionCamera):
+    if isinstance(camera, MindVisionCamera) and config.STATION_TYPE != "qc":
         s = _serial_listener.status()
         running = s.get("running", False)
         serial_connected = s.get("serial_connected", False)
@@ -305,13 +327,18 @@ def _build_system_status() -> tuple[bool, dict]:
         }
 
     # --- config ---
-    destination_url = runtime_config.get(
-        "hw_trigger.destination_url", config.HW_TRIGGER_DESTINATION_URL
-    )
-    config_subsystem = {
-        "ready": bool(destination_url),
-        "destination_url": destination_url or "",
-    }
+    # Destination URL only matters for the fabric station's hardware-trigger
+    # upload pipeline; QC stations capture on demand and don't need it set.
+    if config.STATION_TYPE == "qc":
+        config_subsystem = {"ready": True, "destination_url": ""}
+    else:
+        destination_url = runtime_config.get(
+            "hw_trigger.destination_url", config.HW_TRIGGER_DESTINATION_URL
+        )
+        config_subsystem = {
+            "ready": bool(destination_url),
+            "destination_url": destination_url or "",
+        }
 
     # --- stitching (multi-camera MindVision only) ---
     stitching_subsystem = None
@@ -419,12 +446,9 @@ def metrics_stats():
 
 @app.route("/rpi/capture", methods=["POST"])
 def capture():
-    # No camera_id specified and multiple cameras → delegate to stitch capture.
-    if "camera_id" not in request.args and len(cameras) > 1:
-        params = {k: v for k, v in request.args.items()}
-        qs = ("?" + urlencode(params)) if params else ""
-        return redirect(f"/api/stitch/capture{qs}")
-
+    # No camera_id specified → always use the first camera (index 0), even if
+    # more than one MindVision camera is detected. Stitch capture is a separate
+    # opt-in endpoint (/api/stitch/capture); this one never delegates to it.
     cam, cam_id = _resolve_camera()
     if cam is None:
         return jsonify({"error": f"Camera {cam_id} not found"}), 404

@@ -11,6 +11,15 @@
 [server]
 env = "dev"
 
+# Station operating mode (MindVision only).
+# type = "fabric" — production line (default): cameras boot into hardware-trigger
+#                   mode; the decoder auto-starts if its serial port is present.
+# type = "qc"     — quality-control workstation: cameras boot into software-trigger
+#                   capture mode so POST /rpi/capture works immediately with no
+#                   manual mode switch; the decoder never auto-starts.
+[station]
+type = "fabric"
+
 # Camera type and shared settings.
 # type = "picamera2"  — Raspberry Pi CSI cameras via libcamera (default)
 # type = "mindvision" — MindVision USB or GigE cameras via mvsdk

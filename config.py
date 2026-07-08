@@ -25,6 +25,14 @@ def _get(section: str, key: str, default):
 # Server
 ENV: str = _get("server", "env", "dev")
 
+# Station (MindVision only)
+# "fabric" — production line: cameras default to hardware-trigger mode; the
+#            decoder auto-starts if its serial port is present at boot.
+# "qc"     — quality-control workstation: cameras default to software-trigger
+#            capture mode at boot so /rpi/capture works immediately; the
+#            decoder never auto-starts.
+STATION_TYPE: str = _get("station", "type", "fabric")
+
 # Camera
 CAMERA_TYPE: str = _get("camera", "type", "picamera2")
 CAMERA_SHARPNESS: float = _get("camera", "sharpness", 1.0)
