@@ -388,6 +388,9 @@ def system_mode():
     if mode not in ("fabric", "regular"):
         return jsonify({"error": "mode must be 'fabric' or 'regular'"}), 400
 
+    if mode == "fabric" and config.STATION_TYPE == "qc":
+        return jsonify({"error": "fabric mode is not available on a qc station"}), 409
+
     actions: list[dict] = []
 
     if isinstance(camera, MindVisionCamera):
@@ -446,9 +449,12 @@ def metrics_stats():
 
 @app.route("/rpi/capture", methods=["POST"])
 def capture():
-    # No camera_id specified → always use the first camera (index 0), even if
-    # more than one MindVision camera is detected. Stitch capture is a separate
-    # opt-in endpoint (/api/stitch/capture); this one never delegates to it.
+    # No camera_id specified and multiple cameras → delegate to stitch capture.
+    if "camera_id" not in request.args and len(cameras) > 1:
+        params = {k: v for k, v in request.args.items()}
+        qs = ("?" + urlencode(params)) if params else ""
+        return redirect(f"/api/stitch/capture{qs}")
+
     cam, cam_id = _resolve_camera()
     if cam is None:
         return jsonify({"error": f"Camera {cam_id} not found"}), 404
