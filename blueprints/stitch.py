@@ -961,7 +961,9 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         """MJPEG stream — stitched composite when calibrated, single camera otherwise.
 
         Query params:
-          fps        float  Frames per second (default 1, max 5)
+          fps        float  Frames per second. Defaults to uncapped (as fast as the
+                            pipeline can produce frames); pass an explicit value to
+                            throttle for internal/low-bandwidth consumers (max 30).
           quality    int    JPEG quality 1–100 (default 75)
           max_width  int    Cap each input frame width before warping (default 640, 0 = no limit)
           camera_id  int    Fallback camera when not calibrated (default 0)
@@ -975,10 +977,10 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         calibrated_ids = sorted(int(k) for k in cal.get("cameras", {})) if cal else []
         is_fully_calibrated = cal is not None and all(cid in calibrated_ids for cid in all_ids)
 
-        fps = max(0.1, min(request.args.get("fps", 1.0, type=float), 5.0))
+        requested_fps = request.args.get("fps", None, type=float)
+        frame_interval = 1.0 / max(0.1, min(requested_fps, 30.0)) if requested_fps is not None else 0.0
         quality = max(1, min(request.args.get("quality", 75, type=int), 100))
         max_width = request.args.get("max_width", 640, type=int)
-        frame_interval = 1.0 / fps
 
         if is_fully_calibrated:
             stream_cfg = _load_config()
