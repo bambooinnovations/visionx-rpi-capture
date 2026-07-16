@@ -8,7 +8,7 @@ All endpoints are served on port **8080**. MindVision-specific endpoints are onl
 
 ### `GET /api/health`
 
-Returns `{"status": "ok"}`. Use for uptime monitoring.
+Returns `{"status": "healthy"}`. Use for uptime monitoring.
 
 ---
 
@@ -50,6 +50,72 @@ Returns `429` if a capture is already in progress, `503` if no camera is availab
 ---
 
 ## System configuration
+
+### `GET /api/system/ready`
+
+Return overall readiness plus a per-subsystem breakdown. Used by the portal UI to show whether the station is fully set up.
+
+**Response**
+
+```json
+{
+  "ready": true,
+  "subsystems": {
+    "cameras": {
+      "ready": true,
+      "cameras": [{"id": 0, "open": true, "serial": "AB1234", "mode": "hardware_trigger"}]
+    },
+    "config": {"ready": true, "destination_url": "https://..."},
+    "decoder": {"ready": true, "running": true, "serial_connected": true, "trigger_enabled": true},
+    "stitching": {"ready": true, "calibrated_cameras": [0, 1]}
+  }
+}
+```
+
+`decoder` is only present for MindVision on a non-`qc` station. `stitching` is only present for MindVision with more than one camera. `mode` on each camera entry is MindVision-only.
+
+---
+
+### `POST /api/system/mode`
+
+Switch the station between high-level operating modes, driving cameras and the decoder to match.
+
+**Body** `{"mode": "fabric" | "regular"}`
+
+| `mode` value | Behaviour |
+| ------------ | --------- |
+| `fabric` | Opens any closed cameras, switches every camera to `hardware_trigger` mode, and starts the decoder serial listener (MindVision only). |
+| `regular` | Stops the decoder if running and reverts every camera to `capture` mode (MindVision only). |
+
+Returns `409` if `mode: "fabric"` is requested on a `qc` station. On non-MindVision setups the mode is accepted but no camera/decoder actions are taken.
+
+**Response**
+
+```json
+{
+  "mode": "fabric",
+  "actions": [
+    {"action": "set_hardware_trigger_mode", "camera_id": 0, "ok": true},
+    {"action": "start_decoder", "ok": true}
+  ],
+  "ready": true,
+  "subsystems": { "...": "same shape as GET /api/system/ready" }
+}
+```
+
+---
+
+### `GET /api/system/check-url`
+
+Check whether a given base URL is reachable and reports healthy, by GETting `<url>/health` and expecting a JSON body with `"status": "ok"` or `"status": "healthy"`. Used by the settings UI to validate the hw_trigger destination before saving it.
+
+| Query param | Type | Default | Description |
+| ----------- | ---- | ------- | ----------- |
+| `url` | string | — | Required. Base URL to check (scheme + host only is used; path is ignored) |
+
+**Response** `{"ok": true}` or `{"ok": false, "error": "..."}`. Always `200` except `400` when `url` is missing.
+
+---
 
 ### `GET /api/system/config`
 
@@ -550,9 +616,49 @@ Delete `arduino_config.json` so Arduino compile-time defaults take effect on nex
 
 ---
 
+### `POST /api/decoder/simulator/start`
+
+Start the decoder simulator — sends `fire_trigger` commands to the Arduino at an interval derived from `capture_interval_mm ÷ speed_cms`, for testing the pipeline without a physical encoder. The serial listener must already be running.
+
+**Body** (optional): `{"speed_cms": 5.0}` — simulated belt speed in cm/s, must be positive (default `5.0`).
+
+Returns `409` if the simulator is already running or the listener isn't running. On success: `{"simulator_running": true, "speed_cms": 5.0}`.
+
+---
+
+### `POST /api/decoder/simulator/stop`
+
+Stop the decoder simulator. Returns `409` if it isn't running.
+
+**Response** `{"simulator_running": false}`
+
+---
+
 ### `GET /api/decoder/diag`
 
 Report trigger mode and frame statistics for every camera. Also fires a software trigger on each camera and reports whether a frame was received — use this to confirm cameras are alive independently of the hardware pin.
+
+---
+
+### `GET /api/decoder/queues/stream`
+
+Server-Sent Events stream of pipeline queue depths, one `data:` event per second. Use this to watch for backlog building up in the hw_trigger capture/upload pipeline.
+
+**Event payload**
+
+```json
+{
+  "camera_queues": {"0": 0, "1": 0},
+  "camera_queue_maxsize": 8,
+  "collector_pending": 0,
+  "stitch_pending": 0,
+  "stitch_pending_mb": 0.0,
+  "raw_pending": 0,
+  "raw_pending_mb": 0.0,
+  "disk_retry": 0,
+  "disk_spill": 0
+}
+```
 
 ---
 
@@ -712,7 +818,7 @@ MJPEG stream of the composite view. Falls back to a single-camera stream if cali
 
 | Query param | Type | Default | Description |
 | ----------- | ---- | ------- | ----------- |
-| `fps` | float | `1.0` | Frame rate (0.1–5) |
+| `fps` | float | uncapped | Frame rate; if provided, clamped to 0.1–`stream.max_fps` (config, default 30) |
 | `quality` | int | `75` | JPEG quality (1–100) |
 | `max_width` | int | `640` | Cap each input frame width before warping (0 = no limit) |
 | `camera_id` | int | `0` | Fallback camera when not calibrated |
