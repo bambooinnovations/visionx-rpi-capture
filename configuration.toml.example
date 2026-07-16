@@ -37,6 +37,7 @@ lock_exposure = false  # Lock AE/AWB after startup — set true for stable rig l
 [stream]
 fps = 15       # Max frames per second
 quality = 60   # JPEG quality 1–95; lower = smaller frames / more bandwidth tolerance
+# max_fps = 30 # Ceiling for an explicit ?fps= on GET /api/stitch/stream (default 30 if unset)
 
 # Per-request temporary files created during capture.
 [capture]
