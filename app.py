@@ -4,7 +4,7 @@ import shutil
 import tempfile
 import threading
 from pathlib import Path
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlparse
 
 import requests as _requests
 import structlog
@@ -191,13 +191,6 @@ def _resolve_camera(default_id: int = 0):
 
 @app.route("/rpi/stream")
 def stream():
-    # No camera_id specified and multiple cameras → delegate to the smart stitch
-    # stream (stitched if calibrated, single camera fallback if not).
-    if "camera_id" not in request.args and len(cameras) > 1:
-        params = {k: v for k, v in request.args.items()}
-        qs = ("?" + urlencode(params)) if params else ""
-        return redirect(f"/api/stitch/stream{qs}")
-
     cam, cam_id = _resolve_camera()
     if cam is None:
         return Response(f"Camera {cam_id} not found", status=404)
@@ -449,12 +442,6 @@ def metrics_stats():
 
 @app.route("/rpi/capture", methods=["POST"])
 def capture():
-    # No camera_id specified and multiple cameras → delegate to stitch capture.
-    if "camera_id" not in request.args and len(cameras) > 1:
-        params = {k: v for k, v in request.args.items()}
-        qs = ("?" + urlencode(params)) if params else ""
-        return redirect(f"/api/stitch/capture{qs}")
-
     cam, cam_id = _resolve_camera()
     if cam is None:
         return jsonify({"error": f"Camera {cam_id} not found"}), 404

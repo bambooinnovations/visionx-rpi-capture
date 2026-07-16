@@ -44,6 +44,8 @@ LENS_POSITION: float | None = _get("camera", "lens_position", None)
 # Stream
 STREAM_FPS: int = _get("stream", "fps", 15)
 STREAM_QUALITY: int = _get("stream", "quality", 60)
+# Ceiling applied to an explicit ?fps= request on the stitch stream endpoint.
+STREAM_MAX_FPS: float = _get("stream", "max_fps", 30.0)
 
 # Capture
 CAPTURE_TMP_DIR: Path = Path(_get("capture", "tmp_dir", "/tmp/visionx_captures"))
