@@ -27,11 +27,11 @@ For MindVision cameras, returns `409` if the camera is in `hardware_trigger` mod
 | Query param | Type | Default | Description |
 | ----------- | ---- | ------- | ----------- |
 | `camera_id` | int | `0` | Camera to stream |
-| `width` | int | config / sensor native | Override frame width in pixels (MindVision only) |
-| `height` | int | config / sensor native | Override frame height in pixels (MindVision only) |
+| `width` | int | sensor native | Output frame width in pixels (MindVision only) |
+| `height` | int | sensor native | Output frame height in pixels (MindVision only) |
 | `fps` | float | `stream.fps` from config | Override frames per second (MindVision only) |
 
-`width` and `height` can be set independently. The camera's original resolution is restored when the stream ends.
+The camera always captures at its native sensor resolution; `width`/`height` resize each JPEG frame to the requested size before it's sent (stretching, not cropping, if the aspect ratio doesn't match). `width` and `height` can be set independently — an omitted dimension keeps the sensor's native size for that axis.
 
 ---
 
