@@ -202,6 +202,9 @@ def stream():
     height = request.args.get("height", None, type=int)
     fps = request.args.get("fps", None, type=float)
 
+    if (width is not None and width <= 0) or (height is not None and height <= 0):
+        return jsonify({"error": "width and height must be positive integers"}), 400
+
     if isinstance(cam, MindVisionCamera):
         if not cam._stream_lock.acquire(blocking=False):
             # Lock is held — signal the active stream to exit cleanly, then

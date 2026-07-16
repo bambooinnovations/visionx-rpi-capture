@@ -464,11 +464,19 @@ class MindVisionCamera(BaseCamera):
             logger.warning("exif_build_failed")
             return None
 
-    def _encode_jpeg(self, frame: "np.ndarray", quality: int, exif_bytes: bytes | None = None) -> bytes:
+    def _encode_jpeg(
+        self,
+        frame: "np.ndarray",
+        quality: int,
+        exif_bytes: bytes | None = None,
+        resize: tuple[int, int] | None = None,
+    ) -> bytes:
         if frame.ndim == 3 and frame.shape[2] == 1:
             img = PilImage.fromarray(frame[:, :, 0], mode="L")
         else:
             img = PilImage.fromarray(frame[:, :, ::-1])  # SDK outputs BGR; PIL expects RGB
+        if resize is not None and resize != img.size:
+            img = img.resize(resize, PilImage.BILINEAR)
         buf = io.BytesIO()
         save_kwargs: dict = {"format": "JPEG", "quality": quality}
         if exif_bytes:
@@ -487,36 +495,16 @@ class MindVisionCamera(BaseCamera):
         self._streaming = True
         self._stream_cancel.clear()
         _continuous_active = False  # whether we've switched to continuous for this session
-        _saved_resolution: object = None  # original resolution when override is active
         try:
             while not self._stream_cancel.is_set():
                 if self._h_camera is None:
                     _continuous_active = False
-                    _saved_resolution = None
                     try:
                         self.open()
                     except RuntimeError:
                         logger.warning("mindvision_stream_waiting")
                         time.sleep(2)
                         continue
-
-                h = self._h_camera
-                assert h is not None
-
-                if _saved_resolution is None and (width is not None or height is not None):
-                    _saved_resolution = mvsdk.CameraGetImageResolution(h)
-                    override = mvsdk.tSdkImageResolution()
-                    override.iIndex = 0xFF  # custom resolution index
-                    override.iWidth = width if width is not None else _saved_resolution.iWidth
-                    override.iHeight = height if height is not None else _saved_resolution.iHeight
-                    override.iWidthFOV = override.iWidth
-                    override.iHeightFOV = override.iHeight
-                    mvsdk.CameraSetImageResolution(h, override)
-                    logger.info(
-                        "stream_resolution_override",
-                        width=override.iWidth,
-                        height=override.iHeight,
-                    )
 
                 if not _continuous_active and self._mode != CameraMode.HARDWARE_TRIGGER:
                     self.set_trigger_mode(0)  # continuous while streaming (preserves AE)
@@ -528,7 +516,11 @@ class MindVisionCamera(BaseCamera):
                 with self._lock:
                     frame, _head = self._grab_frame()
                     if frame is not None:
-                        frame_data = self._encode_jpeg(frame, config.STREAM_QUALITY)
+                        resize = None
+                        if width is not None or height is not None:
+                            native_height, native_width = frame.shape[:2]
+                            resize = (width or native_width, height or native_height)
+                        frame_data = self._encode_jpeg(frame, config.STREAM_QUALITY, resize=resize)
 
                 if frame_data:
                     yield frame_data
@@ -540,12 +532,6 @@ class MindVisionCamera(BaseCamera):
         finally:
             self._stream_count -= 1
             self._streaming = self._stream_count > 0
-            if _saved_resolution is not None and self._h_camera is not None:
-                try:
-                    mvsdk.CameraSetImageResolution(self._h_camera, _saved_resolution)
-                    logger.info("stream_resolution_restored")
-                except Exception:
-                    logger.warning("mindvision_restore_resolution_failed")
             # Only revert trigger mode when the last active generator exits.
             # If another generator is still running it already set continuous mode
             # and reverting here would break it.
