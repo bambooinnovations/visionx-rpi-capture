@@ -16,6 +16,7 @@ class CameraMode(str, Enum):
     HARDWARE_TRIGGER = "hardware_trigger"
 
 try:
+    import cv2
     import numpy as np
     from PIL import Image as PilImage
     import mvsdk
@@ -471,18 +472,27 @@ class MindVisionCamera(BaseCamera):
         exif_bytes: bytes | None = None,
         resize: tuple[int, int] | None = None,
     ) -> bytes:
-        if frame.ndim == 3 and frame.shape[2] == 1:
-            img = PilImage.fromarray(frame[:, :, 0], mode="L")
-        else:
-            img = PilImage.fromarray(frame[:, :, ::-1])  # SDK outputs BGR; PIL expects RGB
-        if resize is not None and resize != img.size:
-            img = img.resize(resize, PilImage.BILINEAR)
-        buf = io.BytesIO()
-        save_kwargs: dict = {"format": "JPEG", "quality": quality}
+        # EXIF embedding requires PIL; only the capture path (not the streaming
+        # hot path) needs it, so it's the one place we pay the PIL conversion cost.
         if exif_bytes:
-            save_kwargs["exif"] = exif_bytes
-        img.save(buf, **save_kwargs)
-        return buf.getvalue()
+            if frame.ndim == 3 and frame.shape[2] == 1:
+                img = PilImage.fromarray(frame[:, :, 0], mode="L")
+            else:
+                img = PilImage.fromarray(frame[:, :, ::-1])  # SDK outputs BGR; PIL expects RGB
+            if resize is not None and resize != img.size:
+                img = img.resize(resize, PilImage.BILINEAR)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, exif=exif_bytes)
+            return buf.getvalue()
+
+        if frame.ndim == 3 and frame.shape[2] == 1:
+            frame = frame[:, :, 0]
+        if resize is not None and (frame.shape[1], frame.shape[0]) != resize:
+            frame = cv2.resize(frame, resize, interpolation=cv2.INTER_LINEAR)
+        ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            raise RuntimeError("Failed to JPEG-encode frame")
+        return encoded.tobytes()
 
     def stream_frames(
         self,
