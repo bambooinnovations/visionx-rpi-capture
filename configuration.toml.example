@@ -80,12 +80,17 @@ interval_seconds = 300   # How often the cleanup task runs
 max_age_seconds  = 300   # Minimum age before a temp directory is deleted
 
 # ─── Camera profiles ──────────────────────────────────────────────────────────
-# Applies to picamera2 only. Model names match cam.camera_properties["Model"].
-# Cameras not listed here fall back to auto-detection (largest full-FOV sensor mode).
-# MindVision cameras always capture at their native sensor resolution.
+# Model names match cam.camera_properties["Model"] (picamera2) or the MindVision
+# SDK's device friendly name (MindVision — see the "model" field in GET
+# /api/system/cameras). Cameras not listed here fall back to auto-detection
+# (largest full-FOV sensor mode for picamera2; native sensor resolution for
+# MindVision, for both capture_size and stream_size).
 #
-# capture_size = [width, height]  default still-capture resolution
-# stream_size  = [width, height]  preview stream output resolution
+# GET /rpi/stream?width=&height=&fps= overrides stream_size/fps per request;
+# capture_size only applies to picamera2 (MindVision always captures natively).
+#
+# capture_size = [width, height]  default still-capture resolution (picamera2 only)
+# stream_size  = [width, height]  default preview stream output resolution
 
 [camera_profiles.arducam_64mp]
 capture_size = [6240, 4160]   # 16MP 2x2 binned full-sensor mode, 10fps

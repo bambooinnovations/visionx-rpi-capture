@@ -84,6 +84,10 @@ class MindVisionCamera(BaseCamera):
         self._mode: CameraMode = CameraMode.STREAM
         self._streaming: bool = False  # True while stream_frames() generator is running
         self._stream_count: int = 0  # number of active stream_frames() generators
+        # Default stream/capture resolution from camera_profiles.<model> in
+        # configuration.toml, or None to use native sensor resolution.
+        self._stream_size: tuple[int, int] | None = None
+        self._capture_size: tuple[int, int] | None = None
         # Keep a strong reference to the ctypes callback so it isn't GC'd.
         self._connection_cb = None
 
@@ -194,6 +198,15 @@ class MindVisionCamera(BaseCamera):
         # when USB drops rather than only seeing C++ bulk-transfer errors.
         friendly = dev_info.GetFriendlyName()
         sn = dev_info.GetSn()
+
+        # Same model-keyed profile lookup picamera2 uses for stream_size /
+        # capture_size — falls back to native sensor resolution if the model
+        # isn't listed in camera_profiles.
+        profile = config.get_camera_profile(friendly)
+        profile_stream_size = profile.get("stream_size")
+        self._stream_size = tuple(profile_stream_size) if profile_stream_size else None
+        profile_capture_size = profile.get("capture_size")
+        self._capture_size = tuple(profile_capture_size) if profile_capture_size else None
 
         def _on_connection(h_cam, msg, u_param, p_ctx):
             if msg == 0:
@@ -526,10 +539,13 @@ class MindVisionCamera(BaseCamera):
                 with self._lock:
                     frame, _head = self._grab_frame()
                     if frame is not None:
-                        resize = None
+                        native_height, native_width = frame.shape[:2]
                         if width is not None or height is not None:
-                            native_height, native_width = frame.shape[:2]
                             resize = (width or native_width, height or native_height)
+                        elif self._stream_size is not None and self._stream_size != (native_width, native_height):
+                            resize = self._stream_size
+                        else:
+                            resize = None
                         frame_data = self._encode_jpeg(frame, config.STREAM_QUALITY, resize=resize)
 
                 if frame_data:
@@ -560,8 +576,7 @@ class MindVisionCamera(BaseCamera):
         if self._h_camera is None:
             self.open()
 
-        if resolution is not None:
-            logger.warning("mindvision_resolution_param_ignored", requested=resolution)
+        target_resolution = resolution or self._capture_size
 
         captured_at = datetime.now(timezone.utc).isoformat()
         output_image = output_folder / f"{int(time.time())}.jpg"
@@ -576,11 +591,18 @@ class MindVisionCamera(BaseCamera):
         if frame is None:
             raise RuntimeError("Failed to capture frame from MindVision camera")
 
+        native_height, native_width = frame.shape[:2]
+        resize = (
+            target_resolution
+            if target_resolution is not None and target_resolution != (native_width, native_height)
+            else None
+        )
+
         exif_bytes = self._build_exif(captured_at)
-        jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes)
+        jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes, resize=resize)
         output_image.write_bytes(jpeg_bytes)
 
-        height, width = frame.shape[:2]
+        width, height = resize or (native_width, native_height)
         metrics = CaptureMetrics(
             captured_at=captured_at,
             capture_duration_ms=capture_duration_ms,

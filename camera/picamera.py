@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import io
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import cv2
 import structlog
 
 try:
@@ -117,6 +117,30 @@ class PiCamera(BaseCamera):
                 logger.exception("picamera_close_failed")
             self._cam = None
 
+    @staticmethod
+    def _full_sensor_modes(modes: list[dict]) -> list[dict]:
+        full_sensor = [
+            m for m in modes
+            if m.get("crop_limits", (1,))[0] == 0
+            and m.get("crop_limits", (0, 1))[1] == 0
+        ]
+        return full_sensor or modes
+
+    @staticmethod
+    def _fastest_covering_mode(
+        full_sensor: list[dict],
+        target_size: tuple[int, int],
+    ) -> tuple[int, int]:
+        """Smallest-readout full-sensor mode whose size covers `target_size`,
+        so the ISP scales/crops down from real sensor data instead of upsampling."""
+        covering = [
+            m for m in full_sensor
+            if m["size"][0] >= target_size[0] and m["size"][1] >= target_size[1]
+        ]
+        if not covering:
+            covering = full_sensor
+        return max(covering, key=lambda m: m.get("fps", 0))["size"]
+
     def _select_sensor_modes(
         self,
         cam: "Picamera2",
@@ -124,14 +148,7 @@ class PiCamera(BaseCamera):
     ) -> tuple[tuple[int, int], tuple[int, int]]:
         modes = cam.sensor_modes
         model = cam.camera_properties.get("Model", "")
-
-        full_sensor = [
-            m for m in modes
-            if m.get("crop_limits", (1,))[0] == 0
-            and m.get("crop_limits", (0, 1))[1] == 0
-        ]
-        if not full_sensor:
-            full_sensor = modes
+        full_sensor = self._full_sensor_modes(modes)
 
         profile = config.get_camera_profile(model)
 
@@ -146,48 +163,92 @@ class PiCamera(BaseCamera):
 
         # raw_preview_size: fastest full-sensor mode that still covers stream_size,
         # so libcamera doesn't crop the field of view just to feed the preview stream.
-        covering = [
-            m for m in full_sensor
-            if m["size"][0] >= stream_size[0] and m["size"][1] >= stream_size[1]
-        ]
-        if not covering:
-            covering = full_sensor
-        fastest = max(covering, key=lambda m: m.get("fps", 0))
-        raw_preview_size = fastest["size"]
+        raw_preview_size = self._fastest_covering_mode(full_sensor, stream_size)
 
         return capture_size, raw_preview_size
 
-    def stream_frames(self):
-        frame_interval = 1.0 / config.STREAM_FPS
+    def _configure_main_size(self, size: tuple[int, int]) -> None:
+        """Reconfigure the live main stream to `size`. Also re-picks the raw
+        sensor mode to cover it, so the ISP does real hardware scaling/cropping
+        instead of digitally upsampling from a too-small raw capture."""
+        full_sensor = self._full_sensor_modes(self._cam.sensor_modes)
+        raw_size = self._fastest_covering_mode(full_sensor, size)
+        cfg = self._cam.create_preview_configuration(
+            main={"size": size},
+            raw={"size": raw_size},
+            controls=self._focus_controls,
+        )
+        self._cam.stop()
+        self._cam.configure(cfg)
+        self._cam.start()
 
-        while True:
-            if self._cam is None:
-                try:
-                    self.open()
-                except RuntimeError:
-                    logger.warning("stream_waiting_for_camera")
-                    time.sleep(2)
-                    continue
+    def stream_frames(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        fps: float | None = None,
+    ):
+        frame_interval = 1.0 / (fps if fps is not None else config.STREAM_FPS)
 
-            start = time.monotonic()
-            frame_data = None
+        # Resolved lazily, once the camera is open and self._stream_size is known.
+        requested_size: tuple[int, int] | None = None
+        configured_size: tuple[int, int] | None = None
 
-            with self._lock:
-                try:
-                    img = self._cam.capture_image("main")
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=config.STREAM_QUALITY)
-                    frame_data = buf.getvalue()
-                except Exception:
-                    logger.exception("stream_frame_skipped")
+        try:
+            while True:
+                if self._cam is None:
+                    try:
+                        self.open()
+                        configured_size = None  # (re)opened at the default size
+                    except RuntimeError:
+                        logger.warning("stream_waiting_for_camera")
+                        time.sleep(2)
+                        continue
 
-            if frame_data:
-                yield frame_data
+                if requested_size is None and (width is not None or height is not None):
+                    native_width, native_height = self._stream_size
+                    requested_size = (width or native_width, height or native_height)
 
-            elapsed = time.monotonic() - start
-            remaining = frame_interval - elapsed
-            if remaining > 0:
-                time.sleep(remaining)
+                if requested_size is not None and configured_size != requested_size:
+                    with self._lock:
+                        self._configure_main_size(requested_size)
+                    configured_size = requested_size
+
+                start = time.monotonic()
+                frame_data = None
+
+                with self._lock:
+                    try:
+                        # capture_array("main") returns XBGR8888 — dropping the
+                        # padding channel leaves BGR order, which cv2 expects natively.
+                        # The ISP already scaled/cropped to the configured main size,
+                        # so no software resize is needed here.
+                        frame = self._cam.capture_array("main")[:, :, :3]
+                        ok, encoded = cv2.imencode(
+                            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, config.STREAM_QUALITY]
+                        )
+                        if ok:
+                            frame_data = encoded.tobytes()
+                    except Exception:
+                        logger.exception("stream_frame_skipped")
+
+                if frame_data:
+                    yield frame_data
+
+                elapsed = time.monotonic() - start
+                remaining = frame_interval - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
+        finally:
+            # Restore the default stream size for whoever uses the camera next
+            # (another stream request, or capture_image's post-still restore).
+            if (
+                configured_size is not None
+                and configured_size != self._stream_size
+                and self._cam is not None
+            ):
+                with self._lock:
+                    self._configure_main_size(self._stream_size)
 
     def capture_image(
         self,

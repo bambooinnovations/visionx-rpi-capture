@@ -33,8 +33,13 @@ class BaseCamera(ABC):
         """Capture a high-quality still and return (path, metrics)."""
 
     @abstractmethod
-    def stream_frames(self):
-        """Yield raw JPEG bytes for each preview frame."""
+    def stream_frames(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        fps: float | None = None,
+    ):
+        """Yield raw JPEG bytes for each preview frame, resized if requested."""
 
     @abstractmethod
     def camera_info(self) -> dict:

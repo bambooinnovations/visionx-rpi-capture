@@ -210,13 +210,12 @@ def stream():
     def generate():
         try:
             stream_kwargs = {}
-            if isinstance(cam, MindVisionCamera):
-                if width is not None:
-                    stream_kwargs["width"] = width
-                if height is not None:
-                    stream_kwargs["height"] = height
-                if fps is not None:
-                    stream_kwargs["fps"] = fps
+            if width is not None:
+                stream_kwargs["width"] = width
+            if height is not None:
+                stream_kwargs["height"] = height
+            if fps is not None:
+                stream_kwargs["fps"] = fps
             for frame in cam.stream_frames(**stream_kwargs):
                 yield (
                     b"--frame\r\n"
