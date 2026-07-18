@@ -111,6 +111,16 @@ function goToDashboard() {
 }
 
 // ── Camera Tab Bar ─────────────────────────────────────────────────────────
+function _activeCamera() {
+  return state.cameras.find(c => c.camera_id === state.activeCameraId);
+}
+
+function _isMindVision(cam) {
+  // Unknown/missing type defaults to MindVision — matches this page's
+  // original behaviour before non-MindVision cameras existed.
+  return !cam || cam.type === 'mindvision';
+}
+
 function _buildCameraTabs() {
   const bar = document.getElementById('camera-tab-bar');
   if (!bar) return;
@@ -123,9 +133,10 @@ function _buildCameraTabs() {
 
   const tabs = state.cameras.map(c => {
     const active = state.activeTab === 'camera' && state.activeCameraId === c.camera_id;
+    const label = _isMindVision(c) ? `Camera ${c.camera_id}` : `Camera ${c.camera_id} (view only)`;
     return `<button class="cam-tab${active ? ' active' : ''}"
               onclick="_switchCamera(${c.camera_id})">
-              Camera ${c.camera_id}
+              ${label}
             </button>`;
   });
 
@@ -195,12 +206,35 @@ function _setLoading(on) {
 }
 
 // ── Dashboard ──────────────────────────────────────────────────────────────
+function _setSimpleMode(simple) {
+  document.getElementById('pill-wb')?.classList.toggle('hidden', simple);
+  document.getElementById('lbl-focus-peak')?.classList.toggle('hidden', simple);
+  document.getElementById('lbl-clip-highlight')?.classList.toggle('hidden', simple);
+  document.getElementById('btn-wb-run')?.classList.toggle('hidden', simple);
+  document.getElementById('camera-card-grid')?.classList.toggle('hidden', simple);
+  const hint = document.getElementById('live-idle-hint');
+  if (hint) {
+    hint.textContent = simple
+      ? 'Live view only — nothing to tune for this camera'
+      : 'Adjust aperture and focus, then set white balance';
+  }
+}
+
 async function refreshDashboard() {
   clearError();
   const camId = state.activeCameraId;
+  const isMindVision = _isMindVision(_activeCamera());
+  _setSimpleMode(!isMindVision);
+
   try {
+    if (!isMindVision) {
+      const cams = await apiFetch('GET', '/api/system/cameras').catch(() => null);
+      if (Array.isArray(cams)) state.cameras = cams;
+      return;
+    }
+
     const [cameras, wbRes, lensRes] = await Promise.allSettled([
-      apiFetch('GET', '/api/cameras'),
+      apiFetch('GET', '/api/system/cameras'),
       apiFetch('GET', `/api/cameras/white-balance?camera_id=${camId}`),
       apiFetch('GET', '/api/lens'),
     ]);
@@ -270,6 +304,9 @@ const liveView = {
   _streaming: false,
 
   _streamUrl(camId) {
+    if (!_isMindVision(state.cameras.find(c => c.camera_id === camId))) {
+      return `/rpi/stream?camera_id=${camId}`;
+    }
     const focusPeak = document.getElementById('chk-focus-peak');
     const clipEl    = document.getElementById('chk-clip-highlight');
     const overlay   = focusPeak && focusPeak.checked ? 1 : 0;
@@ -609,7 +646,7 @@ const lens = {
 async function init() {
   clearError();
   try {
-    const cams = await apiFetch('GET', '/api/cameras');
+    const cams = await apiFetch('GET', '/api/system/cameras');
     state.cameras = Array.isArray(cams) ? cams : [];
   } catch (_) {
     state.cameras = [];

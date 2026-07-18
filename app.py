@@ -163,6 +163,25 @@ def _resolve_camera(default_id: int = 0):
     return cameras.get(cam_id), cam_id
 
 
+@app.route("/api/system/cameras")
+def system_cameras():
+    """Every camera in the registry, any type — for UI camera discovery.
+
+    Unlike GET /api/cameras (MindVision-only, under blueprints/mindvision.py),
+    this always exists and includes the "type" field so the frontend can
+    branch between full MindVision tooling and a plain view-only camera.
+    """
+    return jsonify([
+        {
+            "camera_id": cam_id,
+            "type": cam.camera_info().get("type"),
+            "model": cam.camera_info().get("model"),
+            "status": "open" if cam.camera_info().get("status") != "closed" else "closed",
+        }
+        for cam_id, cam in sorted(cameras.items())
+    ])
+
+
 @app.route("/rpi/stream")
 def stream():
     cam, cam_id = _resolve_camera()

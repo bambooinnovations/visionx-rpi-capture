@@ -48,17 +48,17 @@
         <img id="live-view-img" class="live-stream-img hidden" alt="Live camera view">
         <div id="live-stream-idle" class="live-stream-idle">
           <button class="btn btn-primary" onclick="liveView.start()">▶ Start Live View</button>
-          <p class="live-idle-hint">Adjust aperture and focus, then set white balance</p>
+          <p id="live-idle-hint" class="live-idle-hint">Adjust aperture and focus, then set white balance</p>
         </div>
       </div>
       <div id="live-stream-bar" class="live-stream-bar hidden">
         <button class="btn btn-secondary btn-sm" onclick="liveView.stop()">■ Stop</button>
         <button class="btn btn-secondary btn-sm" onclick="liveView.fullscreen()">⛶ Full Screen</button>
-        <label class="live-toggle-label">
+        <label id="lbl-focus-peak" class="live-toggle-label">
           <input type="checkbox" id="chk-focus-peak" onchange="liveView.restartStream()">
           Focus Peaking
         </label>
-        <label class="live-toggle-label">
+        <label id="lbl-clip-highlight" class="live-toggle-label">
           <input type="checkbox" id="chk-clip-highlight" onchange="liveView.restartStream()">
           Overexposure
         </label>
