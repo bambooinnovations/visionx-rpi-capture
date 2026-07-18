@@ -1,6 +1,6 @@
 # API Reference
 
-All endpoints are served on port **8080**. MindVision-specific endpoints are only registered when `camera.type = "mindvision"` in `configuration.toml`.
+All endpoints are served on port **8080**. `camera.type` in `configuration.toml` controls what's in the camera registry — `"auto"` (default) probes for MindVision devices and a Pi CSI camera independently and can register both in the same deployment; `"mindvision"`/`"picamera2"` force a single type. MindVision-specific endpoints (`/api/cameras/*`, `/api/stitch/*`, `/api/lens/*`, `/api/decoder/*`) are registered whenever at least one MindVision camera is present in the registry — a Pi camera in a mixed registry only ever gets the generic `/rpi/stream`, `/rpi/capture`, and `/api/system/cameras` endpoints.
 
 ---
 
@@ -50,6 +50,21 @@ Returns `429` if a capture is already in progress, `503` if no camera is availab
 ---
 
 ## System configuration
+
+### `GET /api/system/cameras`
+
+List every camera in the registry, any type. Unlike [`GET /api/cameras`](#get-apicameras) (MindVision-only), this is always registered and includes a `type` field so a caller can distinguish a MindVision camera from a Pi camera without guessing.
+
+**Response**
+
+```json
+[
+  {"camera_id": 0, "type": "mindvision", "model": "MV-SUA200", "status": "open"},
+  {"camera_id": 1, "type": "picamera2", "model": "imx708", "status": "open"}
+]
+```
+
+---
 
 ### `GET /api/system/ready`
 

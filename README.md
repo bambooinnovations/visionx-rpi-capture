@@ -67,7 +67,7 @@ Overrides are persisted to `runtime_config.json` (gitignored) and survive restar
 
 ### MindVision endpoints
 
-Registered only when `camera.type = "mindvision"`. See [docs/api.md](docs/api.md) for the full reference covering cameras, white balance, orientation, settings, calibration streams, lens calibration, stitch, and decoder endpoints.
+Registered whenever at least one MindVision camera is present in the registry (i.e. `camera.type = "mindvision"`, or `"auto"` and a MindVision device was detected). See [docs/api.md](docs/api.md) for the full reference covering cameras, white balance, orientation, settings, calibration streams, lens calibration, stitch, and decoder endpoints.
 
 ## Calibration
 
@@ -103,7 +103,10 @@ env = "dev"                # "dev" = coloured console logs, "prod" = JSON
 type = "fabric"            # "fabric" (production line, hardware-trigger) or "qc" (workstation, software-trigger capture) — MindVision only
 
 [camera]
-type = "picamera2"         # "picamera2" (CSI cameras) or "mindvision" (MindVision USB/GigE)
+type = "auto"              # "auto" (default) probes for MindVision devices and a Pi CSI camera
+                            # independently and registers whatever's present — can mix both types
+                            # in one deployment. "picamera2" or "mindvision" force that type only
+                            # and skip probing for the other.
 sharpness = 1.0            # ISP sharpness; 0 = off (picamera2 only)
 lock_exposure = false      # Lock AE/AWB after startup for consistent captures (picamera2 only)
 # lens_position = 2.0      # Manual focus in dioptres; omit for continuous autofocus (picamera2 only)
