@@ -195,7 +195,7 @@ rpi-capture-api/
 ├── runtime_config.py       # Runtime override persistence (GET/PATCH/DELETE /api/system/config)
 ├── calibration.py          # Calibration data persistence (calibration.json)
 ├── camera/
-│   ├── __init__.py         # create_camera() factory — returns the right BaseCamera
+│   ├── __init__.py         # build_camera_registry() — auto-detects/builds the mixed-type camera dict
 │   ├── base.py             # BaseCamera ABC: open, close, capture_image, stream_frames
 │   ├── picamera.py         # PiCamera — wraps picamera2 for CSI cameras
 │   ├── mindvision.py       # MindVisionCamera — wraps mvsdk; supports stream/capture/hardware_trigger modes

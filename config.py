@@ -34,7 +34,12 @@ ENV: str = _get("server", "env", "dev")
 STATION_TYPE: str = _get("station", "type", "fabric")
 
 # Camera
-CAMERA_TYPE: str = _get("camera", "type", "picamera2")
+# "auto"       — probe for MindVision devices and a Pi CSI camera independently
+#                and register whatever is actually present (default); can mix
+#                both types in one deployment.
+# "picamera2"  — force Pi CSI camera only, never probe for MindVision.
+# "mindvision" — force MindVision only, never probe for a Pi CSI camera.
+CAMERA_TYPE: str = _get("camera", "type", "auto")
 CAMERA_SHARPNESS: float = _get("camera", "sharpness", 1.0)
 LOCK_EXPOSURE: bool = _get("camera", "lock_exposure", False)
 # None = use continuous autofocus; a float value = lock to that LensPosition.

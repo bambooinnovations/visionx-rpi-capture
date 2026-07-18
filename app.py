@@ -11,7 +11,7 @@ import structlog
 
 import config
 import runtime_config
-from camera import create_camera
+from camera import build_camera_registry
 from camera.mindvision import CameraMode, MindVisionCamera
 from log_config import configure_logging
 from metrics import get_stats, init_db, record_capture
@@ -57,40 +57,14 @@ CORS(app)
 start_cleanup_task()
 init_db()
 
-# Build camera registry.
-# For MindVision: enumerate all connected devices at startup — every camera
-# that's plugged in gets an instance. For all other types: single-camera factory.
-if config.CAMERA_TYPE == "mindvision":
-    _count = 0
-    try:
-        import mvsdk as _mvsdk
-        import camera.mindvision as _mv_mod
-
-        _mvsdk.CameraSdkInit(0)  # must be called before any other SDK function (0 = English)
-        _mvsdk.CameraSetDataDirectory(str(Path(__file__).parent / "MindVisionCamera"))
-        # Mark the SDK as initialized and seed the device list cache so that
-        # MindVisionCamera.open() does not call CameraSdkInit a second time and
-        # does not re-enumerate (which may return a different order or omit
-        # already-initialized cameras).
-        _mv_mod._sdk_initialized = True
-        _dev_list = _mvsdk.CameraEnumerateDevice()
-        _mv_mod._dev_list_cache = _dev_list
-        _count = len(_dev_list)
-        logger.info("mindvision_cameras_detected", count=_count)
-    except Exception as _e:
-        logger.warning("mindvision_enumerate_failed", reason=str(_e))
-    if _count == 0:
-        _count = 1  # create one anyway so open() surfaces a clear error
-
-    cameras: dict[int, object] = {
-        i: MindVisionCamera(camera_index=i) for i in range(_count)
-    }
-else:
-    cameras = {0: create_camera()}
-
-# Convenience reference to camera 0 — used for isinstance checks that apply
-# to all cameras of the same type.
-camera = cameras[0]
+# Build camera registry — see camera.build_camera_registry() for the
+# auto-detect / mixed-type rules. MindVision-only features (hardware trigger,
+# mode switching, stitching) key off mindvision_cameras, never the full
+# cameras dict, so a non-MindVision camera in a mixed registry is left alone.
+cameras: dict[int, object] = build_camera_registry()
+mindvision_cameras: dict[int, MindVisionCamera] = {
+    cam_id: cam for cam_id, cam in cameras.items() if isinstance(cam, MindVisionCamera)
+}
 
 # Per-camera locks so concurrent single-camera captures don't block each other.
 capture_locks: dict[int, threading.Lock] = {
@@ -127,11 +101,11 @@ if not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         ],
     )
 
-if isinstance(camera, MindVisionCamera):
+if mindvision_cameras:
     from camera.mindvision_trigger import SerialTriggerListener
     from blueprints.stitch import _load_calibration as _stitch_load_cal, _stitch_frames
     _serial_listener = SerialTriggerListener(
-        cameras,
+        mindvision_cameras,
         load_calibration=_stitch_load_cal,
         stitch_frames=_stitch_frames,
     )
@@ -140,10 +114,10 @@ if isinstance(camera, MindVisionCamera):
     from blueprints.stitch import create_blueprint as create_stitch_blueprint
     from blueprints.lens import create_blueprint as create_lens_blueprint
     from blueprints.arduino import create_blueprint as create_arduino_blueprint
-    app.register_blueprint(create_blueprint(cameras, _serial_listener))
-    app.register_blueprint(create_stitch_blueprint(cameras))
-    app.register_blueprint(create_lens_blueprint(cameras))
-    app.register_blueprint(create_arduino_blueprint(_serial_listener, cameras))
+    app.register_blueprint(create_blueprint(mindvision_cameras, _serial_listener))
+    app.register_blueprint(create_stitch_blueprint(mindvision_cameras))
+    app.register_blueprint(create_lens_blueprint(mindvision_cameras))
+    app.register_blueprint(create_arduino_blueprint(_serial_listener, mindvision_cameras))
 
     if (not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
         if config.STATION_TYPE == "qc":
@@ -151,7 +125,7 @@ if isinstance(camera, MindVisionCamera):
             # mode so POST /rpi/capture works immediately with no manual mode
             # switch. The decoder never auto-starts on a QC station.
             _mode_errors = {}
-            for _cam_id, _cam in cameras.items():
+            for _cam_id, _cam in mindvision_cameras.items():
                 try:
                     _cam.set_mode(CameraMode.CAPTURE)
                 except Exception as _e:
@@ -159,13 +133,13 @@ if isinstance(camera, MindVisionCamera):
             if _mode_errors:
                 logger.warning("qc_capture_mode_failed", mode_errors=_mode_errors)
             else:
-                logger.info("qc_station_ready", camera_ids=sorted(cameras.keys()))
+                logger.info("qc_station_ready", camera_ids=sorted(mindvision_cameras.keys()))
         else:
             # Fabric station (default): auto-start decoder if the Arduino serial
             # port is already present at boot.
             if os.path.exists(config.HW_TRIGGER_SERIAL_PORT):
                 _mode_errors = {}
-                for _cam_id, _cam in cameras.items():
+                for _cam_id, _cam in mindvision_cameras.items():
                     try:
                         _cam.set_mode(CameraMode.HARDWARE_TRIGGER)
                     except Exception as _e:
@@ -268,9 +242,7 @@ def system_settings_ui():
 
 @app.route("/mindvision/<int:camera_id>/settings")
 def mindvision_settings_page(camera_id):
-    if not isinstance(camera, MindVisionCamera):
-        return redirect("/")
-    if cameras.get(camera_id) is None:
+    if not isinstance(cameras.get(camera_id), MindVisionCamera):
         return redirect("/")
     return render_template("mindvision_settings.html", camera_id=camera_id)
 
@@ -302,15 +274,15 @@ def _build_system_status() -> tuple[bool, dict]:
         else CameraMode.HARDWARE_TRIGGER.value
     )
     cameras_ready = all(c["open"] for c in cam_list)
-    if isinstance(camera, MindVisionCamera):
+    if mindvision_cameras:
         cameras_ready = cameras_ready and all(
-            c.get("mode") == _expected_mode for c in cam_list
+            c.get("mode") == _expected_mode for c in cam_list if "mode" in c
         )
     cameras_subsystem = {"ready": cameras_ready, "cameras": cam_list}
 
     # --- decoder (fabric station, MindVision only — QC stations have no decoder) ---
     decoder_subsystem = None
-    if isinstance(camera, MindVisionCamera) and config.STATION_TYPE != "qc":
+    if mindvision_cameras and config.STATION_TYPE != "qc":
         s = _serial_listener.status()
         running = s.get("running", False)
         serial_connected = s.get("serial_connected", False)
@@ -338,11 +310,11 @@ def _build_system_status() -> tuple[bool, dict]:
 
     # --- stitching (multi-camera MindVision only) ---
     stitching_subsystem = None
-    if isinstance(camera, MindVisionCamera) and len(cameras) > 1:
+    if len(mindvision_cameras) > 1:
         from blueprints.stitch import _load_calibration
         cal = _load_calibration()
         cal_camera_keys = list(cal.get("cameras", {}).keys()) if cal else []
-        active_ids = [str(i) for i in sorted(cameras.keys())]
+        active_ids = [str(i) for i in sorted(mindvision_cameras.keys())]
         stitching_subsystem = {
             "ready": cal is not None and all(k in cal_camera_keys for k in active_ids),
             "calibrated_cameras": [int(k) for k in cal_camera_keys],
@@ -389,9 +361,9 @@ def system_mode():
 
     actions: list[dict] = []
 
-    if isinstance(camera, MindVisionCamera):
+    if mindvision_cameras:
         if mode == "fabric":
-            for cam_id, cam in sorted(cameras.items()):
+            for cam_id, cam in sorted(mindvision_cameras.items()):
                 if cam.camera_info().get("status") == "closed":
                     try:
                         cam.open()
@@ -399,7 +371,7 @@ def system_mode():
                     except Exception as exc:
                         actions.append({"action": "open_camera", "camera_id": cam_id, "ok": False, "error": str(exc)})
 
-            for cam_id, cam in sorted(cameras.items()):
+            for cam_id, cam in sorted(mindvision_cameras.items()):
                 if cam.mode != CameraMode.HARDWARE_TRIGGER:
                     try:
                         cam.set_mode(CameraMode.HARDWARE_TRIGGER)
@@ -422,7 +394,7 @@ def system_mode():
                 except Exception as exc:
                     actions.append({"action": "stop_decoder", "ok": False, "error": str(exc)})
 
-            for cam_id, cam in sorted(cameras.items()):
+            for cam_id, cam in sorted(mindvision_cameras.items()):
                 if cam.mode != CameraMode.CAPTURE:
                     try:
                         cam.set_mode(CameraMode.CAPTURE)

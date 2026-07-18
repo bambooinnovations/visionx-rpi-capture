@@ -21,10 +21,15 @@ env = "dev"
 type = "fabric"
 
 # Camera type and shared settings.
-# type = "picamera2"  — Raspberry Pi CSI cameras via libcamera (default)
-# type = "mindvision" — MindVision USB or GigE cameras via mvsdk
+# type = "auto"       — probe for MindVision devices and a Pi CSI camera
+#                       independently and register whatever is actually
+#                       present (default). Can mix both types in one
+#                       deployment; hardware trigger / mode switching /
+#                       stitching only ever apply to MindVision cameras.
+# type = "picamera2"  — force Raspberry Pi CSI cameras via libcamera only
+# type = "mindvision" — force MindVision USB or GigE cameras via mvsdk only
 [camera]
-type = "picamera2"
+type = "auto"
 sharpness = 1.0        # ISP sharpness multiplier; 0 = off, 1.0 = IPA default (picamera2 only)
 lock_exposure = false  # Lock AE/AWB after startup — set true for stable rig lighting (picamera2 only)
 # lens_position = 2.0  # Manual fixed focus in dioptres (1 / distance_metres). (picamera2 only)
