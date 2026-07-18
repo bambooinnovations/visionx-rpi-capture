@@ -56,11 +56,7 @@ def build_camera_registry() -> dict[int, BaseCamera]:
         registry[len(registry)] = PiCamera()
 
     if not registry:
-        # Nothing detected — create one anyway (matches legacy default) so
-        # open() surfaces a clear per-camera error instead of the app
-        # refusing to start on a dev machine with no hardware attached.
-        logger.warning("no_cameras_detected", fallback="picamera2")
-        registry[0] = PiCamera()
+        logger.warning("no_cameras_detected")
 
     return registry
 

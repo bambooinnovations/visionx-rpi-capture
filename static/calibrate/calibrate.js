@@ -123,6 +123,10 @@ function _isMindVision(cam) {
 
 function _buildCameraTabs() {
   const bar = document.getElementById('camera-tab-bar');
+
+  document.getElementById('no-camera-message')?.classList.toggle('hidden', state.cameras.length > 0);
+  document.getElementById('camera-cards-section')?.classList.toggle('hidden', state.cameras.length === 0);
+
   if (!bar) return;
 
   if (state.cameras.length === 0) {

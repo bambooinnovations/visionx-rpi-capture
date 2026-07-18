@@ -292,7 +292,7 @@ def _build_system_status() -> tuple[bool, dict]:
         CameraMode.CAPTURE.value if config.STATION_TYPE == "qc"
         else CameraMode.HARDWARE_TRIGGER.value
     )
-    cameras_ready = all(c["open"] for c in cam_list)
+    cameras_ready = len(cam_list) > 0 and all(c["open"] for c in cam_list)
     if mindvision_cameras:
         cameras_ready = cameras_ready and all(
             c.get("mode") == _expected_mode for c in cam_list if "mode" in c
