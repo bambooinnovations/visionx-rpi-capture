@@ -505,7 +505,7 @@ Download full config for every camera as an attached JSON file (`camera_config_<
 
 ## Decoder (Arduino)
 
-All routes in this section are unavailable on a `qc` station (`[station] type = "qc"` in `configuration.toml`) — they return `409` immediately. QC stations never run the decoder or use hardware-trigger mode; see [Configuration](../README.md#configuration).
+QC stations never run the decoder or use hardware-trigger mode; see [Configuration](../README.md#configuration). `POST /start`, `POST /detect`, and `POST /mode/hw-trigger` explicitly check for this and return `409` on a `qc` station. The remaining routes have no such check — they'll return whatever error fits their normal state handling (e.g. `409` if the listener isn't running), or succeed, since a `qc` station simply never starts the listener.
 
 ### `POST /api/decoder/start`
 

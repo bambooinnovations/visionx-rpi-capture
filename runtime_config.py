@@ -27,6 +27,7 @@ UPDATABLE: dict[str, type] = {
     "hw_trigger.trigger_queue_maxsize":    int,
     "hw_trigger.stitch_memory_budget_mb":  int,
     "hw_trigger.raw_memory_budget_mb":     int,
+    "hw_trigger.max_queue_age_s":          float,
 }
 
 # Values that are masked ("***") in GET /rpi/config responses.
