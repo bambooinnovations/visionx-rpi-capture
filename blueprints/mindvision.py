@@ -692,6 +692,11 @@ def _read_full_config(h: int, cam: "MindVisionCamera") -> dict:
     image_params = [
         p("width",          "Width",              res.iWidth            if res  else None, "px"),
         p("height",         "Height",             res.iHeight           if res  else None, "px"),
+        # From camera_profiles.<model> as loaded at process start — compare
+        # against width/height above to check the running process actually
+        # picked up the profile you expect (config.toml isn't hot-reloaded).
+        p("configured_capture_size", "Configured Capture Size", list(cam._capture_size) if cam._capture_size else None),
+        p("configured_stream_size",  "Configured Stream Size",  list(cam._stream_size) if cam._stream_size else None),
         p("width_fov",      "FOV Width",          res.iWidthFOV         if res  else None, "px"),
         p("height_fov",     "FOV Height",         res.iHeightFOV        if res  else None, "px"),
         p("h_offset_fov",   "FOV H Offset",       res.iHOffsetFOV       if res  else None, "px"),
@@ -984,6 +989,8 @@ def create_blueprint(
                 "product_name": cam.camera_info().get("product_name"),
                 "port_type": cam.camera_info().get("port_type"),
                 "status": "open" if cam.serial_number is not None else "closed",
+                "capture_size": cam.camera_info().get("capture_size"),
+                "stream_size": cam.camera_info().get("stream_size"),
             }
             for cam_id, cam in sorted(cameras.items())
         ])

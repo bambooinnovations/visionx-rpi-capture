@@ -204,10 +204,14 @@ List all connected cameras.
     "model": "MV-SUA134GC",
     "product_name": "MindVision USB3 Color",
     "port_type": "USB3",
-    "status": "open"
+    "status": "open",
+    "capture_size": [4192, 3104],
+    "stream_size": [1280, 948]
   }
 ]
 ```
+
+`capture_size`/`stream_size` come from `camera_profiles.<model>` as loaded at process start (`configuration.toml` is read once at import — see [Configuration](../README.md#configuration)); `null` means no profile entry, so the camera falls back to native sensor resolution.
 
 ---
 
@@ -484,6 +488,8 @@ Grab a single frame and return it as a JPEG. Works at any exposure time by compu
 ### `GET /api/cameras/config/full`
 
 Return every SDK parameter grouped by category for one camera. Groups: `device`, `image`, `exposure`, `gain`, `color`, `processing`, `orientation`, `trigger`, `ext_trigger`, `strobe`, `transfer`, `isp_caps`, `stats`. Each param has `key`, `label`, `value`, and `unit`.
+
+The `image` group includes `configured_capture_size`/`configured_stream_size` (from `camera_profiles.<model>`, same values as on `GET /api/cameras`) alongside the live `width`/`height` — compare them to confirm the running process picked up the profile you expect.
 
 | Query param | Type | Default | Description |
 | ----------- | ---- | ------- | ----------- |

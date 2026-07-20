@@ -633,4 +633,11 @@ class MindVisionCamera(BaseCamera):
             "mono": self._mono,
             "max_width": self._cap.sResolutionRange.iWidthMax,
             "max_height": self._cap.sResolutionRange.iHeightMax,
+            # From camera_profiles.<model> as loaded at process start (see
+            # config.py — the file isn't re-read after startup, so this
+            # reflects what's actually in effect, not necessarily what's
+            # currently on disk). None means "no profile entry, falls back
+            # to native resolution".
+            "capture_size": self._capture_size,
+            "stream_size": self._stream_size,
         }
