@@ -219,11 +219,18 @@ class PiCamera(BaseCamera):
 
                 with self._lock:
                     try:
-                        # capture_array("main") returns XBGR8888 — dropping the
-                        # padding channel leaves BGR order, which cv2 expects natively.
+                        # capture_array("main") returns XBGR8888. The fourcc name
+                        # describes the little-endian 32-bit word, so the bytes land
+                        # in memory as R, G, B, X — i.e. RGB once the padding is
+                        # dropped, NOT BGR. cv2 expects BGR, so convert instead of
+                        # slicing; COLOR_RGBA2BGR drops the padding channel and swaps
+                        # R/B in one vectorised pass (a [:, :, 2::-1] view would be
+                        # non-contiguous and force imencode to copy).
                         # The ISP already scaled/cropped to the configured main size,
                         # so no software resize is needed here.
-                        frame = self._cam.capture_array("main")[:, :, :3]
+                        frame = cv2.cvtColor(
+                            self._cam.capture_array("main"), cv2.COLOR_RGBA2BGR
+                        )
                         ok, encoded = cv2.imencode(
                             ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, config.STREAM_QUALITY]
                         )
