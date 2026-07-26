@@ -171,15 +171,21 @@ def system_cameras():
     this always exists and includes the "type" field so the frontend can
     branch between full MindVision tooling and a plain view-only camera.
     """
-    return jsonify([
-        {
+    result = []
+    for cam_id, cam in sorted(cameras.items()):
+        info = cam.camera_info()
+        result.append({
             "camera_id": cam_id,
-            "type": cam.camera_info().get("type"),
-            "model": cam.camera_info().get("model"),
-            "status": "open" if cam.camera_info().get("status") != "closed" else "closed",
-        }
-        for cam_id, cam in sorted(cameras.items())
-    ])
+            "type": info.get("type"),
+            "model": info.get("model"),
+            "status": "open" if info.get("status") != "closed" else "closed",
+            "serial_number": info.get("serial_number"),
+            "product_name": info.get("product_name"),
+            "port_type": info.get("port_type"),
+            "capture_size": info.get("capture_size"),
+            "stream_size": info.get("stream_size"),
+        })
+    return jsonify(result)
 
 
 @app.route("/rpi/stream")

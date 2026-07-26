@@ -38,10 +38,28 @@ function renderCameras(cameras) {
   }
 
   grid.innerHTML = cameras.map(c => {
+    const isMindVision = c.type === 'mindvision';
+
     const calibrateBtn = _hwTriggerActive
       ? `<button class="btn btn-primary" style="flex:1;justify-content:center" disabled
              title="Switch decoder to Calibration mode before calibrating">Calibrate</button>`
       : `<a href="/calibrate?camera=${c.camera_id}" class="btn btn-primary" style="flex:1;justify-content:center">Calibrate</a>`;
+
+    const settingsBtn = isMindVision
+      ? `<a href="/mindvision/${c.camera_id}/settings" class="btn btn-secondary" style="flex:1;justify-content:center">
+          Settings
+        </a>`
+      : '';
+
+    const configIcon = isMindVision
+      ? `<button class="btn-info-icon" title="View raw config" onclick="openConfigModal(${c.camera_id})">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 16v-4"/>
+                <path d="M12 8h.01" stroke-width="2.5"/>
+              </svg>
+            </button>`
+      : '';
 
     return `
     <div class="camera-card">
@@ -50,14 +68,8 @@ function renderCameras(cameras) {
           <span class="cam-id-badge">Cam ${c.camera_id}</span>
           <div class="cam-header-pills">
             <span class="pill ${c.status === 'open' ? 'pill-green' : 'pill-red'}">${c.status}</span>
-            ${_hwTriggerActive ? `<span class="pill pill-yellow">HW Trigger</span>` : ''}
-            <button class="btn-info-icon" title="View raw config" onclick="openConfigModal(${c.camera_id})">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/>
-                <path d="M12 16v-4"/>
-                <path d="M12 8h.01" stroke-width="2.5"/>
-              </svg>
-            </button>
+            ${_hwTriggerActive && isMindVision ? `<span class="pill pill-yellow">HW Trigger</span>` : ''}
+            ${configIcon}
           </div>
         </div>
         <span class="cam-model">${c.model || c.product_name || 'Unknown model'}</span>
@@ -69,9 +81,7 @@ function renderCameras(cameras) {
       </div>
       <div class="camera-card-footer">
         ${calibrateBtn}
-        <a href="/mindvision/${c.camera_id}/settings" class="btn btn-secondary" style="flex:1;justify-content:center">
-          Settings
-        </a>
+        ${settingsBtn}
       </div>
     </div>`;
   }).join('');
@@ -628,9 +638,9 @@ async function decoderSimStop() {
 async function refreshAll() {
   clearError();
   try {
-    const cameras = await apiFetch('/api/cameras');
+    const cameras = await apiFetch('/api/system/cameras');
     const list = Array.isArray(cameras) ? cameras : [];
-    _devCameraIds = list.map(c => c.camera_id);
+    _devCameraIds = list.filter(c => c.type === 'mindvision').map(c => c.camera_id);
     renderCameras(list);
   } catch (e) {
     showError('Failed to load cameras: ' + e.message);
