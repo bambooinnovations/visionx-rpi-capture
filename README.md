@@ -67,7 +67,7 @@ Overrides are persisted to `runtime_config.json` (gitignored) and survive restar
 
 ### MindVision endpoints
 
-Registered only when `camera.type = "mindvision"`. See [docs/api.md](docs/api.md) for the full reference covering cameras, white balance, orientation, settings, calibration streams, lens calibration, stitch, and decoder endpoints.
+Registered whenever at least one MindVision camera is present in the registry (i.e. `camera.type = "mindvision"`, or `"auto"` and a MindVision device was detected). See [docs/api.md](docs/api.md) for the full reference covering cameras, white balance, orientation, settings, calibration streams, lens calibration, stitch, and decoder endpoints.
 
 ## Calibration
 
@@ -93,14 +93,20 @@ See **[docs/hardware-trigger.md](docs/hardware-trigger.md)** for full setup, con
 cp configuration.toml.example configuration.toml
 ```
 
-All settings live in `configuration.toml`:
+All settings live in `configuration.toml`. Whenever a new key is added here, mirror it into `configuration.toml.example` and this block together — they're kept in sync by hand, not by tooling.
 
 ```toml
 [server]
 env = "dev"                # "dev" = coloured console logs, "prod" = JSON
 
+[station]
+type = "fabric"            # "fabric" (production line, hardware-trigger) or "qc" (workstation, software-trigger capture) — MindVision only
+
 [camera]
-type = "picamera2"         # "picamera2" (CSI cameras) or "mindvision" (MindVision USB/GigE)
+type = "auto"              # "auto" (default) probes for MindVision devices and a Pi CSI camera
+                            # independently and registers whatever's present — can mix both types
+                            # in one deployment. "picamera2" or "mindvision" force that type only
+                            # and skip probing for the other.
 sharpness = 1.0            # ISP sharpness; 0 = off (picamera2 only)
 lock_exposure = false      # Lock AE/AWB after startup for consistent captures (picamera2 only)
 # lens_position = 2.0      # Manual focus in dioptres; omit for continuous autofocus (picamera2 only)
@@ -126,6 +132,12 @@ db_path = "/tmp/visionx_metrics.db"
 # local_max_files     = 200      # oldest deleted first (0 = unlimited)
 # local_max_mb        = 500      # oldest deleted first (0 = unlimited)
 
+# The keys below are runtime-only (PATCH /api/system/config) — not read from this file.
+# trigger_queue_maxsize    = 30    # max triggers per camera queue before dropping with warning
+# stitch_memory_budget_mb  = 1024  # RAM cap for pending stitch jobs; excess spills to disk
+# raw_memory_budget_mb     = 2048  # RAM cap for pending raw-upload jobs; excess spills to disk
+# max_queue_age_s          = 5.0   # drop triggers that have waited longer than this
+
 [cleanup]
 interval_seconds = 300     # How often stale temp dirs are cleaned up
 max_age_seconds  = 300     # Minimum age before removal
@@ -133,7 +145,7 @@ max_age_seconds  = 300     # Minimum age before removal
 
 Camera-specific capture and stream resolutions are defined under `[camera_profiles.*]` — see the file for per-model defaults. These profiles apply to `picamera2` only; MindVision cameras use their native sensor resolution.
 
-Runtime keys (`destination_url`, `destination_api_key`, etc.) can be changed without a restart via `PATCH /api/system/config`.
+Runtime keys (`destination_url`, `destination_api_key`, queue/memory budgets, etc.) can be changed without a restart via `PATCH /api/system/config`. See [docs/hardware-trigger.md](docs/hardware-trigger.md#memory-and-queue-protection) for memory and queue tuning details.
 
 ## Make Targets
 
@@ -186,7 +198,7 @@ rpi-capture-api/
 ├── runtime_config.py       # Runtime override persistence (GET/PATCH/DELETE /api/system/config)
 ├── calibration.py          # Calibration data persistence (calibration.json)
 ├── camera/
-│   ├── __init__.py         # create_camera() factory — returns the right BaseCamera
+│   ├── __init__.py         # build_camera_registry() — auto-detects/builds the mixed-type camera dict
 │   ├── base.py             # BaseCamera ABC: open, close, capture_image, stream_frames
 │   ├── picamera.py         # PiCamera — wraps picamera2 for CSI cameras
 │   ├── mindvision.py       # MindVisionCamera — wraps mvsdk; supports stream/capture/hardware_trigger modes

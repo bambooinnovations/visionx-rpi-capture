@@ -484,6 +484,40 @@ async function decoderResetConfig() {
 // ── Dev Mode ───────────────────────────────────────────────────────────
 let _devCameraIds = [];
 let _devSimPollTimer = null;
+let _queueStream = null;
+
+function startQueueStream() {
+  if (_queueStream) return;
+  _queueStream = new EventSource('/api/decoder/queues/stream');
+  _queueStream.onmessage = (e) => {
+    try { renderQueueDepths(JSON.parse(e.data)); } catch (_) {}
+  };
+}
+
+function stopQueueStream() {
+  if (_queueStream) { _queueStream.close(); _queueStream = null; }
+  const el = document.getElementById('dev-queue-depths');
+  if (el) el.innerHTML = '<div class="dev-queue-row"><span>—</span><span class="dev-queue-val">—</span></div>';
+}
+
+function renderQueueDepths(d) {
+  const el = document.getElementById('dev-queue-depths');
+  if (!el) return;
+  const rows = [];
+  for (const [id, depth] of Object.entries(d.camera_queues || {})) {
+    rows.push(`<div class="dev-queue-row"><span>Cam ${id} capture</span><span class="dev-queue-val${depth > 0 ? ' dev-queue-nonzero' : ''}">${depth}</span></div>`);
+  }
+  const items = [
+    ['Collector pending', d.collector_pending],
+    ['Stitch upload',     d.stitch_pending],
+    ['Raw upload',        d.raw_pending],
+    ['Disk retry',        d.disk_retry],
+  ];
+  for (const [label, depth] of items) {
+    rows.push(`<div class="dev-queue-row"><span>${label}</span><span class="dev-queue-val${depth > 0 ? ' dev-queue-nonzero' : ''}">${depth}</span></div>`);
+  }
+  el.innerHTML = rows.join('');
+}
 
 function initDevMode() {
   const active = localStorage.getItem('visionx_dev_mode') === 'true';
@@ -507,8 +541,10 @@ function _applyDevMode(active) {
     devRefreshSimStatus();
     if (_devSimPollTimer) clearInterval(_devSimPollTimer);
     _devSimPollTimer = setInterval(devRefreshSimStatus, 2000);
+    startQueueStream();
   } else {
     if (_devSimPollTimer) { clearInterval(_devSimPollTimer); _devSimPollTimer = null; }
+    stopQueueStream();
   }
 }
 

@@ -11,11 +11,25 @@
 [server]
 env = "dev"
 
+# Station operating mode (MindVision only).
+# type = "fabric" — production line (default): cameras boot into hardware-trigger
+#                   mode; the decoder auto-starts if its serial port is present.
+# type = "qc"     — quality-control workstation: cameras boot into software-trigger
+#                   capture mode so POST /rpi/capture works immediately with no
+#                   manual mode switch; the decoder never auto-starts.
+[station]
+type = "fabric"
+
 # Camera type and shared settings.
-# type = "picamera2"  — Raspberry Pi CSI cameras via libcamera (default)
-# type = "mindvision" — MindVision USB or GigE cameras via mvsdk
+# type = "auto"       — probe for MindVision devices and a Pi CSI camera
+#                       independently and register whatever is actually
+#                       present (default). Can mix both types in one
+#                       deployment; hardware trigger / mode switching /
+#                       stitching only ever apply to MindVision cameras.
+# type = "picamera2"  — force Raspberry Pi CSI cameras via libcamera only
+# type = "mindvision" — force MindVision USB or GigE cameras via mvsdk only
 [camera]
-type = "picamera2"
+type = "auto"
 sharpness = 1.0        # ISP sharpness multiplier; 0 = off, 1.0 = IPA default (picamera2 only)
 lock_exposure = false  # Lock AE/AWB after startup — set true for stable rig lighting (picamera2 only)
 # lens_position = 2.0  # Manual fixed focus in dioptres (1 / distance_metres). (picamera2 only)
@@ -28,6 +42,7 @@ lock_exposure = false  # Lock AE/AWB after startup — set true for stable rig l
 [stream]
 fps = 15       # Max frames per second
 quality = 60   # JPEG quality 1–95; lower = smaller frames / more bandwidth tolerance
+# max_fps = 30 # Ceiling for an explicit ?fps= on GET /api/stitch/stream (default 30 if unset)
 
 # Per-request temporary files created during capture.
 [capture]
@@ -65,12 +80,17 @@ interval_seconds = 300   # How often the cleanup task runs
 max_age_seconds  = 300   # Minimum age before a temp directory is deleted
 
 # ─── Camera profiles ──────────────────────────────────────────────────────────
-# Applies to picamera2 only. Model names match cam.camera_properties["Model"].
-# Cameras not listed here fall back to auto-detection (largest full-FOV sensor mode).
-# MindVision cameras always capture at their native sensor resolution.
+# Model names match cam.camera_properties["Model"] (picamera2) or the MindVision
+# SDK's device friendly name (MindVision — see the "model" field in GET
+# /api/system/cameras). Cameras not listed here fall back to auto-detection
+# (largest full-FOV sensor mode for picamera2; native sensor resolution for
+# MindVision, for both capture_size and stream_size).
 #
-# capture_size = [width, height]  default still-capture resolution
-# stream_size  = [width, height]  preview stream output resolution
+# GET /rpi/stream?width=&height=&fps= overrides stream_size/fps per request;
+# capture_size only applies to picamera2 (MindVision always captures natively).
+#
+# capture_size = [width, height]  default still-capture resolution (picamera2 only)
+# stream_size  = [width, height]  default preview stream output resolution
 
 [camera_profiles.arducam_64mp]
 capture_size = [6240, 4160]   # 16MP 2x2 binned full-sensor mode, 10fps

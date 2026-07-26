@@ -8,10 +8,12 @@ so they need access to both the listener and the camera registry.
 """
 from __future__ import annotations
 
+import json
 import os
+import time
 
 import structlog
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 import config
 from camera.mindvision import CameraMode, MindVisionCamera
@@ -44,6 +46,9 @@ def create_blueprint(
           port  str  Serial device path (default: hw_trigger.serial_port from config)
           baud  int  Baud rate (default: hw_trigger.serial_baud from config)
         """
+        if config.STATION_TYPE == "qc":
+            return jsonify({"error": "Decoder is not available on a qc station"}), 409
+
         if listener.running:
             return jsonify({"error": "Decoder listener is already running"}), 409
 
@@ -112,6 +117,9 @@ def create_blueprint(
     @bp.route("/detect", methods=["POST"])
     def decoder_detect():
         """Probe the serial port; auto-start the listener if the Arduino is found."""
+        if config.STATION_TYPE == "qc":
+            return jsonify({"error": "Decoder is not available on a qc station"}), 409
+
         port_present = os.path.exists(config.HW_TRIGGER_SERIAL_PORT)
         status = listener.status()
         status["port_present"] = port_present
@@ -149,6 +157,9 @@ def create_blueprint(
     @bp.route("/mode/hw-trigger", methods=["POST"])
     def set_mode_hw_trigger():
         """Switch to hardware trigger mode: cameras → HARDWARE_TRIGGER, Arduino begins firing pulses."""
+        if config.STATION_TYPE == "qc":
+            return jsonify({"error": "Hardware trigger mode is not available on a qc station"}), 409
+
         mode_errors = {}
         for cam_id, cam in cameras.items():
             try:
@@ -369,6 +380,20 @@ def create_blueprint(
                 "sw_trigger_error": sw_error,
             }
         return jsonify(results)
+
+    @bp.route("/queues/stream")
+    def queues_stream():
+        """SSE stream of pipeline queue depths, updated every second."""
+        @stream_with_context
+        def generate():
+            while True:
+                yield f"data: {json.dumps(listener.queue_depths())}\n\n"
+                time.sleep(1)
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @bp.route("/server-health", methods=["GET"])
     def decoder_server_health():

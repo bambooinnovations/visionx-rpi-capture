@@ -509,6 +509,24 @@ wheels = [
 ]
 
 [[package]]
+name = "opencv-contrib-python-headless"
+version = "4.13.0.92"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/70/b5/9af5b81d9279e9982e21dad52f8a6aec10f7c891ae1e3d3d1b3ce111f8e7/opencv_contrib_python_headless-4.13.0.92-cp37-abi3-macosx_13_0_arm64.whl", hash = "sha256:b0467988c2d56c283b00fb808e0b57f5db2e3ca7743164a3b3efc733bfa03d3a", size = 52041681, upload-time = "2026-02-05T07:01:39.651Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/42/f0aef27baf1f376007b018b00f6c304c42c20d31aa8491633c53b18912cb/opencv_contrib_python_headless-4.13.0.92-cp37-abi3-macosx_14_0_x86_64.whl", hash = "sha256:79e503b77880d806a1b106ff8182c6f898347ccfd1db58ffc9a6369acc236c4c", size = 38830456, upload-time = "2026-02-05T07:01:56.47Z" },
+    { url = "https://files.pythonhosted.org/packages/14/84/e6b3568f9147b4f114e881fb0e733fd97bdca15452feba78b510351584d1/opencv_contrib_python_headless-4.13.0.92-cp37-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:449c1f00a685a3a7dff8d6fa93a70fbfe0de5537c24358ea03a1d996d12b33e8", size = 39355323, upload-time = "2026-02-05T10:17:31.671Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/09/89714580c617cf6e9f66eed9137759fc017ab6ab093c2a03227e8ee19578/opencv_contrib_python_headless-4.13.0.92-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:c9b028adc04f6579f37227eb1d648bead14fd6fefc58da86df37c8320351f7bd", size = 62147375, upload-time = "2026-02-05T10:20:03.076Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/29/abdd2ff2f8f07e9aa37c70edc9987b8aa63730ae70957c378f6f2e9d72d2/opencv_contrib_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:cdd974b34801f24735d18b1057cfaab1698d5cb02c9bba01dab7dc47201f2ef6", size = 40840722, upload-time = "2026-02-05T10:21:27.877Z" },
+    { url = "https://files.pythonhosted.org/packages/2b/0a/3194fdf035ef5123bd8cc3e3ad1a96c1ddeeedd0fdd12aaa0d2cfeb1649a/opencv_contrib_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:9e26469baed9069f627ea56fa46819690c4545580362071dd09f1dcf47a40f2f", size = 66610130, upload-time = "2026-02-05T10:23:32.427Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/4b/afe9b43c02b86b675a3d3ac6fc220473a88016e1acb487f5138efd2d2630/opencv_contrib_python_headless-4.13.0.92-cp37-abi3-win32.whl", hash = "sha256:696a6dd84d309a499efc63644e375f035447b1da777faa2954f2dea7626cc0e7", size = 36708602, upload-time = "2026-02-05T07:02:36.041Z" },
+    { url = "https://files.pythonhosted.org/packages/23/22/9fdc70520eb915b46d816f9cc5415458b1bd114a65d7a7e657cbd9b863e5/opencv_contrib_python_headless-4.13.0.92-cp37-abi3-win_amd64.whl", hash = "sha256:dcbb12d04ae74f5dcd782e3b166e1894c6fbdfaaf30866588746205d2a0cde5a", size = 46345416, upload-time = "2026-02-05T07:02:33.446Z" },
+]
+
+[[package]]
 name = "openexr"
 version = "3.4.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1002,6 +1020,7 @@ dependencies = [
     { name = "flask-cors" },
     { name = "gevent" },
     { name = "gunicorn" },
+    { name = "opencv-contrib-python-headless" },
     { name = "pyserial" },
     { name = "requests" },
     { name = "structlog" },
@@ -1030,6 +1049,7 @@ requires-dist = [
     { name = "flask-cors", specifier = ">=6.0.2" },
     { name = "gevent", specifier = ">=24.2.1" },
     { name = "gunicorn", specifier = ">=25.0.3" },
+    { name = "opencv-contrib-python-headless", specifier = ">=4.13.0.92" },
     { name = "picamera2", marker = "sys_platform == 'linux' and extra == 'rpi'" },
     { name = "pyserial", specifier = ">=3.5" },
     { name = "requests", specifier = ">=2.32.3" },

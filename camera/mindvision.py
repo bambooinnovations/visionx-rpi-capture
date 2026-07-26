@@ -16,6 +16,7 @@ class CameraMode(str, Enum):
     HARDWARE_TRIGGER = "hardware_trigger"
 
 try:
+    import cv2
     import numpy as np
     from PIL import Image as PilImage
     import mvsdk
@@ -83,6 +84,10 @@ class MindVisionCamera(BaseCamera):
         self._mode: CameraMode = CameraMode.STREAM
         self._streaming: bool = False  # True while stream_frames() generator is running
         self._stream_count: int = 0  # number of active stream_frames() generators
+        # Default stream/capture resolution from camera_profiles.<model> in
+        # configuration.toml, or None to use native sensor resolution.
+        self._stream_size: tuple[int, int] | None = None
+        self._capture_size: tuple[int, int] | None = None
         # Keep a strong reference to the ctypes callback so it isn't GC'd.
         self._connection_cb = None
 
@@ -193,6 +198,15 @@ class MindVisionCamera(BaseCamera):
         # when USB drops rather than only seeing C++ bulk-transfer errors.
         friendly = dev_info.GetFriendlyName()
         sn = dev_info.GetSn()
+
+        # Same model-keyed profile lookup picamera2 uses for stream_size /
+        # capture_size — falls back to native sensor resolution if the model
+        # isn't listed in camera_profiles.
+        profile = config.get_camera_profile(friendly)
+        profile_stream_size = profile.get("stream_size")
+        self._stream_size = tuple(profile_stream_size) if profile_stream_size else None
+        profile_capture_size = profile.get("capture_size")
+        self._capture_size = tuple(profile_capture_size) if profile_capture_size else None
 
         def _on_connection(h_cam, msg, u_param, p_ctx):
             if msg == 0:
@@ -357,6 +371,22 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CameraAlignFree(self._frame_buffer)
             self._frame_buffer = 0
 
+    def exposure_grab_timeout_ms(self) -> int:
+        """Grab timeout (ms) scaled to the camera's current exposure time.
+
+        A fixed short timeout can expire before a long exposure (auto or
+        manual) finishes reading out, e.g. in low light. Callers doing a
+        single triggered grab should pass this instead of relying on
+        _grab_frame's short default, which assumes a frame is already
+        sitting in the SDK's ring buffer (true while streaming, not
+        guaranteed right after a fresh soft trigger).
+        """
+        try:
+            exp_us = mvsdk.CameraGetExposureTime(self._h_camera)
+        except Exception:
+            exp_us = 0.0
+        return max(2000, int(exp_us / 1000) + 1000)
+
     def _grab_frame(self, timeout_ms: int = 1000) -> "tuple[np.ndarray, object] | tuple[None, None]":
         """Grab one processed frame as a numpy array plus the raw SDK frame header.
 
@@ -448,17 +478,34 @@ class MindVisionCamera(BaseCamera):
             logger.warning("exif_build_failed")
             return None
 
-    def _encode_jpeg(self, frame: "np.ndarray", quality: int, exif_bytes: bytes | None = None) -> bytes:
-        if frame.ndim == 3 and frame.shape[2] == 1:
-            img = PilImage.fromarray(frame[:, :, 0], mode="L")
-        else:
-            img = PilImage.fromarray(frame[:, :, ::-1])  # SDK outputs BGR; PIL expects RGB
-        buf = io.BytesIO()
-        save_kwargs: dict = {"format": "JPEG", "quality": quality}
+    def _encode_jpeg(
+        self,
+        frame: "np.ndarray",
+        quality: int,
+        exif_bytes: bytes | None = None,
+        resize: tuple[int, int] | None = None,
+    ) -> bytes:
+        # EXIF embedding requires PIL; only the capture path (not the streaming
+        # hot path) needs it, so it's the one place we pay the PIL conversion cost.
         if exif_bytes:
-            save_kwargs["exif"] = exif_bytes
-        img.save(buf, **save_kwargs)
-        return buf.getvalue()
+            if frame.ndim == 3 and frame.shape[2] == 1:
+                img = PilImage.fromarray(frame[:, :, 0], mode="L")
+            else:
+                img = PilImage.fromarray(frame[:, :, ::-1])  # SDK outputs BGR; PIL expects RGB
+            if resize is not None and resize != img.size:
+                img = img.resize(resize, PilImage.BILINEAR)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, exif=exif_bytes)
+            return buf.getvalue()
+
+        if frame.ndim == 3 and frame.shape[2] == 1:
+            frame = frame[:, :, 0]
+        if resize is not None and (frame.shape[1], frame.shape[0]) != resize:
+            frame = cv2.resize(frame, resize, interpolation=cv2.INTER_LINEAR)
+        ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            raise RuntimeError("Failed to JPEG-encode frame")
+        return encoded.tobytes()
 
     def stream_frames(
         self,
@@ -471,36 +518,16 @@ class MindVisionCamera(BaseCamera):
         self._streaming = True
         self._stream_cancel.clear()
         _continuous_active = False  # whether we've switched to continuous for this session
-        _saved_resolution: object = None  # original resolution when override is active
         try:
             while not self._stream_cancel.is_set():
                 if self._h_camera is None:
                     _continuous_active = False
-                    _saved_resolution = None
                     try:
                         self.open()
                     except RuntimeError:
                         logger.warning("mindvision_stream_waiting")
                         time.sleep(2)
                         continue
-
-                h = self._h_camera
-                assert h is not None
-
-                if _saved_resolution is None and (width is not None or height is not None):
-                    _saved_resolution = mvsdk.CameraGetImageResolution(h)
-                    override = mvsdk.tSdkImageResolution()
-                    override.iIndex = 0xFF  # custom resolution index
-                    override.iWidth = width if width is not None else _saved_resolution.iWidth
-                    override.iHeight = height if height is not None else _saved_resolution.iHeight
-                    override.iWidthFOV = override.iWidth
-                    override.iHeightFOV = override.iHeight
-                    mvsdk.CameraSetImageResolution(h, override)
-                    logger.info(
-                        "stream_resolution_override",
-                        width=override.iWidth,
-                        height=override.iHeight,
-                    )
 
                 if not _continuous_active and self._mode != CameraMode.HARDWARE_TRIGGER:
                     self.set_trigger_mode(0)  # continuous while streaming (preserves AE)
@@ -512,7 +539,14 @@ class MindVisionCamera(BaseCamera):
                 with self._lock:
                     frame, _head = self._grab_frame()
                     if frame is not None:
-                        frame_data = self._encode_jpeg(frame, config.STREAM_QUALITY)
+                        native_height, native_width = frame.shape[:2]
+                        if width is not None or height is not None:
+                            resize = (width or native_width, height or native_height)
+                        elif self._stream_size is not None and self._stream_size != (native_width, native_height):
+                            resize = self._stream_size
+                        else:
+                            resize = None
+                        frame_data = self._encode_jpeg(frame, config.STREAM_QUALITY, resize=resize)
 
                 if frame_data:
                     yield frame_data
@@ -524,12 +558,6 @@ class MindVisionCamera(BaseCamera):
         finally:
             self._stream_count -= 1
             self._streaming = self._stream_count > 0
-            if _saved_resolution is not None and self._h_camera is not None:
-                try:
-                    mvsdk.CameraSetImageResolution(self._h_camera, _saved_resolution)
-                    logger.info("stream_resolution_restored")
-                except Exception:
-                    logger.warning("mindvision_restore_resolution_failed")
             # Only revert trigger mode when the last active generator exits.
             # If another generator is still running it already set continuous mode
             # and reverting here would break it.
@@ -548,8 +576,7 @@ class MindVisionCamera(BaseCamera):
         if self._h_camera is None:
             self.open()
 
-        if resolution is not None:
-            logger.warning("mindvision_resolution_param_ignored", requested=resolution)
+        target_resolution = resolution or self._capture_size
 
         captured_at = datetime.now(timezone.utc).isoformat()
         output_image = output_folder / f"{int(time.time())}.jpg"
@@ -558,17 +585,24 @@ class MindVisionCamera(BaseCamera):
             if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
                 mvsdk.CameraSoftTrigger(self._h_camera)
             t0 = time.perf_counter()
-            frame, head = self._grab_frame()
+            frame, head = self._grab_frame(timeout_ms=self.exposure_grab_timeout_ms())
             capture_duration_ms = (time.perf_counter() - t0) * 1000
 
         if frame is None:
             raise RuntimeError("Failed to capture frame from MindVision camera")
 
+        native_height, native_width = frame.shape[:2]
+        resize = (
+            target_resolution
+            if target_resolution is not None and target_resolution != (native_width, native_height)
+            else None
+        )
+
         exif_bytes = self._build_exif(captured_at)
-        jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes)
+        jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes, resize=resize)
         output_image.write_bytes(jpeg_bytes)
 
-        height, width = frame.shape[:2]
+        width, height = resize or (native_width, native_height)
         metrics = CaptureMetrics(
             captured_at=captured_at,
             capture_duration_ms=capture_duration_ms,
@@ -599,4 +633,11 @@ class MindVisionCamera(BaseCamera):
             "mono": self._mono,
             "max_width": self._cap.sResolutionRange.iWidthMax,
             "max_height": self._cap.sResolutionRange.iHeightMax,
+            # From camera_profiles.<model> as loaded at process start (see
+            # config.py — the file isn't re-read after startup, so this
+            # reflects what's actually in effect, not necessarily what's
+            # currently on disk). None means "no profile entry, falls back
+            # to native resolution".
+            "capture_size": self._capture_size,
+            "stream_size": self._stream_size,
         }

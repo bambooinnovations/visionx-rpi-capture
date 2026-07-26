@@ -22,8 +22,12 @@ UPDATABLE: dict[str, type] = {
     "hw_trigger.save_local":          bool,
     "hw_trigger.local_max_files":     int,
     "hw_trigger.local_max_mb":        int,
-    "hw_trigger.raw_destination_url": str,
-    "hw_trigger.send_raw_images":     bool,
+    "hw_trigger.raw_destination_url":      str,
+    "hw_trigger.send_raw_images":          bool,
+    "hw_trigger.trigger_queue_maxsize":    int,
+    "hw_trigger.stitch_memory_budget_mb":  int,
+    "hw_trigger.raw_memory_budget_mb":     int,
+    "hw_trigger.max_queue_age_s":          float,
 }
 
 # Values that are masked ("***") in GET /rpi/config responses.

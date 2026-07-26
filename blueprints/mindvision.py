@@ -692,6 +692,11 @@ def _read_full_config(h: int, cam: "MindVisionCamera") -> dict:
     image_params = [
         p("width",          "Width",              res.iWidth            if res  else None, "px"),
         p("height",         "Height",             res.iHeight           if res  else None, "px"),
+        # From camera_profiles.<model> as loaded at process start — compare
+        # against width/height above to check the running process actually
+        # picked up the profile you expect (config.toml isn't hot-reloaded).
+        p("configured_capture_size", "Configured Capture Size", list(cam._capture_size) if cam._capture_size else None),
+        p("configured_stream_size",  "Configured Stream Size",  list(cam._stream_size) if cam._stream_size else None),
         p("width_fov",      "FOV Width",          res.iWidthFOV         if res  else None, "px"),
         p("height_fov",     "FOV Height",         res.iHeightFOV        if res  else None, "px"),
         p("h_offset_fov",   "FOV H Offset",       res.iHOffsetFOV       if res  else None, "px"),
@@ -984,6 +989,8 @@ def create_blueprint(
                 "product_name": cam.camera_info().get("product_name"),
                 "port_type": cam.camera_info().get("port_type"),
                 "status": "open" if cam.serial_number is not None else "closed",
+                "capture_size": cam.camera_info().get("capture_size"),
+                "stream_size": cam.camera_info().get("stream_size"),
             }
             for cam_id, cam in sorted(cameras.items())
         ])
@@ -1378,7 +1385,7 @@ def create_blueprint(
             except Exception:
                 exp_us = 0.0
             # Pad the grab timeout so a long exposure doesn't kill the stream.
-            return max(1000, int(exp_us / 1000) + 500), max(frame_interval, exp_us / 1_000_000)
+            return cam.exposure_grab_timeout_ms(), max(frame_interval, exp_us / 1_000_000)
 
         def _render_settings(frame):
             return _encode_raw_frame(frame, max_width, quality=80)
@@ -1405,17 +1412,10 @@ def create_blueprint(
         max_width = request.args.get("max_width", 1280, type=int)
 
         try:
-            exp_us = _mvsdk.CameraGetExposureTime(cam._h_camera)
-        except Exception:
-            exp_us = 0.0
-        # Give a generous buffer on top of the exposure time.
-        grab_timeout_ms = max(2000, int(exp_us / 1000) + 1000)
-
-        try:
             with cam._lock:
                 if not cam._streaming and cam.mode != CameraMode.HARDWARE_TRIGGER:
                     _mvsdk.CameraSoftTrigger(cam._h_camera)
-                frame, _head = cam._grab_frame(timeout_ms=grab_timeout_ms)
+                frame, _head = cam._grab_frame(timeout_ms=cam.exposure_grab_timeout_ms())
         except Exception as exc:
             return jsonify({"error": str(exc)}), 503
 
