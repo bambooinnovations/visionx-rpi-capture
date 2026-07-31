@@ -100,7 +100,7 @@ All settings live in `configuration.toml`. Whenever a new key is added here, mir
 env = "dev"                # "dev" = coloured console logs, "prod" = JSON
 
 [station]
-type = "fabric"            # "fabric" (production line, hardware-trigger) or "qc" (workstation, software-trigger capture) — MindVision only
+type = "fabric"            # "fabric" (production line, hardware-trigger) or "qc"/"shading" (workstation, software-trigger capture) — MindVision only
 
 [camera]
 type = "auto"              # "auto" (default) probes for MindVision devices and a Pi CSI camera

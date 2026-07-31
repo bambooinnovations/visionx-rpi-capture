@@ -120,10 +120,11 @@ if mindvision_cameras:
     app.register_blueprint(create_arduino_blueprint(_serial_listener, mindvision_cameras))
 
     if (not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
-        if config.STATION_TYPE == "qc":
-            # QC station: boot cameras straight into software-trigger capture
-            # mode so POST /rpi/capture works immediately with no manual mode
-            # switch. The decoder never auto-starts on a QC station.
+        if config.is_capture_station():
+            # QC/shading station: boot cameras straight into software-trigger
+            # capture mode so POST /rpi/capture works immediately with no
+            # manual mode switch. The decoder never auto-starts on these
+            # stations.
             _mode_errors = {}
             for _cam_id, _cam in mindvision_cameras.items():
                 try:
@@ -291,10 +292,11 @@ def _build_system_status() -> tuple[bool, dict]:
             entry["mode"] = cam.mode.value
         cam_list.append(entry)
 
-    # QC stations run cameras in software-trigger capture mode; fabric stations
-    # expect hardware-trigger mode. Readiness must reflect whichever applies.
+    # QC/shading stations run cameras in software-trigger capture mode; fabric
+    # stations expect hardware-trigger mode. Readiness must reflect whichever
+    # applies.
     _expected_mode = (
-        CameraMode.CAPTURE.value if config.STATION_TYPE == "qc"
+        CameraMode.CAPTURE.value if config.is_capture_station()
         else CameraMode.HARDWARE_TRIGGER.value
     )
     cameras_ready = len(cam_list) > 0 and all(c["open"] for c in cam_list)
@@ -304,9 +306,9 @@ def _build_system_status() -> tuple[bool, dict]:
         )
     cameras_subsystem = {"ready": cameras_ready, "cameras": cam_list}
 
-    # --- decoder (fabric station, MindVision only — QC stations have no decoder) ---
+    # --- decoder (fabric station, MindVision only — QC/shading stations have no decoder) ---
     decoder_subsystem = None
-    if mindvision_cameras and config.STATION_TYPE != "qc":
+    if mindvision_cameras and not config.is_capture_station():
         s = _serial_listener.status()
         running = s.get("running", False)
         serial_connected = s.get("serial_connected", False)
@@ -320,8 +322,9 @@ def _build_system_status() -> tuple[bool, dict]:
 
     # --- config ---
     # Destination URL only matters for the fabric station's hardware-trigger
-    # upload pipeline; QC stations capture on demand and don't need it set.
-    if config.STATION_TYPE == "qc":
+    # upload pipeline; QC/shading stations capture on demand and don't need
+    # it set.
+    if config.is_capture_station():
         config_subsystem = {"ready": True, "destination_url": ""}
     else:
         destination_url = runtime_config.get(
@@ -380,8 +383,8 @@ def system_mode():
     if mode not in ("fabric", "regular"):
         return jsonify({"error": "mode must be 'fabric' or 'regular'"}), 400
 
-    if mode == "fabric" and config.STATION_TYPE == "qc":
-        return jsonify({"error": "fabric mode is not available on a qc station"}), 409
+    if mode == "fabric" and config.is_capture_station():
+        return jsonify({"error": "fabric mode is not available on a qc/shading station"}), 409
 
     actions: list[dict] = []
 
@@ -498,6 +501,7 @@ def capture():
 def _effective_config() -> dict:
     """Merge toml base values with runtime overrides. Masks sensitive keys."""
     base = {
+        "station.type":                   config.STATION_TYPE,
         "stream.fps":                     config.STREAM_FPS,
         "stream.quality":                 config.STREAM_QUALITY,
         "hw_trigger.serial_port":         config.HW_TRIGGER_SERIAL_PORT,

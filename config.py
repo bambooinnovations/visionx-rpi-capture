@@ -26,12 +26,21 @@ def _get(section: str, key: str, default):
 ENV: str = _get("server", "env", "dev")
 
 # Station (MindVision only)
-# "fabric" — production line: cameras default to hardware-trigger mode; the
-#            decoder auto-starts if its serial port is present at boot.
-# "qc"     — quality-control workstation: cameras default to software-trigger
-#            capture mode at boot so /rpi/capture works immediately; the
-#            decoder never auto-starts.
+# "fabric"  — production line: cameras default to hardware-trigger mode; the
+#             decoder auto-starts if its serial port is present at boot.
+# "qc"      — quality-control workstation: cameras default to software-trigger
+#             capture mode at boot so /rpi/capture works immediately; the
+#             decoder never auto-starts.
+# "shading" — shade-checking workstation: identical capture behavior to "qc"
+#             (software-trigger stills, no decoder / hardware trigger).
 STATION_TYPE: str = _get("station", "type", "fabric")
+
+
+def is_capture_station() -> bool:
+    """True for on-demand capture stations (qc, shading) — as opposed to the
+    fabric production line's hardware-trigger flow."""
+    return STATION_TYPE in ("qc", "shading")
+
 
 # Camera
 # "auto"       — probe for MindVision devices and a Pi CSI camera independently
