@@ -25,8 +25,11 @@ if the overlap zone is narrow.
        POST /calibrate  {"cameras": [0, 1]}
   2. Move board where cam1 + cam2 can see it:
        POST /calibrate  {"cameras": [1, 2]}
-  Each step merges into the same calibration file.  The center camera's
-  homography anchors all three into one coordinate space.
+  Each step merges into the same calibration file.  Because the two passes
+  use different physical board placements, the second pass's recalibration
+  of cam1 also reprojects cam0's stored homography through the shift between
+  cam1's old and new homography, so all three stay anchored to one
+  consistent frame (see the bridge-camera reprojection in `calibrate()`).
 """
 from __future__ import annotations
 
@@ -716,8 +719,60 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                 "grab_errors": {str(k): v for k, v in grab_errors.items()},
             }), 422
 
+        # If this pass includes a camera that was already calibrated before, it's
+        # meant to bridge the old and new board placements (see below).  If that
+        # bridge camera fails detection while some *other* camera in this pass
+        # succeeds, merging the survivor would silently leave it anchored to a
+        # fresh, unconnected frame — misaligned relative to everything already
+        # calibrated, with no error to show for it.  Reject the whole pass instead.
+        existing_camera_ids = existing.get("cameras", {}).keys()
+        requested_str_ids = {str(i) for i in requested_ids}
+        bridge_candidates = requested_str_ids & existing_camera_ids
+        failed_bridges = bridge_candidates & failed.keys()
+        orphaned = new_results.keys() - bridge_candidates
+        if failed_bridges and orphaned:
+            return jsonify({
+                "error": (
+                    f"Camera(s) {sorted(failed_bridges)} already had calibration data "
+                    "from an earlier pass but failed to detect the board this time — "
+                    f"merging camera(s) {sorted(orphaned)} now would leave them in an "
+                    "unconnected coordinate frame. Retry this pass so every requested "
+                    "camera succeeds together."
+                ),
+                "details": failed,
+                "grab_errors": {str(k): v for k, v in grab_errors.items()},
+            }), 422
+
+        # Each pass's homographies are relative to that pass's own ChArUco board
+        # placement — a different placement than earlier passes used.  When this
+        # pass recalibrates a camera that was already calibrated before, that
+        # camera bridges the two placements: reproject every other previously
+        # calibrated camera (not part of this pass) through it so the whole set
+        # stays anchored to one consistent frame instead of drifting between
+        # passes.  Without this, a 3+ camera chain (e.g. cam0+cam1, then
+        # cam1+cam2) leaves cam0 anchored to a stale, unrelated board frame.
+        existing_cameras = dict(existing.get("cameras", {}))
+        bridge_ids = sorted(
+            (cid for cid in new_results if cid in existing_cameras),
+            key=int,
+        )
+        if bridge_ids:
+            bridge_id = bridge_ids[0]
+            H_old = np.array(existing_cameras[bridge_id]["homography"], dtype=np.float64)
+            H_new = np.array(new_results[bridge_id]["homography"], dtype=np.float64)
+            frame_shift = H_new @ np.linalg.inv(H_old)  # old-frame coords → new-frame coords
+
+            for cid, entry in existing_cameras.items():
+                if cid in new_results:
+                    continue
+                H_stale = np.array(entry["homography"], dtype=np.float64)
+                existing_cameras[cid] = {
+                    **entry,
+                    "homography": (frame_shift @ H_stale).tolist(),
+                }
+
         # Canvas is the max across all calibrated cameras (they share a world plane).
-        merged_cameras = dict(existing.get("cameras", {}))
+        merged_cameras = existing_cameras
         merged_cameras.update(new_results)
 
         canvas_w = max(v["canvas_width_px"] for v in merged_cameras.values())

@@ -157,6 +157,9 @@ if mindvision_cameras:
                 else:
                     logger.warning("decoder_auto_start_skipped", mode_errors=_mode_errors)
 
+from blueprints.pxcm import create_blueprint as create_pxcm_blueprint
+app.register_blueprint(create_pxcm_blueprint(cameras))
+
 
 def _resolve_camera(default_id: int = 0):
     """Return (cam, cam_id) from the camera_id query param, or None on miss."""
@@ -258,6 +261,11 @@ def stitch_ui():
 @app.route("/focus")
 def focus_ui():
     return render_template("focus.html")
+
+
+@app.route("/pxcm")
+def pxcm_ui():
+    return render_template("pxcm.html")
 
 
 @app.route("/settings")
