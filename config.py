@@ -48,6 +48,8 @@ def is_capture_station() -> bool:
 #                both types in one deployment.
 # "picamera2"  — force Pi CSI camera only, never probe for MindVision.
 # "mindvision" — force MindVision only, never probe for a Pi CSI camera.
+# "mock"       — no real hardware; uses the local machine's webcam if present,
+#                else a generated test-pattern frame. For local development.
 CAMERA_TYPE: str = _get("camera", "type", "auto")
 CAMERA_SHARPNESS: float = _get("camera", "sharpness", 1.0)
 LOCK_EXPOSURE: bool = _get("camera", "lock_exposure", False)

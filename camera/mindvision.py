@@ -22,7 +22,12 @@ try:
     import mvsdk
 
     _MVSDK_AVAILABLE = True
-except (ImportError, OSError):
+except Exception:
+    # mvsdk.py loads the vendor SDK's native library at import time (via
+    # ctypes windll/cdll) and raises whatever ctypes throws for a missing
+    # library — AttributeError on Windows, OSError on Linux — not just
+    # ImportError. Catch broadly so a dev machine without the SDK installed
+    # can still import this module (e.g. for "mock" camera.type).
     _MVSDK_AVAILABLE = False
 
 # Guards so CameraSdkInit / CameraSetDataDirectory are only called once

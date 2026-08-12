@@ -6,6 +6,7 @@ import structlog
 
 from camera.base import BaseCamera
 from camera.mindvision import MindVisionCamera
+from camera.mock import MockCamera
 from camera.picamera import PiCamera
 
 import config
@@ -19,7 +20,9 @@ def create_camera() -> BaseCamera:
         return PiCamera()
     if t == "mindvision":
         return MindVisionCamera()
-    raise ValueError(f"Unknown camera type: {t!r}. Expected 'auto', 'picamera2', or 'mindvision'.")
+    if t == "mock":
+        return MockCamera()
+    raise ValueError(f"Unknown camera type: {t!r}. Expected 'auto', 'picamera2', 'mindvision', or 'mock'.")
 
 
 def build_camera_registry() -> dict[int, BaseCamera]:
@@ -45,8 +48,11 @@ def build_camera_registry() -> dict[int, BaseCamera]:
     if t == "picamera2":
         return {0: PiCamera()}
 
+    if t == "mock":
+        return {0: MockCamera()}
+
     if t != "auto":
-        raise ValueError(f"Unknown camera type: {t!r}. Expected 'auto', 'picamera2', or 'mindvision'.")
+        raise ValueError(f"Unknown camera type: {t!r}. Expected 'auto', 'picamera2', 'mindvision', or 'mock'.")
 
     registry: dict[int, BaseCamera] = {}
     for cam in _detect_mindvision(required=False):
