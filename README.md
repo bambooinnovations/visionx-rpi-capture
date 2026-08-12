@@ -106,7 +106,8 @@ type = "fabric"            # "fabric" (production line, hardware-trigger) or "qc
 type = "auto"              # "auto" (default) probes for MindVision devices and a Pi CSI camera
                             # independently and registers whatever's present — can mix both types
                             # in one deployment. "picamera2" or "mindvision" force that type only
-                            # and skip probing for the other.
+                            # and skip probing for the other. "mock" uses your machine's webcam
+                            # (or a generated test frame) — for local development without hardware.
 sharpness = 1.0            # ISP sharpness; 0 = off (picamera2 only)
 lock_exposure = false      # Lock AE/AWB after startup for consistent captures (picamera2 only)
 # lens_position = 2.0      # Manual focus in dioptres; omit for continuous autofocus (picamera2 only)
@@ -202,6 +203,7 @@ rpi-capture-api/
 │   ├── base.py             # BaseCamera ABC: open, close, capture_image, stream_frames
 │   ├── picamera.py         # PiCamera — wraps picamera2 for CSI cameras
 │   ├── mindvision.py       # MindVisionCamera — wraps mvsdk; supports stream/capture/hardware_trigger modes
+│   ├── mock.py             # MockCamera — webcam or synthetic frames, no hardware required (camera.type = "mock")
 │   └── mindvision_trigger.py  # SerialTriggerListener — reads Arduino JSON over serial, captures on each trigger
 ├── blueprints/
 │   ├── mindvision.py       # MindVision-specific routes (/api/cameras/*); registered only for MindVision cameras

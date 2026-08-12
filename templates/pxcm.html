@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX Pixel/cm Calibration</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/pxcm/pxcm.css">
+</head>
+<body>
+
+<!-- ── Site Nav ──────────────────────────────────────────────────────── -->
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+  <a class="nav-link active" href="/pxcm">Pixel/cm</a>
+  <span class="nav-spacer"></span>
+  <span class="nav-divider"></span>
+  <a class="nav-link nav-link-settings" href="/settings">Settings</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<div id="no-camera-message" class="info-box hidden">No camera detected.</div>
+
+<div id="pxcm-main" class="pxcm-main">
+
+  <!-- ── Setup card ──────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Pixel / cm Calibration</h2>
+    </div>
+    <p class="card-desc">Select a camera to calibrate, then point it at the ChArUco calibration board and capture a full-resolution frame to measure the pixel-to-centimetre scale.</p>
+
+    <div class="pxcm-controls">
+      <div class="pxcm-field">
+        <label for="pxcm-camera-select">Camera</label>
+        <select id="pxcm-camera-select" onchange="pxcm.onCameraChange()">
+          <option value="" selected>Select a camera…</option>
+        </select>
+      </div>
+      <div class="pxcm-field">
+        <label for="pxcm-board-select">Calibration board</label>
+        <select id="pxcm-board-select" onchange="pxcm.onBoardChange()"></select>
+      </div>
+    </div>
+
+    <div id="pxcm-board-details" class="pxcm-board-details"></div>
+
+    <div id="pxcm-select-hint" class="info-box">Select a camera above to start its live view.</div>
+
+    <div id="pxcm-stream-section" class="hidden">
+      <div class="live-stream-wrap" id="live-stream-wrap">
+        <img id="live-view-img" class="live-stream-img hidden" alt="Live camera view">
+        <div id="live-stream-idle" class="live-stream-idle">
+          <button class="btn btn-primary" onclick="pxcm.startLive()">▶ Start Live View</button>
+        </div>
+      </div>
+      <div id="live-stream-bar" class="live-stream-bar hidden">
+        <button class="btn btn-secondary btn-sm" onclick="pxcm.stopLive()">■ Stop</button>
+        <div class="live-stream-spacer"></div>
+        <button id="btn-pxcm-capture" class="btn btn-primary" onclick="pxcm.capture()">📷 Capture &amp; Measure</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Result card ─────────────────────────────────────────────────── -->
+  <div id="pxcm-result-card" class="card hidden">
+    <div class="card-header">
+      <h2>Result</h2>
+      <button class="btn btn-secondary btn-sm" onclick="pxcm.dismissResult()">✕ Close</button>
+    </div>
+    <div id="pxcm-result-body"></div>
+  </div>
+
+</div>
+
+<script src="/static/pxcm/pxcm.js"></script>
+</body>
+</html>

@@ -439,11 +439,11 @@ const calWizard = {
       setupInfo.innerHTML = `<p>Place the ChArUco board where <strong>both cameras can see it simultaneously</strong>. One pass covers the full setup.</p>`;
     } else {
       setupInfo.innerHTML = `
-        <p>Calibration requires <strong>${state.calPassPlan.length} passes</strong> — one per adjacent camera pair.</p>
+        <p>Calibration requires <strong>${state.calPassPlan.length} passes</strong> — one per adjacent pair, following the camera order set above.</p>
         <ul>${state.calPassPlan.map((pair, i) =>
           `<li>Pass ${i + 1}: Camera ${pair[0]} + Camera ${pair[1]}</li>`
         ).join('')}</ul>
-        <p>The centre camera anchors all cameras into one coordinate space.</p>`;
+        <p>Use the <strong>same physical board</strong> for every pass — move it to the next overlap zone rather than printing a new one. Each camera that appears in two passes (e.g. Camera ${state.calPassPlan[0][1]}) bridges them into one shared coordinate space.</p>`;
     }
 
     _calBuildStepDots(5);
@@ -509,11 +509,13 @@ const calWizard = {
       `Pass ${idx + 1} of ${total} — Position Board`;
 
     const instr = document.getElementById('cal-pass-instruction');
+    const sizeHint = `<p class="cal-step-hint">Move the board closer until it fills at least <strong>1/3 of the frame</strong> in each camera's view — a small or distant board is the most common cause of "not detected". Use <strong>Check Detection</strong> below to confirm before running the pass.</p>`;
     if (total === 1) {
       instr.innerHTML = `<p>Place the ChArUco board where <strong>Camera ${pass[0]}</strong> and <strong>Camera ${pass[1]}</strong> can both see it clearly.</p>
-        <p>The board should fill a good portion of the shared overlap zone.</p>`;
+        ${sizeHint}`;
     } else {
       instr.innerHTML = `<p>Place the board in the overlap zone between <strong>Camera ${pass[0]}</strong> and <strong>Camera ${pass[1]}</strong>.</p>
+        ${sizeHint}
         <p>Pass ${idx + 1} of ${total}. ${idx < total - 1
           ? `Next: move the board to the overlap between Cameras ${state.calPassPlan[idx + 1].join(' + ')}.`
           : 'This is the final pass.'}</p>`;

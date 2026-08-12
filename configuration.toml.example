@@ -30,6 +30,8 @@ type = "fabric"
 #                       stitching only ever apply to MindVision cameras.
 # type = "picamera2"  — force Raspberry Pi CSI cameras via libcamera only
 # type = "mindvision" — force MindVision USB or GigE cameras via mvsdk only
+# type = "mock"       — no real hardware; uses your machine's webcam if present,
+#                       else a generated test-pattern frame. For local dev.
 [camera]
 type = "auto"
 sharpness = 1.0        # ISP sharpness multiplier; 0 = off, 1.0 = IPA default (picamera2 only)
