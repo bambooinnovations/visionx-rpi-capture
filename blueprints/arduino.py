@@ -25,6 +25,10 @@ from camera.mindvision_trigger import (
     SerialTriggerListener,
     check_server_health,
     compute_arduino_params,
+    delete_speed_preset,
+    get_speed_preset,
+    list_speed_presets,
+    save_speed_preset,
 )
 
 logger = structlog.get_logger()
@@ -232,6 +236,7 @@ def create_blueprint(
             "trigger_enabled": status.get("trigger_enabled"),
             "arduino_defaults": ARDUINO_DEFAULTS,
             "physical_defaults": PHYSICAL_DEFAULTS,
+            "active_style": saved.get("active_style"),
         })
 
     @bp.route("/config", methods=["PATCH"])
@@ -275,6 +280,8 @@ def create_blueprint(
                 interval_mm=merged["capture_interval_mm"],
             )
             updates.update(derived)
+            # Manually edited physical params no longer match any named style.
+            updates["active_style"] = None
 
         to_save = dict(updates)
         not_running = []
@@ -302,6 +309,89 @@ def create_blueprint(
             except RuntimeError:
                 pass
         return jsonify({"reset": True, "defaults": ARDUINO_DEFAULTS})
+
+    # ── Named speed presets ("styles") ─────────────────────────────────────────
+    # Presets only store physical wheel/encoder/interval params, saved to
+    # data/speed_presets.json. Saving a preset never touches the Arduino —
+    # only POST .../activate pushes it live, mirroring PATCH /config's
+    # recompute-and-push behavior for a specific named style.
+
+    @bp.route("/speed-presets", methods=["GET"])
+    def list_speed_presets_route():
+        """List all saved speed-preset styles and which one (if any) is active."""
+        return jsonify({
+            "presets": list_speed_presets(),
+            "active_style": listener.file_config().get("active_style"),
+        })
+
+    @bp.route("/speed-presets/<string:style>", methods=["GET"])
+    def get_speed_preset_route(style: str):
+        preset = get_speed_preset(style)
+        if preset is None:
+            return jsonify({"error": f"No preset named '{style}'"}), 404
+        return jsonify({"style": style, "physical_config": preset})
+
+    @bp.route("/speed-presets/<string:style>", methods=["PATCH"])
+    def patch_speed_preset_route(style: str):
+        """Create or update a named preset's physical params. Does not push to the Arduino."""
+        body = request.get_json(silent=True) or {}
+        if not body:
+            return jsonify({"error": "Request body must be a JSON object"}), 400
+
+        errors: dict = {}
+        updates: dict = {}
+        for key, value in body.items():
+            if key not in PHYSICAL_SETTABLE_KEYS:
+                errors[key] = "not a settable key"
+                continue
+            try:
+                updates[key] = PHYSICAL_SETTABLE_KEYS[key](value)
+            except (ValueError, TypeError):
+                errors[key] = f"expected {PHYSICAL_SETTABLE_KEYS[key].__name__}"
+
+        if errors:
+            return jsonify({"error": "invalid values", "details": errors}), 400
+
+        saved = save_speed_preset(style, updates)
+        return jsonify({"style": style, "physical_config": saved})
+
+    @bp.route("/speed-presets/<string:style>", methods=["DELETE"])
+    def delete_speed_preset_route(style: str):
+        if not delete_speed_preset(style):
+            return jsonify({"error": f"No preset named '{style}'"}), 404
+        return jsonify({"deleted": style})
+
+    @bp.route("/speed-presets/<string:style>/activate", methods=["POST"])
+    def activate_speed_preset_route(style: str):
+        """Recompute derived Arduino params from a saved preset, push them live, and mark it active."""
+        preset = get_speed_preset(style)
+        if preset is None:
+            return jsonify({"error": f"No preset named '{style}'"}), 404
+
+        missing = [k for k in PHYSICAL_SETTABLE_KEYS if k not in preset]
+        if missing:
+            return jsonify({"error": f"Preset '{style}' is missing required keys", "missing": missing}), 400
+
+        derived = compute_arduino_params(
+            diameter_mm=preset["wheel_diameter_mm"],
+            ppr=int(preset["encoder_ppr"]),
+            interval_mm=preset["capture_interval_mm"],
+        )
+        to_save = {**preset, **derived, "active_style": style}
+
+        not_running = []
+        for key in ("trigger_interval", "counts_per_cm"):
+            try:
+                listener.send_command({"cmd": f"set_{key}", "value": to_save[key]})
+            except RuntimeError:
+                not_running.append(key)
+
+        listener.save_config(to_save)
+
+        result: dict = {"activated": style, "applied": to_save}
+        if not_running:
+            result["warning"] = f"Saved to file but listener not running — {not_running} will apply on next connect"
+        return jsonify(result)
 
     # ── Simulator ─────────────────────────────────────────────────────────────
 

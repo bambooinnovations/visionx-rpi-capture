@@ -50,6 +50,10 @@ logger = structlog.get_logger()
 # Persisted Arduino parameter overrides (survives RPi restart, no reflash needed).
 ARDUINO_CONFIG_PATH = Path("data/arduino_config.json")
 
+# Named speed presets ("styles") — saved physical params a caller can activate by name
+# instead of resending the full wheel/encoder/interval payload every time.
+SPEED_PRESETS_PATH = Path("data/speed_presets.json")
+
 # Arduino compile-time defaults — used when resetting to factory state.
 ARDUINO_DEFAULTS: dict = {
     "trigger_interval": 118,
@@ -95,6 +99,50 @@ def compute_arduino_params(diameter_mm: float, ppr: int, interval_mm: float) -> 
         "counts_per_cm": round(counts_per_cm, 4),
         "trigger_interval": trigger_interval,
     }
+
+
+def _load_speed_presets() -> dict:
+    try:
+        if SPEED_PRESETS_PATH.exists():
+            return json.loads(SPEED_PRESETS_PATH.read_text())
+    except Exception as exc:
+        logger.warning("speed_presets_load_failed", error=str(exc))
+    return {}
+
+
+def _save_speed_presets(presets: dict) -> None:
+    try:
+        SPEED_PRESETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SPEED_PRESETS_PATH.write_text(json.dumps(presets, indent=2))
+    except Exception as exc:
+        logger.warning("speed_presets_save_failed", error=str(exc))
+
+
+def list_speed_presets() -> dict:
+    """Return all saved {style: physical_params} presets."""
+    return _load_speed_presets()
+
+
+def get_speed_preset(style: str) -> dict | None:
+    return _load_speed_presets().get(style)
+
+
+def save_speed_preset(style: str, updates: dict) -> dict:
+    """Merge updates into the named preset (creating it if new) and persist. Does not touch the Arduino."""
+    presets = _load_speed_presets()
+    merged = {**presets.get(style, {}), **updates}
+    presets[style] = merged
+    _save_speed_presets(presets)
+    return merged
+
+
+def delete_speed_preset(style: str) -> bool:
+    presets = _load_speed_presets()
+    if style not in presets:
+        return False
+    del presets[style]
+    _save_speed_presets(presets)
+    return True
 
 
 def _get_destination_url() -> str:
@@ -540,6 +588,7 @@ class SerialTriggerListener:
             "uptime_seconds": uptime,
             "simulator_running": self.simulator_running,
             "simulator_speed_cms": self._sim_speed_cms if self.simulator_running else None,
+            "active_style": self._load_file_config().get("active_style"),
             **stats_snapshot,
             **state,
         }

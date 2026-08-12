@@ -175,6 +175,7 @@ Update one or more values at runtime without a server restart. Overrides are per
 | `hw_trigger.local_max_mb` | int |
 | `hw_trigger.raw_destination_url` | string |
 | `hw_trigger.send_raw_images` | bool |
+| `hw_trigger.use_stitch` | bool |
 | `hw_trigger.trigger_queue_maxsize` | int |
 | `hw_trigger.stitch_memory_budget_mb` | int |
 | `hw_trigger.raw_memory_budget_mb` | int |
@@ -554,9 +555,12 @@ Full listener status including live Arduino state and capture statistics.
   "encoder_count": 118,
   "last_message_at": 1749340189.056,
   "arduino_config": {...},
-  "trigger_enabled": true
+  "trigger_enabled": true,
+  "active_style": "thin_fabric"
 }
 ```
+
+`active_style` is the name of the last-activated [speed preset](#speed-presets-styles), or `null` if none is active.
 
 ---
 
@@ -605,9 +609,12 @@ Return current Arduino parameters and the physical wheel/encoder configuration.
   "physical_config": {"wheel_diameter_mm": 200.0, "encoder_ppr": 600, "capture_interval_mm": 50.0},
   "trigger_enabled": true,
   "arduino_defaults": {...},
-  "physical_defaults": {...}
+  "physical_defaults": {...},
+  "active_style": "thin_fabric"
 }
 ```
+
+`active_style` is the name of the last-activated [speed preset](#get-apidecoderspeed-presets), or `null` if the config was set directly via this endpoint (not through a named preset) or never activated.
 
 ---
 
@@ -615,7 +622,7 @@ Return current Arduino parameters and the physical wheel/encoder configuration.
 
 Update physical wheel/encoder params or raw Arduino params.
 
-Physical keys (`wheel_diameter_mm`, `encoder_ppr`, `capture_interval_mm`) automatically recompute and push `counts_per_cm` and `trigger_interval` to the Arduino. Raw keys (`pulse_width_ms`, `speed_report_interval_ms`) are sent directly. Changes are also persisted to `arduino_config.json`.
+Physical keys (`wheel_diameter_mm`, `encoder_ppr`, `capture_interval_mm`) automatically recompute and push `counts_per_cm` and `trigger_interval` to the Arduino. Raw keys (`pulse_width_ms`, `speed_report_interval_ms`) are sent directly. Changes are also persisted to `arduino_config.json`. Setting any physical key here clears `active_style` back to `null`, since the live config no longer matches a saved preset.
 
 **Body** — any subset of settable keys:
 
@@ -634,6 +641,62 @@ Physical keys (`wheel_diameter_mm`, `encoder_ppr`, `capture_interval_mm`) automa
 ### `DELETE /api/decoder/config`
 
 Delete `arduino_config.json` so Arduino compile-time defaults take effect on next connect. Also pushes defaults to a running listener.
+
+---
+
+### Speed presets ("styles")
+
+Named presets of physical params (`wheel_diameter_mm`, `encoder_ppr`, `capture_interval_mm`), stored in `data/speed_presets.json`, so a caller can save several product/fabric configurations once and switch between them by name instead of resending all three values every time. Saving a preset never touches the Arduino — only `.../activate` pushes it live, same recompute-and-push behavior as `PATCH /api/decoder/config`.
+
+#### `GET /api/decoder/speed-presets`
+
+List every saved style and which one (if any) is currently active.
+
+**Response**
+
+```json
+{
+  "presets": {
+    "thin_fabric": {"wheel_diameter_mm": 64.7, "encoder_ppr": 600, "capture_interval_mm": 8.0},
+    "thick_fabric": {"wheel_diameter_mm": 64.7, "encoder_ppr": 600, "capture_interval_mm": 12.0}
+  },
+  "active_style": "thin_fabric"
+}
+```
+
+---
+
+#### `GET /api/decoder/speed-presets/<style>`
+
+Return one saved style's physical params. `404` if the style doesn't exist.
+
+---
+
+#### `PATCH /api/decoder/speed-presets/<style>`
+
+Create or update a named style. Creates it if it doesn't exist yet. Any subset of `wheel_diameter_mm` / `encoder_ppr` / `capture_interval_mm` — merged into the existing saved values. Does **not** push anything to the Arduino.
+
+```bash
+curl -X PATCH http://localhost:8080/api/decoder/speed-presets/thin_fabric \
+     -H "Content-Type: application/json" \
+     -d '{"wheel_diameter_mm": 64.7, "encoder_ppr": 600, "capture_interval_mm": 8.0}'
+```
+
+---
+
+#### `DELETE /api/decoder/speed-presets/<style>`
+
+Remove a saved style. `404` if it doesn't exist.
+
+---
+
+#### `POST /api/decoder/speed-presets/<style>/activate`
+
+Recompute `counts_per_cm`/`trigger_interval` from the style's saved physical params, push them live to the Arduino, persist to `arduino_config.json`, and set it as `active_style`. `404` if the style doesn't exist; `400` if it's missing any of the three required physical keys.
+
+```bash
+curl -X POST http://localhost:8080/api/decoder/speed-presets/thin_fabric/activate
+```
 
 ---
 
