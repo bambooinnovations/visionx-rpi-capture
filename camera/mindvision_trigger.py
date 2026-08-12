@@ -50,6 +50,10 @@ logger = structlog.get_logger()
 # Persisted Arduino parameter overrides (survives RPi restart, no reflash needed).
 ARDUINO_CONFIG_PATH = Path("data/arduino_config.json")
 
+# Named speed presets ("styles") — saved physical params a caller can activate by name
+# instead of resending the full wheel/encoder/interval payload every time.
+SPEED_PRESETS_PATH = Path("data/speed_presets.json")
+
 # Arduino compile-time defaults — used when resetting to factory state.
 ARDUINO_DEFAULTS: dict = {
     "trigger_interval": 118,
@@ -97,6 +101,50 @@ def compute_arduino_params(diameter_mm: float, ppr: int, interval_mm: float) -> 
     }
 
 
+def _load_speed_presets() -> dict:
+    try:
+        if SPEED_PRESETS_PATH.exists():
+            return json.loads(SPEED_PRESETS_PATH.read_text())
+    except Exception as exc:
+        logger.warning("speed_presets_load_failed", error=str(exc))
+    return {}
+
+
+def _save_speed_presets(presets: dict) -> None:
+    try:
+        SPEED_PRESETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SPEED_PRESETS_PATH.write_text(json.dumps(presets, indent=2))
+    except Exception as exc:
+        logger.warning("speed_presets_save_failed", error=str(exc))
+
+
+def list_speed_presets() -> dict:
+    """Return all saved {style: physical_params} presets."""
+    return _load_speed_presets()
+
+
+def get_speed_preset(style: str) -> dict | None:
+    return _load_speed_presets().get(style)
+
+
+def save_speed_preset(style: str, updates: dict) -> dict:
+    """Merge updates into the named preset (creating it if new) and persist. Does not touch the Arduino."""
+    presets = _load_speed_presets()
+    merged = {**presets.get(style, {}), **updates}
+    presets[style] = merged
+    _save_speed_presets(presets)
+    return merged
+
+
+def delete_speed_preset(style: str) -> bool:
+    presets = _load_speed_presets()
+    if style not in presets:
+        return False
+    del presets[style]
+    _save_speed_presets(presets)
+    return True
+
+
 def _get_destination_url() -> str:
     return runtime_config.get("hw_trigger.destination_url", config.HW_TRIGGER_DESTINATION_URL)
 
@@ -119,6 +167,10 @@ def _get_save_local() -> bool:
 
 def _get_send_raw_images() -> bool:
     return bool(runtime_config.get("hw_trigger.send_raw_images", config.HW_TRIGGER_SEND_RAW_IMAGES))
+
+
+def _get_use_stitch() -> bool:
+    return bool(runtime_config.get("hw_trigger.use_stitch", config.HW_TRIGGER_USE_STITCH))
 
 
 def _get_raw_destination_url() -> str:
@@ -146,7 +198,7 @@ def check_server_health() -> dict:
         return {"reachable": False, "error": str(exc)}
 
 
-def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg", is_raw: bool = False) -> bool:
+def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg", is_raw: bool = False, camera_id: int | None = None) -> bool:
     """POST jpeg_bytes to url (defaults to destination_url). Returns True on success."""
     import requests
 
@@ -163,16 +215,20 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
     attempts = _get_retry_attempts()
     timeout = _get_timeout()
 
+    data = {
+        "trigger_count": str(trigger_event.get("count", "")),
+        "trigger_number": str(trigger_event.get("trigger", "")),
+        "trigger_source": "manual" if trigger_event.get("source") == "serial" else trigger_event.get("source", ""),
+    }
+    if camera_id is not None:
+        data["camera_id"] = str(camera_id)
+
     for attempt in range(1, attempts + 1):
         try:
             resp = requests.post(
                 url,
                 files={"image": (filename, io.BytesIO(jpeg_bytes), "image/jpeg")},
-                data={
-                    "trigger_count": str(trigger_event.get("count", "")),
-                    "trigger_number": str(trigger_event.get("trigger", "")),
-                    "trigger_source": "manual" if trigger_event.get("source") == "serial" else trigger_event.get("source", ""),
-                },
+                data=data,
                 headers=headers,
                 timeout=timeout,
             )
@@ -532,6 +588,7 @@ class SerialTriggerListener:
             "uptime_seconds": uptime,
             "simulator_running": self.simulator_running,
             "simulator_speed_cms": self._sim_speed_cms if self.simulator_running else None,
+            "active_style": self._load_file_config().get("active_style"),
             **stats_snapshot,
             **state,
         }
@@ -862,10 +919,15 @@ class SerialTriggerListener:
         raw_captures: dict[int, tuple["bytes | Path", str]],
         ts_ms: int,
     ) -> None:
-        """Compute stitch and upload it immediately. Raw uploads go to the lower-priority pool.
+        """Upload the primary capture(s) immediately. Debug raw uploads go to the lower-priority pool.
 
-        Runs in _stitch_pool (dedicated workers) so stitch uploads are never queued
-        behind pending raw uploads from earlier triggers.
+        When hw_trigger.use_stitch is true, computes a stitched composite and uploads
+        that. When false (default), skips stitching entirely and uploads each camera's
+        raw image individually, tagged with its camera_id — this is the primary upload
+        in that mode, not the debug raw-upload pool below.
+
+        Runs in _stitch_pool (dedicated workers) so these primary uploads are never
+        queued behind pending debug raw uploads from earlier triggers.
         Images stay in memory; disk is only written if the upload fails completely.
         raw_captures values may hold either bytes (normal path) or a Path (spilled to
         disk when the memory budget was exceeded) — both are handled transparently.
@@ -888,10 +950,12 @@ class SerialTriggerListener:
                 materialized[cam_id] = (data, serial)
         raw_captures = materialized
 
+        use_stitch = _get_use_stitch()
+
         stitch_filename = f"{ts_ms}_stitch.jpg"
         stitch_bytes: bytes | None = None
 
-        if len(raw_captures) >= 2 and self._load_calibration and self._stitch_frames:
+        if use_stitch and len(raw_captures) >= 2 and self._load_calibration and self._stitch_frames:
             cal = self._load_calibration()
             if cal:
                 import time as _time
@@ -928,35 +992,58 @@ class SerialTriggerListener:
             else:
                 logger.warning("hw_trigger_no_stitch_calibration", trigger=event)
 
-        if stitch_bytes is None:
-            first_cam = next(iter(raw_captures))
-            stitch_bytes, _ = raw_captures[first_cam]
+        if use_stitch:
+            if stitch_bytes is None:
+                first_cam = next(iter(raw_captures))
+                stitch_bytes, _ = raw_captures[first_cam]
 
-        # === STITCH UPLOAD — this is the entire purpose of this worker ===
-        # Upload completes fully before this function returns. The raw pool is only
-        # notified after this point, so raw uploads can never overlap with stitch uploads
-        # from the same trigger and cannot consume bandwidth before stitch is done.
-        stitch_ok = False
-        url = _get_destination_url()
-        if url:
-            stitch_ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename)
-            with self._stats_lock:
-                if stitch_ok:
-                    self._stats["uploads_ok"] += 1
-                else:
-                    self._stats["uploads_failed"] += 1
-
-        # Save locally if explicitly requested OR as fallback when upload failed.
-        if not stitch_ok and _get_save_local():
-            _save_image_locally(stitch_bytes, event, filename=stitch_filename)
+            # === STITCH UPLOAD — this is the entire purpose of this worker ===
+            # Upload completes fully before this function returns. The raw pool is only
+            # notified after this point, so raw uploads can never overlap with stitch uploads
+            # from the same trigger and cannot consume bandwidth before stitch is done.
+            stitch_ok = False
+            url = _get_destination_url()
             if url:
-                logger.warning(
-                    "hw_trigger_stitch_fallback_local",
-                    filename=stitch_filename,
-                    trigger=event,
-                )
+                stitch_ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename)
+                with self._stats_lock:
+                    if stitch_ok:
+                        self._stats["uploads_ok"] += 1
+                    else:
+                        self._stats["uploads_failed"] += 1
 
-        # === RAW UPLOADS — debug only, enqueued after stitch is done ===
+            # Save locally if explicitly requested OR as fallback when upload failed.
+            if not stitch_ok and _get_save_local():
+                _save_image_locally(stitch_bytes, event, filename=stitch_filename)
+                if url:
+                    logger.warning(
+                        "hw_trigger_stitch_fallback_local",
+                        filename=stitch_filename,
+                        trigger=event,
+                    )
+        else:
+            # === PER-CAMERA UPLOAD — primary path when use_stitch is disabled ===
+            # Runs synchronously here in _stitch_pool, i.e. at the same priority as the
+            # stitch upload above, so it is never queued behind the debug raw pool.
+            # Each image is tagged with its camera_id instead of being combined.
+            url = _get_destination_url()
+            if url:
+                for cam_id, (jpeg_bytes, _serial) in raw_captures.items():
+                    cam_filename = f"{ts_ms}_cam{cam_id}.jpg"
+                    ok = _upload_image(jpeg_bytes, event, url=url, filename=cam_filename, camera_id=cam_id)
+                    with self._stats_lock:
+                        if ok:
+                            self._stats["uploads_ok"] += 1
+                        else:
+                            self._stats["uploads_failed"] += 1
+                    if not ok and _get_save_local():
+                        _save_image_locally(jpeg_bytes, event, filename=cam_filename)
+                        logger.warning(
+                            "hw_trigger_camera_fallback_local",
+                            filename=cam_filename,
+                            trigger=event,
+                        )
+
+        # === RAW UPLOADS — debug only, enqueued after the primary upload is done ===
         # Submitted to the single-worker raw pool so they drain slowly in the
         # background and never contend with stitch uploads for network bandwidth.
         raw_url = _get_raw_destination_url() if _get_send_raw_images() else None

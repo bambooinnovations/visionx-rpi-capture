@@ -21,7 +21,10 @@ save_local          = true                                # also write a copy to
 local_save_dir      = "data/hw_captures"                  # created automatically
 local_max_files     = 200                                 # oldest files deleted first (0 = unlimited)
 local_max_mb        = 500                                 # oldest files deleted first (0 = unlimited)
+use_stitch          = false                               # false (default) = upload each camera's raw image, tagged with camera_id; true = upload one stitched composite
 ```
+
+See [capture-pipeline.md](capture-pipeline.md#use_stitch-picks-the-primary-output) for how `use_stitch` changes the upload path and priority.
 
 `destination_url` and `destination_api_key` can also be changed live without a restart:
 
@@ -61,7 +64,8 @@ curl http://localhost:8080/api/decoder/status
   "captures_ok": 12,
   "captures_failed": 0,
   "uploads_ok": 12,
-  "uploads_failed": 0
+  "uploads_failed": 0,
+  "active_style": "thin_fabric"
 }
 ```
 
@@ -83,6 +87,32 @@ This stops the serial listener and reverts all cameras back to `capture` mode (s
 | GET    | `/api/decoder/server-health` | Check reachability of the configured `health_check_url` |
 
 Full decoder endpoint reference: [api.md](api.md#decoder-arduino)
+
+## Persisted config files
+
+These live under `data/` on the Pi (gitignored — per-device state, not committed) and survive restarts:
+
+| File                        | Written by                                                        | Contents                                                                 |
+| ---------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| `data/arduino_config.json`   | `PATCH /api/decoder/config`, `POST /api/decoder/speed-presets/<style>/activate` | The currently-active Arduino params (physical + derived), plus `active_style` if set via a preset. Pushed to the Arduino on connect. |
+| `data/speed_presets.json`    | `PATCH /api/decoder/speed-presets/<style>`                        | Named presets of physical params (`wheel_diameter_mm`, `encoder_ppr`, `capture_interval_mm`) — see [Speed presets](api.md#speed-presets-styles). Saving a preset does **not** push to the Arduino; only `.../activate` does. |
+| `runtime_config.json`        | `PATCH /api/system/config`                                        | Runtime overrides for `hw_trigger.*`/`stream.*` keys (e.g. `use_stitch`, `destination_url`). Lives at the repo root, not under `data/`. |
+
+## Speed presets ("styles")
+
+Instead of resending `wheel_diameter_mm`/`encoder_ppr`/`capture_interval_mm` every time you switch product/fabric setups, save each as a named preset and activate it by name:
+
+```bash
+curl -X PATCH http://localhost:8080/api/decoder/speed-presets/thin_fabric \
+     -H 'Content-Type: application/json' \
+     -d '{"wheel_diameter_mm": 64.7, "encoder_ppr": 600, "capture_interval_mm": 8.0}'
+
+curl -X POST http://localhost:8080/api/decoder/speed-presets/thin_fabric/activate
+```
+
+Full reference: [api.md](api.md#speed-presets-styles)
+
+The dashboard (`/`) also has a UI for this — click the **Decoder** card, open the **Configuration** tab: a **Style** dropdown lists saved presets (marking the active one), a **Save as** field + **Save style** button creates/updates a preset from the currently-edited wheel/encoder/interval fields, **Activate selected** pushes the chosen style live, and **Delete selected** removes it.
 
 ## Queue monitoring (SSE)
 

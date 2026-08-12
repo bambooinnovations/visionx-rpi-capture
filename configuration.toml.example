@@ -76,6 +76,7 @@ db_path = "/tmp/visionx_metrics.db"
 # health_check_url    = "https://yoursite.com/health"  # GET this before starting; omit to skip check
 # raw_destination_url = ""       # where to POST raw (per-camera) images; leave blank to disable
 # send_raw_images     = false    # set true during debug to also upload raw images alongside the stitch
+# use_stitch          = false    # true = upload one stitched composite; false (default) = upload each camera's raw image separately, tagged with camera_id
 # sim_gpio_pin        = 17       # BCM GPIO pin wired to the camera trigger input (required for the Dev simulator)
 
 # Background task that removes stale capture temp directories.

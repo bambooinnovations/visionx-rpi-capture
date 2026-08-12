@@ -83,6 +83,7 @@ async function loadConfig() {
 
     document.getElementById('destination_url').value     = config['hw_trigger.destination_url']     || '';
     document.getElementById('destination_api_key').value = '';
+    document.getElementById('use_stitch').checked         = !!config['hw_trigger.use_stitch'];
     document.getElementById('send_raw_images').checked   = !!config['hw_trigger.send_raw_images'];
     document.getElementById('raw_destination_url').value = config['hw_trigger.raw_destination_url'] || '';
 
@@ -159,6 +160,7 @@ async function saveUpload(force = false) {
   // Persist
   const patches = {
     'hw_trigger.destination_url':     destUrl,
+    'hw_trigger.use_stitch':          document.getElementById('use_stitch').checked,
     'hw_trigger.send_raw_images':     rawOn,
     'hw_trigger.raw_destination_url': rawUrl,
   };
