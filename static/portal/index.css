@@ -473,6 +473,24 @@
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
 }
+.dcfg-select {
+  grid-column: 2 / span 2;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: monospace;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  box-sizing: border-box;
+}
+.dcfg-select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+}
+
 .dcfg-readonly {
   font-size: 13px;
   font-family: monospace;

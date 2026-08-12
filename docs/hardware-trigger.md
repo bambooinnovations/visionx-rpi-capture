@@ -112,6 +112,8 @@ curl -X POST http://localhost:8080/api/decoder/speed-presets/thin_fabric/activat
 
 Full reference: [api.md](api.md#speed-presets-styles)
 
+The dashboard (`/`) also has a UI for this — click the **Decoder** card, open the **Configuration** tab: a **Style** dropdown lists saved presets (marking the active one), a **Save as** field + **Save style** button creates/updates a preset from the currently-edited wheel/encoder/interval fields, **Activate selected** pushes the chosen style live, and **Delete selected** removes it.
+
 ## Queue monitoring (SSE)
 
 The pipeline exposes an SSE endpoint that streams queue depths once per second — useful for spotting backlogs during a scan:

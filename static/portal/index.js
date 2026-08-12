@@ -18,6 +18,10 @@ async function apiFetch(path) {
   return res.json().catch(() => null);
 }
 
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 // ── Cameras ────────────────────────────────────────────────────────────
 let _cameras = [];
 
@@ -325,6 +329,7 @@ async function refreshDecoderModalStats() {
           <tr><td class="cfg-key">Arduino</td><td><span class="cfg-val" style="color:var(--${connColor === 'green' ? 'success' : connColor === 'yellow' ? 'warning' : 'text-muted'})">${fresh ? 'Connected' : s.running ? 'No data' : '—'}</span></td></tr>
           <tr><td class="cfg-key">Speed</td><td><span class="cfg-val cfg-num">${typeof s.speed_cms === 'number' ? s.speed_cms.toFixed(2) : '—'}</span><span class="cfg-unit">cm/s</span></td></tr>
           <tr><td class="cfg-key">Encoder count</td><td><span class="cfg-val cfg-num">${s.encoder_count ?? '—'}</span></td></tr>
+          <tr><td class="cfg-key">Active style</td><td><span class="cfg-val">${s.active_style ? escapeHtml(s.active_style) : '—'}</span></td></tr>
           <tr><td class="cfg-key">Uptime</td><td><span class="cfg-val">${s.uptime_seconds != null ? s.uptime_seconds + 's' : '—'}</span></td></tr>
           <tr><td class="cfg-key">Triggers received</td><td><span class="cfg-val cfg-num">${s.triggers_received ?? 0}</span></td></tr>
           <tr><td class="cfg-key">Captures OK</td><td><span class="cfg-val cfg-num">${s.captures_ok ?? 0}</span></td></tr>
@@ -341,14 +346,31 @@ async function refreshDecoderModalStats() {
   }
 }
 
+function _decoderToast(msg, ok) {
+  const toast = document.getElementById('dcfg-toast');
+  if (!toast) return;
+  toast.textContent = msg;
+  toast.className = `dcfg-toast ${ok ? 'dcfg-toast-ok' : 'dcfg-toast-err'}`;
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => toast.classList.add('hidden'), 2500);
+}
+
+let _decoderStylePresets = {};
+
 async function refreshDecoderModalConfig() {
   const el = document.getElementById('decoder-modal-config');
   try {
-    const d = await apiFetch('/api/decoder/config');
+    const [d, presetsResp] = await Promise.all([
+      apiFetch('/api/decoder/config'),
+      apiFetch('/api/decoder/speed-presets'),
+    ]);
     const phys        = d.physical_config  || {};
     const physDefs    = d.physical_defaults || {};
     const cfg         = d.arduino_config   || {};
     const arduinoDefs = d.arduino_defaults  || {};
+
+    _decoderStylePresets = presetsResp.presets || {};
+    const activeStyle = presetsResp.active_style || null;
 
     const row = (key, label, unit, type, value) => `
       <div class="dcfg-row">
@@ -365,7 +387,31 @@ async function refreshDecoderModalConfig() {
         <span class="dcfg-unit">${unit}</span>
       </div>`;
 
+    const styleNames = Object.keys(_decoderStylePresets).sort();
+    const styleOptions = styleNames.map(name => `
+        <option value="${escapeHtml(name)}" ${name === activeStyle ? 'selected' : ''}>
+          ${escapeHtml(name)}${name === activeStyle ? ' (active)' : ''}
+        </option>`).join('');
+
     el.innerHTML = `
+      <div class="dcfg-section-label">Speed preset (style)</div>
+      <div class="dcfg-row">
+        <label class="dcfg-label" for="dcfg-style-select">Style</label>
+        <select class="dcfg-select" id="dcfg-style-select" onchange="decoderStyleSelected()">
+          <option value="">— none / custom —</option>
+          ${styleOptions}
+        </select>
+      </div>
+      <div class="dcfg-row">
+        <label class="dcfg-label" for="dcfg-style-name">Save as</label>
+        <input class="dcfg-select" id="dcfg-style-name" type="text" placeholder="style name, e.g. thin_fabric">
+      </div>
+      <div class="dcfg-actions">
+        <button class="btn btn-secondary btn-sm" onclick="decoderSaveStyle()">Save style</button>
+        <button class="btn btn-primary btn-sm" onclick="decoderActivateStyle()">Activate selected</button>
+        <button class="btn btn-danger btn-sm" onclick="decoderDeleteStyle()">Delete selected</button>
+      </div>
+
       <div class="dcfg-section-label">Wheel &amp; encoder</div>
       ${row('wheel_diameter_mm',   'Wheel diameter',     'mm',  'float', phys['wheel_diameter_mm']   ?? physDefs['wheel_diameter_mm']   ?? '')}
       ${row('encoder_ppr',         'Encoder resolution', 'PPR', 'int',   phys['encoder_ppr']         ?? physDefs['encoder_ppr']         ?? '')}
@@ -390,6 +436,80 @@ async function refreshDecoderModalConfig() {
   }
 }
 
+function decoderStyleSelected() {
+  const sel = document.getElementById('dcfg-style-select');
+  const name = sel ? sel.value : '';
+  const nameInput = document.getElementById('dcfg-style-name');
+  if (!name) return;
+
+  const preset = _decoderStylePresets[name] || {};
+  const wd = document.getElementById('dcfg-wheel_diameter_mm');
+  const ep = document.getElementById('dcfg-encoder_ppr');
+  const ci = document.getElementById('dcfg-capture_interval_mm');
+  if (wd && preset.wheel_diameter_mm != null) wd.value = preset.wheel_diameter_mm;
+  if (ep && preset.encoder_ppr != null) ep.value = preset.encoder_ppr;
+  if (ci && preset.capture_interval_mm != null) ci.value = preset.capture_interval_mm;
+  if (nameInput) nameInput.value = name;
+}
+
+async function decoderSaveStyle() {
+  const name = (document.getElementById('dcfg-style-name')?.value || '').trim();
+  if (!name) { _decoderToast('Enter a style name first', false); return; }
+
+  const wd = parseFloat(document.getElementById('dcfg-wheel_diameter_mm')?.value);
+  const ep = parseInt(document.getElementById('dcfg-encoder_ppr')?.value, 10);
+  const ci = parseFloat(document.getElementById('dcfg-capture_interval_mm')?.value);
+  const body = {};
+  if (!isNaN(wd)) body.wheel_diameter_mm = wd;
+  if (!isNaN(ep)) body.encoder_ppr = ep;
+  if (!isNaN(ci)) body.capture_interval_mm = ci;
+  if (!Object.keys(body).length) { _decoderToast('Nothing to save', false); return; }
+
+  try {
+    const res = await fetch(`/api/decoder/speed-presets/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { _decoderToast(data.error || 'Failed to save style', false); return; }
+    _decoderToast(`Saved style "${name}"`, true);
+    setTimeout(refreshDecoderModalConfig, 600);
+  } catch (err) {
+    _decoderToast('Error: ' + err.message, false);
+  }
+}
+
+async function decoderActivateStyle() {
+  const name = document.getElementById('dcfg-style-select')?.value;
+  if (!name) { _decoderToast('Select a style first', false); return; }
+
+  try {
+    const res = await fetch(`/api/decoder/speed-presets/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) { _decoderToast(data.error || 'Failed to activate style', false); return; }
+    _decoderToast(`Activated "${name}"`, true);
+    setTimeout(() => { refreshDecoderModalConfig(); refreshDecoderModalStats(); }, 600);
+  } catch (err) {
+    _decoderToast('Error: ' + err.message, false);
+  }
+}
+
+async function decoderDeleteStyle() {
+  const name = document.getElementById('dcfg-style-select')?.value;
+  if (!name) { _decoderToast('Select a style first', false); return; }
+  if (!confirm(`Delete style "${name}"?`)) return;
+
+  try {
+    const res = await fetch(`/api/decoder/speed-presets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (!res.ok) { const data = await res.json(); _decoderToast(data.error || 'Failed to delete style', false); return; }
+    _decoderToast(`Deleted "${name}"`, true);
+    setTimeout(refreshDecoderModalConfig, 600);
+  } catch (err) {
+    _decoderToast('Error: ' + err.message, false);
+  }
+}
+
 async function decoderApplyAllCfg() {
   const fields = [
     { key: 'wheel_diameter_mm',        type: 'float' },
@@ -408,15 +528,6 @@ async function decoderApplyAllCfg() {
   }
   if (!Object.keys(body).length) return;
 
-  const toast = document.getElementById('dcfg-toast');
-  const showToast = (msg, ok) => {
-    if (!toast) return;
-    toast.textContent = msg;
-    toast.className = `dcfg-toast ${ok ? 'dcfg-toast-ok' : 'dcfg-toast-err'}`;
-    clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => toast.classList.add('hidden'), 2500);
-  };
-
   try {
     const res = await fetch('/api/decoder/config', {
       method: 'PATCH',
@@ -424,11 +535,11 @@ async function decoderApplyAllCfg() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) { showToast(data.error || 'Failed to apply config', false); return; }
-    showToast('Config saved', true);
+    if (!res.ok) { _decoderToast(data.error || 'Failed to apply config', false); return; }
+    _decoderToast('Config saved', true);
     setTimeout(refreshDecoderModalConfig, 600);
   } catch (err) {
-    showToast('Error: ' + err.message, false);
+    _decoderToast('Error: ' + err.message, false);
   }
 }
 
