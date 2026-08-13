@@ -112,7 +112,31 @@ curl -X POST http://localhost:8080/api/decoder/speed-presets/thin_fabric/activat
 
 Full reference: [api.md](api.md#speed-presets-styles)
 
-The dashboard (`/`) also has a UI for this — click the **Decoder** card, open the **Configuration** tab: a **Style** dropdown lists saved presets (marking the active one), a **Save as** field + **Save style** button creates/updates a preset from the currently-edited wheel/encoder/interval fields, **Activate selected** pushes the chosen style live, and **Delete selected** removes it.
+### Default presets on a fresh deployment
+
+`data/speed_presets.json` is seeded automatically the first time a build with a MindVision camera starts up and no presets file exists yet (`seed_default_speed_presets()` in `camera/mindvision_trigger.py`, called from `app.py`). This only fires once per deployment — after the first write the file exists on disk (even if every preset is later deleted), so it never overwrites an operator's changes.
+
+The built-in default (`DEFAULT_SPEED_PRESETS`) reflects CKDL's fabric-inspection machine:
+
+| Style | Wheel diameter | Encoder PPR | Capture interval |
+| ----- | --------------- | ------------ | ------------------ |
+| `default` | 300mm | 600 | 400mm |
+
+`wheel_diameter_mm` is the machine's actual 300mm roller diameter; `encoder_ppr`/`capture_interval_mm` match the general system defaults. There's a single preset, not one per fabric type — the machine's belt run speed varies by fabric (see CKDL's "Fabric Inspection Machine Speed" reference sheet), but that's a separate physical speed dial on the machine itself, not something this preset controls, so it doesn't need its own entry per fabric type.
+
+The dashboard (`/`) also has a UI for this — click the **Decoder** card, open the **Configuration** tab: a **Style** dropdown lists saved presets (marking the active one), a **Save as** field + **Save style** button creates/updates a preset from the currently-edited wheel/encoder/interval fields, **Activate selected** pushes the chosen style live, and **Delete selected** removes it. Creating and editing presets only lives here.
+
+## Line Monitor page
+
+`/monitor` is a separate, kiosk-style status board meant for a wall-mounted display next to the machine — large, high-contrast, auto-refreshing, and worker-facing rather than an admin tool. It shows:
+
+- **Connection health** — a status dot + text for whether the listener is running and the Arduino is actively reporting.
+- **Belt speed, trigger/encoder counts, uptime.**
+- **Captures / uploads** — ok vs. failed counts, turning red when failures are present.
+- **Pipeline queue depths**, live via the same `/api/decoder/queues/stream` SSE endpoint used by Dev Mode.
+- **Active style** — read-only, plus a link back to the dashboard's Decoder modal for creating/editing/activating presets. No selection control here: switching styles isn't a frequent floor operation, so it's kept off this passive display on purpose.
+
+It polls `GET /api/decoder/status` every 2s (which already includes `active_style`, so no separate preset request is needed) and falls back to a plain "Decoder unavailable" message if that request fails (e.g. no MindVision camera registered). Served by [templates/monitor.html](../templates/monitor.html) / [static/monitor/](../static/monitor/) — intentionally styled independently of the rest of the dashboard (dark, fixed theme) since it's meant to be read from a few meters away, not matched to the admin UI's light theme.
 
 ## Queue monitoring (SSE)
 

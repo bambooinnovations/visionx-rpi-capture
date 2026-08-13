@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX — Line Monitor</title>
+  <link rel="stylesheet" href="/static/monitor/monitor.css">
+</head>
+<body>
+
+<div class="mon-topbar">
+  <div class="mon-brand">
+    <a class="mon-brand-name" href="/">VisionX</a>
+    <span class="mon-title">Line Monitor</span>
+  </div>
+  <div class="mon-topbar-right">
+    <span class="mon-clock" id="mon-clock">—</span>
+    <a class="mon-dash-link" href="/">Dashboard</a>
+  </div>
+</div>
+
+<main class="mon-main" id="mon-main">
+
+  <div class="mon-health" id="mon-health">
+    <span class="mon-health-dot unknown" id="mon-health-dot"></span>
+    <span class="mon-health-text" id="mon-health-text">Checking…</span>
+    <span class="mon-health-sub" id="mon-health-sub"></span>
+  </div>
+
+  <div class="mon-tiles">
+    <div class="mon-tile">
+      <span class="mon-tile-label">Belt speed</span>
+      <span class="mon-tile-value" id="mon-speed">—<span class="mon-tile-unit">cm/s</span></span>
+    </div>
+    <div class="mon-tile">
+      <span class="mon-tile-label">Triggers received</span>
+      <span class="mon-tile-value" id="mon-triggers">—</span>
+      <span class="mon-tile-sub" id="mon-encoder-count">encoder: —</span>
+    </div>
+    <div class="mon-tile" id="mon-captures-tile">
+      <span class="mon-tile-label">Captures</span>
+      <span class="mon-tile-value" id="mon-captures">—</span>
+      <span class="mon-tile-sub" id="mon-captures-sub">ok / failed</span>
+    </div>
+    <div class="mon-tile" id="mon-uploads-tile">
+      <span class="mon-tile-label">Uploads</span>
+      <span class="mon-tile-value" id="mon-uploads">—</span>
+      <span class="mon-tile-sub" id="mon-uploads-sub">ok / failed</span>
+    </div>
+    <div class="mon-tile">
+      <span class="mon-tile-label">Uptime</span>
+      <span class="mon-tile-value" id="mon-uptime">—</span>
+    </div>
+    <div class="mon-tile">
+      <span class="mon-tile-label">Active style</span>
+      <span class="mon-tile-value mon-tile-value-text" id="mon-active-style">—</span>
+      <a class="mon-manage-link" href="/">Manage on dashboard →</a>
+    </div>
+  </div>
+
+  <div class="mon-section">
+    <div class="mon-section-title">Pipeline queues</div>
+    <div class="mon-queues" id="mon-queues">
+      <span class="mon-queue-chip"><span class="mon-queue-chip-label">—</span><span class="mon-queue-chip-val">—</span></span>
+    </div>
+  </div>
+
+</main>
+
+<script src="/static/monitor/monitor.js"></script>
+</body>
+</html>
