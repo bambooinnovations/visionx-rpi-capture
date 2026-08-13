@@ -102,13 +102,14 @@ if not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     )
 
 if mindvision_cameras:
-    from camera.mindvision_trigger import SerialTriggerListener
+    from camera.mindvision_trigger import SerialTriggerListener, seed_default_speed_presets
     from blueprints.stitch import _load_calibration as _stitch_load_cal, _stitch_frames
     _serial_listener = SerialTriggerListener(
         mindvision_cameras,
         load_calibration=_stitch_load_cal,
         stitch_frames=_stitch_frames,
     )
+    seed_default_speed_presets()
 
     from blueprints.mindvision import create_blueprint
     from blueprints.stitch import create_blueprint as create_stitch_blueprint
@@ -156,6 +157,31 @@ if mindvision_cameras:
                         logger.warning("decoder_auto_start_failed", error=str(_e))
                 else:
                     logger.warning("decoder_auto_start_skipped", mode_errors=_mode_errors)
+else:
+    # No MindVision camera in the registry, so none of the routes above were
+    # registered. Without this, any request under these prefixes falls through
+    # to Flask's default 404 — an HTML page, not JSON — which every caller
+    # (dashboard, monitor page, curl) just sees as an opaque "HTTP 404" with
+    # no explanation. Catch every path under these prefixes and answer with a
+    # clear, parseable reason instead.
+    _MV_UNAVAILABLE_MSG = (
+        "No MindVision camera detected on this device — hardware trigger, "
+        "stitching, and lens control are unavailable until one is connected."
+    )
+
+    def _mindvision_unavailable(**_kwargs):
+        return jsonify({"error": _MV_UNAVAILABLE_MSG, "mindvision_available": False}), 503
+
+    for _prefix in ("/api/decoder", "/api/cameras", "/api/stitch", "/api/lens"):
+        _endpoint = _prefix.strip("/").replace("/", "_")
+        app.add_url_rule(
+            _prefix, endpoint=f"{_endpoint}_unavailable", view_func=_mindvision_unavailable,
+            methods=["GET", "POST", "PATCH", "DELETE", "PUT"],
+        )
+        app.add_url_rule(
+            f"{_prefix}/<path:_sub>", endpoint=f"{_endpoint}_sub_unavailable", view_func=_mindvision_unavailable,
+            methods=["GET", "POST", "PATCH", "DELETE", "PUT"],
+        )
 
 from blueprints.pxcm import create_blueprint as create_pxcm_blueprint
 app.register_blueprint(create_pxcm_blueprint(cameras))
@@ -271,6 +297,11 @@ def pxcm_ui():
 @app.route("/settings")
 def system_settings_ui():
     return render_template("system_settings.html")
+
+
+@app.route("/monitor")
+def monitor_ui():
+    return render_template("monitor.html")
 
 
 @app.route("/mindvision/<int:camera_id>/settings")
@@ -617,4 +648,11 @@ def delete_config(key: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    # threaded=True: Werkzeug's dev server is single-request by default, which
+    # deadlocks the whole app against any long-lived connection — in particular
+    # the /api/decoder/queues/stream SSE endpoint (used by the dashboard's Dev
+    # Mode and the /monitor page). Without this, one open SSE stream blocks
+    # every other request until it times out, surfacing as "Failed to fetch".
+    # Production already runs under gunicorn with multiple threads, so this
+    # only matters for `python app.py` / the Flask dev server.
+    app.run(host="0.0.0.0", port=8080, threaded=True)

@@ -75,13 +75,22 @@ ARDUINO_SETTABLE_KEYS: dict[str, type] = {
 PHYSICAL_DEFAULTS: dict = {
     "wheel_diameter_mm": 64.7,    # encoder wheel diameter in mm (as given by manufacturer)
     "encoder_ppr": 600,           # encoder pulses per revolution
-    "capture_interval_mm": 10.0,  # desired distance between captures in mm
+    "capture_interval_mm": 400.0,  # desired distance between captures in mm
 }
 
 PHYSICAL_SETTABLE_KEYS: dict[str, type] = {
     "wheel_diameter_mm": float,
     "encoder_ppr": int,
     "capture_interval_mm": float,
+}
+
+# Built-in speed preset seeded into every fresh deployment (see
+# seed_default_speed_presets() below). wheel_diameter_mm reflects the physical
+# 300mm inspection-machine roller (CKDL "Fabric Inspection Machine Speed"
+# reference sheet); belt run speed (yds/min) is a separate physical dial on
+# the machine, not something this preset controls, so it isn't captured here.
+DEFAULT_SPEED_PRESETS: dict = {
+    "default": {"wheel_diameter_mm": 300.0, "encoder_ppr": 600, "capture_interval_mm": 400.0},
 }
 
 
@@ -143,6 +152,19 @@ def delete_speed_preset(style: str) -> bool:
     del presets[style]
     _save_speed_presets(presets)
     return True
+
+
+def seed_default_speed_presets() -> None:
+    """Write DEFAULT_SPEED_PRESETS to disk if no presets file exists yet.
+
+    Runs once per deployment: after the first write, data/speed_presets.json
+    exists on disk even if every preset in it is later deleted, so this never
+    re-seeds over an operator's intentional changes.
+    """
+    if SPEED_PRESETS_PATH.exists():
+        return
+    _save_speed_presets(dict(DEFAULT_SPEED_PRESETS))
+    logger.info("speed_presets_seeded", styles=list(DEFAULT_SPEED_PRESETS.keys()))
 
 
 def _get_destination_url() -> str:
