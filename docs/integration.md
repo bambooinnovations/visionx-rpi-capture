@@ -27,6 +27,7 @@ image            — JPEG file, filename: {timestamp_ms}_stitch.jpg
 trigger_count    — encoder count at trigger time (string)
 trigger_number   — sequential trigger index since decoder start (string)
 trigger_source   — "encoder" or "manual"
+captured_at      — ISO-8601 UTC timestamp (Pi clock) of when this trigger's frames were captured
 ```
 
 ### Raw per-camera capture _(opt-in)_
@@ -42,6 +43,8 @@ image            — JPEG file, filename: {timestamp_ms}_{camera_serial}.jpg
 trigger_count    — encoder count (string)
 trigger_number   — sequential trigger index (string)
 trigger_source   — "encoder" or "manual"
+camera_id        — index of the camera this frame came from (string, per-camera upload only)
+captured_at      — ISO-8601 UTC timestamp (Pi clock), same value for every camera in a trigger group
 ```
 
 **Your endpoint must return any 2xx.** The RPi calls `raise_for_status()` on the response and retries on 4xx/5xx (3 attempts, 1 s back-off by default). No specific response body is required.

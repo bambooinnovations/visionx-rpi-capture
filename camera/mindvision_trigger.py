@@ -33,6 +33,7 @@ import queue
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -220,7 +221,12 @@ def check_server_health() -> dict:
         return {"reachable": False, "error": str(exc)}
 
 
-def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg", is_raw: bool = False, camera_id: int | None = None) -> bool:
+def _iso_from_ts_ms(ts_ms: int) -> str:
+    """Convert a Pi-clock epoch-ms timestamp to an ISO-8601 UTC string."""
+    return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
+
+
+def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg", is_raw: bool = False, camera_id: int | None = None, ts_ms: int | None = None) -> bool:
     """POST jpeg_bytes to url (defaults to destination_url). Returns True on success."""
     import requests
 
@@ -244,6 +250,8 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
     }
     if camera_id is not None:
         data["camera_id"] = str(camera_id)
+    if ts_ms is not None:
+        data["captured_at"] = _iso_from_ts_ms(ts_ms)
 
     for attempt in range(1, attempts + 1):
         try:
@@ -280,11 +288,12 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
     return False
 
 
-def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | None = None) -> Path | None:
+def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | None = None, ts_ms: int | None = None) -> Path | None:
     """Write jpeg_bytes to the local save dir. Returns the saved path.
 
     A sidecar <filename>.json is written alongside the image so that
-    _disk_retry_loop can reconstruct the trigger metadata on retry.
+    _disk_retry_loop can reconstruct the trigger metadata (including ts_ms,
+    so a retried upload still carries the original captured_at) on retry.
     """
     import json
 
@@ -300,7 +309,10 @@ def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | 
         # Sidecar holds all trigger metadata needed for a successful retry upload.
         sidecar = path.with_suffix(".jpg.json")
         try:
-            sidecar.write_text(json.dumps({k: v for k, v in trigger_event.items() if k != "_received_at"}))
+            sidecar_data = {k: v for k, v in trigger_event.items() if k != "_received_at"}
+            if ts_ms is not None:
+                sidecar_data["ts_ms"] = ts_ms
+            sidecar.write_text(json.dumps(sidecar_data))
         except Exception:
             pass  # missing sidecar degrades gracefully; retry will still attempt upload
         enforce_local_limits(save_dir)
@@ -1026,7 +1038,7 @@ class SerialTriggerListener:
             stitch_ok = False
             url = _get_destination_url()
             if url:
-                stitch_ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename)
+                stitch_ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename, ts_ms=ts_ms)
                 with self._stats_lock:
                     if stitch_ok:
                         self._stats["uploads_ok"] += 1
@@ -1035,7 +1047,7 @@ class SerialTriggerListener:
 
             # Save locally if explicitly requested OR as fallback when upload failed.
             if not stitch_ok and _get_save_local():
-                _save_image_locally(stitch_bytes, event, filename=stitch_filename)
+                _save_image_locally(stitch_bytes, event, filename=stitch_filename, ts_ms=ts_ms)
                 if url:
                     logger.warning(
                         "hw_trigger_stitch_fallback_local",
@@ -1051,14 +1063,14 @@ class SerialTriggerListener:
             if url:
                 for cam_id, (jpeg_bytes, _serial) in raw_captures.items():
                     cam_filename = f"{ts_ms}_cam{cam_id}.jpg"
-                    ok = _upload_image(jpeg_bytes, event, url=url, filename=cam_filename, camera_id=cam_id)
+                    ok = _upload_image(jpeg_bytes, event, url=url, filename=cam_filename, camera_id=cam_id, ts_ms=ts_ms)
                     with self._stats_lock:
                         if ok:
                             self._stats["uploads_ok"] += 1
                         else:
                             self._stats["uploads_failed"] += 1
                     if not ok and _get_save_local():
-                        _save_image_locally(jpeg_bytes, event, filename=cam_filename)
+                        _save_image_locally(jpeg_bytes, event, filename=cam_filename, ts_ms=ts_ms)
                         logger.warning(
                             "hw_trigger_camera_fallback_local",
                             filename=cam_filename,
@@ -1129,13 +1141,13 @@ class SerialTriggerListener:
             else:
                 jpeg_bytes = data
             filename = f"{ts_ms}_{serial}.jpg"
-            ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename, is_raw=True)
+            ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename, is_raw=True, ts_ms=ts_ms)
             with self._stats_lock:
                 if ok:
                     self._stats["uploads_ok"] += 1
                 else:
                     self._stats["uploads_failed"] += 1
-                    _save_image_locally(jpeg_bytes, event, filename=filename)
+                    _save_image_locally(jpeg_bytes, event, filename=filename, ts_ms=ts_ms)
                     logger.warning(
                         "hw_trigger_raw_fallback_local",
                         filename=filename,
@@ -1179,8 +1191,9 @@ class SerialTriggerListener:
                         logger.warning("hw_trigger_disk_retry_no_sidecar", filename=f.name)
                         f.unlink(missing_ok=True)
                         continue
+                    retry_ts_ms = trigger_event.pop("ts_ms", None)
                     image_bytes = f.read_bytes()
-                    ok = _upload_image(image_bytes, trigger_event, url=url, filename=f.name)
+                    ok = _upload_image(image_bytes, trigger_event, url=url, filename=f.name, ts_ms=retry_ts_ms)
                     if ok:
                         f.unlink(missing_ok=True)
                         sidecar.unlink(missing_ok=True)

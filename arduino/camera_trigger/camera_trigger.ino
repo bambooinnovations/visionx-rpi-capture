@@ -47,11 +47,12 @@ unsigned long speedReportIntervalMs  = 500;    // Heartbeat period in millisecon
 bool          triggerEnabled         = true;   // Whether distance-based triggering is active
 
 // ── Speed tracking ───────────────────────────────────────────────────────────
-unsigned long lastTriggerTimeMs   = 0;        // millis() at last trigger fire
-float         lastSpeedCms        = 0.0;      // Speed at last trigger event
-
-// Time without a trigger after which speed is declared 0 in heartbeat
-const unsigned long SPEED_STALE_MS = 2000;
+// Speed is sampled from raw encoder movement every heartbeat, independent of
+// whether distance-based triggering is enabled — so it stays accurate in
+// calibration mode too, where fireTrigger() is never called.
+float         lastSpeedCms         = 0.0;      // Most recently sampled speed
+long          lastSpeedSampleCount = 0;        // encoderCount at last speed sample
+unsigned long lastSpeedSampleMs    = 0;        // millis() at last speed sample
 
 // ── Heartbeat timing ─────────────────────────────────────────────────────────
 unsigned long lastSpeedReportMs = 0;
@@ -115,19 +116,6 @@ void emitAck(const char* cmd, bool ok) {
 
 // ── Helper: fire a single trigger pulse ──────────────────────────────────────
 void fireTrigger(const char* source, long countValue) {
-  unsigned long now = millis();
-  float speedCms = 0.0;
-
-  if (lastTriggerTimeMs > 0) {
-    unsigned long dt = now - lastTriggerTimeMs;
-    if (dt > 0) {
-      float distanceCm = (float)triggerInterval / countsPerCm;
-      speedCms = distanceCm / (dt / 1000.0f);
-    }
-  }
-  lastTriggerTimeMs = now;
-  lastSpeedCms = speedCms;
-
   digitalWrite(triggerOut, TRIGGER_ACTIVE);
   delay(pulseWidthMs);
   digitalWrite(triggerOut, TRIGGER_IDLE);
@@ -140,7 +128,7 @@ void fireTrigger(const char* source, long countValue) {
   Serial.print(F(",\"trigger\":"));
   Serial.print(triggerNumber);
   Serial.print(F(",\"speed_cms\":"));
-  Serial.print(speedCms, 2);
+  Serial.print(lastSpeedCms, 2);
   Serial.println(F("}"));
 }
 
@@ -159,7 +147,8 @@ void handleCommand(const char* buf) {
     encoderCount = 0;
     interrupts();
     lastTriggerCount = 0;
-    lastTriggerTimeMs = 0;
+    lastSpeedSampleCount = 0;
+    lastSpeedSampleMs = millis();
     lastSpeedCms = 0.0;
     emitAck("reset_count", true);
     return;
@@ -269,6 +258,8 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(encoderA), updateEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoderB), updateEncoder, CHANGE);
 
+  lastSpeedSampleMs = millis();
+
   Serial.begin(115200);
   Serial.println(F("{\"type\":\"startup\",\"msg\":\"Trigger controller started\"}"));
   emitConfig();
@@ -311,14 +302,22 @@ void loop() {
   }
 
   // ── Periodic speed heartbeat ─────────────────────────────────────────────
+  // Sampled from raw encoder movement so it reflects belt speed even when
+  // distance-based triggering is disabled (e.g. calibration mode).
   if (now - lastSpeedReportMs >= speedReportIntervalMs) {
     lastSpeedReportMs = now;
-    float speedToReport = lastSpeedCms;
-    if (lastTriggerTimeMs == 0 || (now - lastTriggerTimeMs) > SPEED_STALE_MS) {
-      speedToReport = 0.0;
+
+    long deltaCount = countCopy - lastSpeedSampleCount;
+    unsigned long deltaMs = now - lastSpeedSampleMs;
+    if (deltaMs > 0) {
+      float distanceCm = labs(deltaCount) / countsPerCm;
+      lastSpeedCms = distanceCm / (deltaMs / 1000.0f);
     }
+    lastSpeedSampleCount = countCopy;
+    lastSpeedSampleMs    = now;
+
     Serial.print(F("{\"type\":\"speed\""));
-    Serial.print(F(",\"speed_cms\":")); Serial.print(speedToReport, 2);
+    Serial.print(F(",\"speed_cms\":")); Serial.print(lastSpeedCms, 2);
     Serial.print(F(",\"count\":")); Serial.print(countCopy);
     Serial.print(F(",\"trigger_enabled\":")); Serial.print(triggerEnabled ? F("true") : F("false"));
     Serial.println(F("}"));

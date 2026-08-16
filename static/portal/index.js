@@ -195,6 +195,7 @@ function updateDecoderCard(status) {
   const dot      = document.getElementById('decoder-connected-dot');
   const label    = document.getElementById('decoder-connected-label');
   const speed    = document.getElementById('decoder-speed');
+  const modePill = document.getElementById('decoder-mode-pill');
   const checkBtn = document.getElementById('decoder-check-btn');
   const checkbox = document.getElementById('decoder-trigger-checkbox');
 
@@ -206,6 +207,7 @@ function updateDecoderCard(status) {
     label.textContent = notDetected ? 'Not detected' : 'Not started';
     if (checkBtn) checkBtn.style.display = notDetected ? '' : 'none';
     speed.style.display = 'none';
+    if (modePill) modePill.style.display = 'none';
     if (checkbox) { checkbox.checked = false; checkbox.disabled = true; }
     _setHwTriggerActive(false);
     return;
@@ -221,6 +223,13 @@ function updateDecoderCard(status) {
   speed.style.display = '';
   const spd = typeof status.speed_cms === 'number' ? status.speed_cms.toFixed(1) : '—';
   speed.textContent = `${spd} cm/s`;
+
+  if (modePill) {
+    modePill.style.display = '';
+    const hwTrigger = !!status.trigger_enabled;
+    modePill.textContent = hwTrigger ? 'HW Trigger' : 'Calibration';
+    modePill.className = `decoder-mode-pill decoder-mode-pill-${hwTrigger ? 'hw' : 'calib'}`;
+  }
 
   _setHwTriggerActive(status.running && !!status.trigger_enabled);
 }
