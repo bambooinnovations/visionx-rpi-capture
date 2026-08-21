@@ -3,10 +3,11 @@
 const state = {
   cameraIds: [],
   cameraModes: {},        // id -> mode string
+  knownCameraIds: new Set(), // ids seen in a prior refreshState() call
   selected: new Set(),    // camera ids checked for capture
   destinationConfigured: false,
   liveRunning: false,
-  captures: {},           // id -> base64 jpeg (post-capture, pre-upload)
+  captures: {},           // id -> { image: base64 jpeg, capturedAt } (post-capture, pre-upload)
 };
 
 // ── API ──────────────────────────────────────────────────────────────────
@@ -124,7 +125,7 @@ async function captureSelected() {
     grid.innerHTML = camIds.map(id => {
       const img = r.images ? r.images[id] : null;
       const err = r.errors ? r.errors[id] : null;
-      if (img) state.captures[id] = img;
+      if (img) state.captures[id] = { image: img, capturedAt: (r.captured_at || {})[id] || null };
       const body = img
         ? `<img src="data:image/jpeg;base64,${img}" alt="Camera ${id} capture">`
         : `<div class="cam-tile-blocked">${err || 'Capture failed'}</div>`;
@@ -160,9 +161,13 @@ async function uploadAll() {
   const btn = document.getElementById('btn-upload-all');
   btn.disabled = true;
 
-  const results = await Promise.all(entries.map(async ([camId, image_base64]) => {
+  const results = await Promise.all(entries.map(async ([camId, capture]) => {
     try {
-      const r = await apiFetch('POST', '/api/debug/upload', { camera_id: parseInt(camId, 10), image_base64 });
+      const r = await apiFetch('POST', '/api/debug/upload', {
+        camera_id: parseInt(camId, 10),
+        image_base64: capture.image,
+        captured_at: capture.capturedAt,
+      });
       return [camId, r.uploaded, r.error];
     } catch (e) {
       return [camId, false, e.message];
@@ -191,7 +196,8 @@ async function refreshState() {
     state.cameraModes = {};
     for (const id of s.camera_ids) {
       state.cameraModes[id] = (s.cameras[id] || {}).mode;
-      if (!isBlocked(id)) state.selected.add(id);
+      if (!isBlocked(id) && !state.knownCameraIds.has(id)) state.selected.add(id);
+      state.knownCameraIds.add(id);
     }
     state.destinationConfigured = s.destination_configured;
 

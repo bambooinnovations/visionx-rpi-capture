@@ -8,7 +8,6 @@ from __future__ import annotations
 import io
 import shutil
 import tempfile
-import threading
 import time
 import zipfile
 from collections import deque
@@ -16,7 +15,7 @@ from pathlib import Path
 
 import config
 import structlog
-from camera.mindvision import CameraMode, MindVisionCamera
+from camera.mindvision import CameraMode, MindVisionCamera, capture_many
 from flask import Blueprint, Response, after_this_request, jsonify, request, send_file
 
 logger = structlog.get_logger()
@@ -1135,33 +1134,12 @@ def create_blueprint(
         signal releases them all at once.  For continuous/capture mode each
         thread grabs the next available frame independently.
         """
-        results: dict[int, Path] = {}
-        errors: dict[int, str] = {}
-        mu = threading.Lock()
-
         config.CAPTURE_TMP_DIR.mkdir(parents=True, exist_ok=True)
         tmp_dir = Path(tempfile.mkdtemp(dir=config.CAPTURE_TMP_DIR))
 
-        def grab_one(cam_id: int, cam: MindVisionCamera) -> None:
-            try:
-                path, _ = cam.capture_image(output_folder=tmp_dir)
-                with mu:
-                    results[cam_id] = path
-            except Exception as e:
-                with mu:
-                    errors[cam_id] = str(e)
-
         cam_ids = list(cameras.keys())
-        threads = [
-            threading.Thread(target=grab_one, args=(cam_id, cameras[cam_id]), daemon=True)
-            for cam_id in cam_ids
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=15)
+        results, errors, timed_out = capture_many(cameras, cam_ids, tmp_dir)
 
-        timed_out = [cam_id for cam_id, t in zip(cam_ids, threads) if t.is_alive()]
         if timed_out:
             shutil.rmtree(tmp_dir, ignore_errors=True)
             logger.warning("capture_all_timed_out", camera_ids=timed_out)
@@ -1182,7 +1160,7 @@ def create_blueprint(
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
                 for cam_id in sorted(results):
-                    zf.write(results[cam_id], f"camera_{cam_id}.jpg")
+                    zf.write(results[cam_id][0], f"camera_{cam_id}.jpg")
             buf.seek(0)
 
             @after_this_request

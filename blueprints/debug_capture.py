@@ -11,14 +11,13 @@ from __future__ import annotations
 import base64
 import shutil
 import tempfile
-import threading
 import time
 from pathlib import Path
 
 import config
 import runtime_config
 import structlog
-from camera.mindvision import CameraMode, MindVisionCamera
+from camera.mindvision import CameraMode, MindVisionCamera, capture_many
 from flask import Blueprint, jsonify, request
 
 logger = structlog.get_logger()
@@ -90,9 +89,10 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         purely "take the photo and show me"; /upload is a separate step.
         """
         body = request.get_json(silent=True) or {}
-        requested = body.get("camera_ids")
-        if not isinstance(requested, list) or not requested:
+        requested_raw = body.get("camera_ids")
+        if not isinstance(requested_raw, list) or not requested_raw:
             return jsonify({"error": "camera_ids must be a non-empty list"}), 400
+        requested = list(dict.fromkeys(requested_raw))
 
         unknown = [cid for cid in requested if cid not in cameras]
         if unknown:
@@ -109,35 +109,19 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
                 "blocked_camera_ids": blocked,
             }), 409
 
-        results: dict[int, str] = {}
-        errors: dict[int, str] = {}
-        mu = threading.Lock()
-
         config.CAPTURE_TMP_DIR.mkdir(parents=True, exist_ok=True)
         tmp_dir = Path(tempfile.mkdtemp(dir=config.CAPTURE_TMP_DIR))
 
-        def grab_one(cam_id: int, cam: MindVisionCamera) -> None:
-            try:
-                path, _ = cam.capture_image(output_folder=tmp_dir)
-                jpeg_bytes = path.read_bytes()
-                with mu:
-                    results[cam_id] = base64.b64encode(jpeg_bytes).decode("ascii")
-            except Exception as exc:
-                with mu:
-                    errors[cam_id] = str(exc)
+        results, errors, timed_out = capture_many(cameras, requested, tmp_dir)
 
-        threads = [
-            threading.Thread(target=grab_one, args=(cid, cameras[cid]), daemon=True)
-            for cid in requested
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=15)
+        images: dict[int, str] = {}
+        captured_ats: dict[int, str] = {}
+        for cam_id, (path, metrics) in results.items():
+            images[cam_id] = base64.b64encode(path.read_bytes()).decode("ascii")
+            captured_ats[cam_id] = metrics.captured_at
 
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-        timed_out = [cid for cid, t in zip(requested, threads) if t.is_alive()]
         if timed_out:
             logger.warning("debug_capture_timed_out", camera_ids=timed_out)
             return jsonify({
@@ -147,7 +131,8 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
 
         status = 207 if errors else 200
         return jsonify({
-            "images": {str(k): v for k, v in results.items()},
+            "images": {str(k): v for k, v in images.items()},
+            "captured_at": {str(k): v for k, v in captured_ats.items()},
             "errors": {str(k): v for k, v in errors.items()},
         }), status
 
@@ -162,6 +147,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         body = request.get_json(silent=True) or {}
         cam_id = body.get("camera_id")
         image_b64 = body.get("image_base64")
+        captured_at = body.get("captured_at")
         if not isinstance(cam_id, int) or isinstance(cam_id, bool) or cam_id not in cameras:
             return jsonify({"error": f"camera_id must be one of {sorted(cameras.keys())}"}), 400
         if not image_b64:
@@ -178,7 +164,8 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         serial = cameras[cam_id].serial_number or f"cam{cam_id}"
         ts_ms = int(time.time() * 1000)
         filename = f"{ts_ms}_{serial}_debug.jpg"
-        captured_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if not isinstance(captured_at, str) or not captured_at:
+            captured_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
         ok, error = _post_debug_image(jpeg_bytes, filename, cam_id, captured_at)
         return jsonify({"uploaded": ok, "filename": filename, "error": error}), (200 if ok else 502)
