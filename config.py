@@ -89,6 +89,12 @@ HW_TRIGGER_RAW_DESTINATION_URL: str = _get("hw_trigger", "raw_destination_url", 
 HW_TRIGGER_SEND_RAW_IMAGES: bool = _get("hw_trigger", "send_raw_images", False)
 HW_TRIGGER_USE_STITCH: bool = _get("hw_trigger", "use_stitch", False)
 
+# Debug capture (MindVision only) — manual on-demand multi-camera capture,
+# separate destination from hw_trigger so debug uploads never mix with
+# production data.
+DEBUG_DESTINATION_URL: str = _get("debug", "destination_url", "")
+DEBUG_DESTINATION_API_KEY: str = _get("debug", "destination_api_key", "")
+
 
 def get_camera_profile(model: str) -> dict:
     """Return the camera_profiles entry for model, or {} if not listed."""

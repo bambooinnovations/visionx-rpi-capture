@@ -115,10 +115,12 @@ if mindvision_cameras:
     from blueprints.stitch import create_blueprint as create_stitch_blueprint
     from blueprints.lens import create_blueprint as create_lens_blueprint
     from blueprints.arduino import create_blueprint as create_arduino_blueprint
+    from blueprints.debug_capture import create_blueprint as create_debug_capture_blueprint
     app.register_blueprint(create_blueprint(mindvision_cameras, _serial_listener))
     app.register_blueprint(create_stitch_blueprint(mindvision_cameras))
     app.register_blueprint(create_lens_blueprint(mindvision_cameras))
     app.register_blueprint(create_arduino_blueprint(_serial_listener, mindvision_cameras))
+    app.register_blueprint(create_debug_capture_blueprint(mindvision_cameras))
 
     if (not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
         if config.is_capture_station():
@@ -302,6 +304,13 @@ def system_settings_ui():
 @app.route("/monitor")
 def monitor_ui():
     return render_template("monitor.html")
+
+
+@app.route("/debug-capture")
+def debug_capture_ui():
+    if not mindvision_cameras:
+        return redirect("/")
+    return render_template("debug_capture.html")
 
 
 @app.route("/mindvision/<int:camera_id>/settings")

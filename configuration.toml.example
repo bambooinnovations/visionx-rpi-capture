@@ -79,6 +79,13 @@ db_path = "/tmp/visionx_metrics.db"
 # use_stitch          = false    # true = upload one stitched composite; false (default) = upload each camera's raw image separately, tagged with camera_id
 # sim_gpio_pin        = 17       # BCM GPIO pin wired to the camera trigger input (required for the Dev simulator)
 
+# Manual debug capture (MindVision only, /debug-capture page).
+# Separate from hw_trigger above so debug uploads never mix with production data.
+# destination_url and destination_api_key can also be updated live via PATCH /rpi/config.
+[debug]
+# destination_url     = "https://yoursite.com/api/debug-captures"  # where to POST debug captures
+# destination_api_key = ""       # sent as Authorization: Bearer <key>; leave blank if not needed
+
 # Background task that removes stale capture temp directories.
 [cleanup]
 interval_seconds = 300   # How often the cleanup task runs
