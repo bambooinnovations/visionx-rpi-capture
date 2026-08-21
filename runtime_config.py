@@ -29,6 +29,10 @@ UPDATABLE: dict[str, type] = {
     "hw_trigger.stitch_memory_budget_mb":  int,
     "hw_trigger.raw_memory_budget_mb":     int,
     "hw_trigger.max_queue_age_s":          float,
+    "experimental.exposure_sync_enabled":        bool,
+    "experimental.exposure_sync_reference_cam":  int,
+    "experimental.exposure_sync_exposure_us":    float,
+    "experimental.exposure_sync_analog_gain":    int,
 }
 
 # Values that are masked ("***") in GET /rpi/config responses.

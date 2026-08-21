@@ -1020,6 +1020,9 @@ def create_blueprint(
             cam.set_mode(mode)
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 503
+        if mode == CameraMode.HARDWARE_TRIGGER:
+            from blueprints.exposure_sync import apply_saved_state_if_enabled
+            apply_saved_state_if_enabled(cam, cam_id)
         logger.info("mode_switch_requested", camera_id=cam_id, mode=mode.value)
         return jsonify({"camera_id": cam_id, "mode": mode.value})
 

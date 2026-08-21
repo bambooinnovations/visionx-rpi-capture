@@ -98,3 +98,32 @@ curl -X POST http://localhost:8080/api/stitch/calibrate-color
 ```
 
 See [api.md](api.md#stitch) for full endpoint reference including 3-camera non-overlapping setups.
+
+---
+
+## Exposure sync (experimental)
+
+Fixes AE instability on cameras whose framing is entirely fabric with no fixed background to meter
+against — see `/exposure-sync` in the app for the full guided walkthrough (reference camera picker,
+live view, capture/nudge/apply/preview/save). The page itself explains each step; this section is just
+the API-level summary for scripting or debugging.
+
+One camera (the "reference") keeps running independent auto-exposure. The others are locked to a
+manually-set `exposure_us`/`analog_gain` matching whatever the reference converges to. This is a
+one-time calibration, not continuous re-sync — the saved values are (re-)applied to follower cameras
+each time they enter hardware-trigger mode, not on every trigger.
+
+```bash
+# Current state
+curl http://localhost:8080/api/exposure-sync/state
+
+# Pick a reference camera
+curl -X POST http://localhost:8080/api/exposure-sync/reference -d '{"camera_id": 1}' -H 'Content-Type: application/json'
+
+# Enable (line must be stopped first)
+curl -X POST http://localhost:8080/api/exposure-sync/enabled -d '{"enabled": true}' -H 'Content-Type: application/json'
+```
+
+`POST /apply` writes to the follower cameras' live SDK handles but does **not** persist — only
+`POST /save` calls `CameraSaveParameter` and writes `experimental.exposure_sync_*` to
+`runtime_config.json`, so the calibration survives a camera reopen/restart.
