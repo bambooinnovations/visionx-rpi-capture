@@ -116,11 +116,16 @@ if mindvision_cameras:
     from blueprints.lens import create_blueprint as create_lens_blueprint
     from blueprints.arduino import create_blueprint as create_arduino_blueprint
     from blueprints.debug_capture import create_blueprint as create_debug_capture_blueprint
+    from blueprints.exposure_sync import (
+        create_blueprint as create_exposure_sync_blueprint,
+        apply_saved_state_if_enabled,
+    )
     app.register_blueprint(create_blueprint(mindvision_cameras, _serial_listener))
     app.register_blueprint(create_stitch_blueprint(mindvision_cameras))
     app.register_blueprint(create_lens_blueprint(mindvision_cameras))
     app.register_blueprint(create_arduino_blueprint(_serial_listener, mindvision_cameras))
     app.register_blueprint(create_debug_capture_blueprint(mindvision_cameras))
+    app.register_blueprint(create_exposure_sync_blueprint(mindvision_cameras, _serial_listener))
 
     if (not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
         if config.is_capture_station():
@@ -148,6 +153,8 @@ if mindvision_cameras:
                         _cam.set_mode(CameraMode.HARDWARE_TRIGGER)
                     except Exception as _e:
                         _mode_errors[_cam_id] = str(_e)
+                    else:
+                        apply_saved_state_if_enabled(_cam, _cam_id)
                 if not _mode_errors:
                     try:
                         _serial_listener.start(
@@ -313,6 +320,13 @@ def debug_capture_ui():
     return render_template("debug_capture.html")
 
 
+@app.route("/exposure-sync")
+def exposure_sync_ui():
+    if not mindvision_cameras:
+        return redirect("/")
+    return render_template("exposure_sync.html")
+
+
 @app.route("/mindvision/<int:camera_id>/settings")
 def mindvision_settings_page(camera_id):
     if not isinstance(cameras.get(camera_id), MindVisionCamera):
@@ -453,6 +467,8 @@ def system_mode():
                         actions.append({"action": "set_hardware_trigger_mode", "camera_id": cam_id, "ok": True})
                     except Exception as exc:
                         actions.append({"action": "set_hardware_trigger_mode", "camera_id": cam_id, "ok": False, "error": str(exc)})
+                    else:
+                        apply_saved_state_if_enabled(cam, cam_id)
 
             if not _serial_listener.running:
                 try:

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX — Exposure Sync</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/exposure_sync/exposure_sync.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+  <a class="nav-link" href="/pxcm">Pixel/cm</a>
+  <a class="nav-link" href="/monitor">Monitor</a>
+  <a class="nav-link active" href="/exposure-sync">Exposure Sync</a>
+  <span class="nav-spacer"></span>
+  <span class="nav-divider"></span>
+  <a class="nav-link nav-link-settings" href="/settings">Settings</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<div id="success-toast" class="success-toast hidden">Saved</div>
+
+<div class="page-header">
+  <div>
+    <h1>Exposure Sync</h1>
+    <p class="page-subtitle">Experimental — keep all cameras at the same brightness by copying one camera's auto-exposure to the others.</p>
+  </div>
+  <span id="pill-experimental" class="pill pill-yellow">Experimental</span>
+</div>
+
+<div class="view">
+
+  <!-- ── What this is / how it works ──────────────────────────────────── -->
+  <div class="info-box" id="intro-box">
+    <strong>What this fixes:</strong> some cameras' pictures can flicker brighter/darker between shots
+    because their auto-exposure has nothing fixed in view to measure against — usually the ones aimed
+    at nothing but plain material. This page lets you pick one steady camera as the <em>reference</em>,
+    take a test shot, fine-tune it if needed, then copy that same exposure to the other cameras so all
+    of them stay consistent together.
+    <br><br>
+    <strong>Nothing changes on the live production line until you press Save in Step 7</strong> and turn
+    the toggle below on. Every step before that is just a preview you can redo as many times as you like.
+  </div>
+
+  <!-- ── Enable toggle ─────────────────────────────────────────────────── -->
+  <div class="card" id="card-enable">
+    <div class="card-header">
+      <h2>Feature Status</h2>
+      <span id="pill-enabled" class="pill pill-unknown">Unknown</span>
+    </div>
+    <p class="card-desc">
+      When <strong>on</strong>, every camera except the reference locks to the last saved calibration
+      the next time it starts running on the line. When <strong>off</strong>, every camera goes back to
+      its own independent auto-exposure — today's normal behavior. You can only flip this while the line
+      is stopped.
+    </p>
+    <div id="hw-active-warning" class="info-box info-box-warning hidden">
+      The line is currently running. Stop it on the <a href="/">Home</a> page before changing this toggle.
+    </div>
+    <div class="enable-row">
+      <label class="toggle">
+        <input type="checkbox" id="enabled-toggle" onchange="onToggleEnabled()">
+        <span class="toggle-track"></span>
+      </label>
+      <span id="enabled-label">Exposure sync disabled</span>
+    </div>
+    <div id="saved-summary" class="saved-summary hidden"></div>
+  </div>
+
+  <!-- ── Calibration wizard ────────────────────────────────────────────── -->
+  <div class="card" id="card-calibration">
+    <div class="card-header">
+      <h2>Calibration</h2>
+    </div>
+
+    <!-- Step 1 — reference camera picker -->
+    <div class="cal-step">
+      <h3>1. Pick a reference camera</h3>
+      <p class="step-hint">
+        Choose the camera whose picture already looks the steadiest from run to run — that one keeps
+        adjusting itself automatically. The other cameras will be locked to copy whatever it picks.
+      </p>
+      <div class="btn-group" id="reference-picker"></div>
+    </div>
+
+    <!-- Step 2 — live view grid -->
+    <div class="cal-step">
+      <h3>2. Watch all three cameras</h3>
+      <p class="step-hint">
+        Just for looking — starting or stopping this doesn't change anything on the cameras. Use it to
+        judge which one looks steadiest before picking a reference in Step 1.
+      </p>
+      <div class="live-actions">
+        <button id="btn-live-start" class="btn btn-secondary btn-sm" onclick="liveGrid.start()">▶ Start Live View</button>
+        <button id="btn-live-stop" class="btn btn-secondary btn-sm hidden" onclick="liveGrid.stop()">■ Stop</button>
+      </div>
+      <div id="live-grid" class="card-grid-3"></div>
+    </div>
+
+    <!-- Step 3 — capture reference -->
+    <div class="cal-step">
+      <h3>3. Take a test shot</h3>
+      <p class="step-hint">
+        Takes one normal auto-exposed photo on the reference camera and shows you the exposure time and
+        gain it picked. This is the starting point for the next step.
+      </p>
+      <button id="btn-capture-ref" class="btn btn-primary" onclick="captureReference()" disabled>Capture Reference (auto-exposed)</button>
+      <div id="reference-result" class="reference-result hidden">
+        <img id="reference-snapshot" class="reference-snapshot" alt="Reference camera snapshot">
+        <div class="reference-readout">
+          <div class="readout-row"><span>Exposure</span><strong id="readout-exposure">—</strong></div>
+          <div class="readout-row"><span>Analog gain</span><strong id="readout-gain">—</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4 — nudge -->
+    <div class="cal-step">
+      <h3>4. Adjust if needed</h3>
+      <p class="step-hint">
+        If the test shot above looks too dark or too bright, click a button to nudge the number by 10%.
+        This only changes the number shown — it doesn't touch any camera yet, so click as many times as
+        you like.
+      </p>
+      <div class="nudge-row">
+        <button id="btn-too-dark" class="btn btn-secondary" onclick="nudge('up')" disabled>☀ Too Dark</button>
+        <span id="nudge-value" class="nudge-value">—</span>
+        <button id="btn-too-bright" class="btn btn-secondary" onclick="nudge('down')" disabled>🌑 Too Bright</button>
+      </div>
+    </div>
+
+    <!-- Step 5 — apply -->
+    <div class="cal-step">
+      <h3>5. Copy to the other cameras</h3>
+      <p class="step-hint">
+        Writes the number above to the other two cameras right now, so you can check the result in the
+        next step. This is temporary — it's lost if the app restarts before you Save in Step 7.
+      </p>
+      <button id="btn-apply" class="btn btn-primary" onclick="applyToFollowers()" disabled>Apply to Other Two Cameras</button>
+      <div id="apply-result" class="apply-result hidden"></div>
+    </div>
+
+    <!-- Step 6 — preview -->
+    <div class="cal-step">
+      <h3>6. Check that they match</h3>
+      <p class="step-hint">
+        Takes a fresh photo from all three cameras at once so you can compare them side by side. If they
+        still don't look right, go back to Step 4, adjust, and Apply again — repeat as many times as needed.
+      </p>
+      <button id="btn-preview" class="btn btn-secondary" onclick="previewAll()" disabled>Capture All 3 + Preview</button>
+      <div id="preview-grid" class="card-grid-3"></div>
+    </div>
+
+    <!-- Step 7 — save -->
+    <div class="cal-step cal-step-save">
+      <h3>7. Save</h3>
+      <p class="step-hint">
+        This is the only step that makes it permanent. Saves the reference camera and its exposure/gain
+        so they're remembered even after a restart, and applies them to the other cameras' saved config.
+        Don't forget to also turn the toggle above on — Save alone doesn't enable the feature.
+      </p>
+      <button id="btn-save" class="btn btn-success" onclick="saveCalibration()" disabled>Save Calibration</button>
+    </div>
+
+  </div>
+
+</div>
+
+<script src="/static/exposure_sync/exposure_sync.js"></script>
+</body>
+</html>
