@@ -542,7 +542,7 @@ class MindVisionCamera(BaseCamera):
                 frame_data = None
 
                 with self._lock:
-                    frame, _head = self._grab_frame()
+                    frame, _head = self._grab_frame(timeout_ms=self.exposure_grab_timeout_ms())
                     if frame is not None:
                         native_height, native_width = frame.shape[:2]
                         if width is not None or height is not None:
@@ -646,3 +646,42 @@ class MindVisionCamera(BaseCamera):
             "capture_size": self._capture_size,
             "stream_size": self._stream_size,
         }
+
+
+def capture_many(
+    cameras: dict[int, "MindVisionCamera"],
+    cam_ids: list[int],
+    tmp_dir: Path,
+    timeout: float = 15,
+) -> tuple[dict[int, tuple[Path, CaptureMetrics]], dict[int, str], list[int]]:
+    """Capture one frame from each of the given cameras concurrently.
+
+    Returns (results, errors, timed_out_camera_ids): results maps camera_id to
+    (path, metrics) for cameras that succeeded; errors maps camera_id to the
+    exception message for cameras that raised; timed_out_camera_ids lists
+    cameras whose capture thread didn't finish within `timeout` seconds.
+    """
+    results: dict[int, tuple[Path, CaptureMetrics]] = {}
+    errors: dict[int, str] = {}
+    mu = threading.Lock()
+
+    def grab_one(cam_id: int, cam: "MindVisionCamera") -> None:
+        try:
+            path, metrics = cam.capture_image(output_folder=tmp_dir)
+            with mu:
+                results[cam_id] = (path, metrics)
+        except Exception as exc:
+            with mu:
+                errors[cam_id] = str(exc)
+
+    threads = [
+        threading.Thread(target=grab_one, args=(cid, cameras[cid]), daemon=True)
+        for cid in cam_ids
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=timeout)
+
+    timed_out = [cid for cid, t in zip(cam_ids, threads) if t.is_alive()]
+    return results, errors, timed_out

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX — Debug Capture</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/debug_capture/debug_capture.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+  <a class="nav-link" href="/pxcm">Pixel/cm</a>
+  <a class="nav-link" href="/monitor">Monitor</a>
+  <a class="nav-link active" href="/debug-capture">Debug Capture</a>
+  <span class="nav-spacer"></span>
+  <span class="nav-divider"></span>
+  <a class="nav-link nav-link-settings" href="/settings">Settings</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<div class="page-header">
+  <div>
+    <h1>Debug Capture</h1>
+    <p class="page-subtitle">Grab a still from any camera on demand and send it to a debug endpoint for inspection.</p>
+  </div>
+</div>
+
+<div class="view">
+
+  <div id="dest-warning" class="info-box info-box-warning hidden">
+    No debug destination is configured — captures can still be previewed here, but Upload will be
+    disabled until <code>debug.destination_url</code> is set (Settings page or
+    <code>configuration.toml</code>).
+  </div>
+
+  <!-- ── Live view / selection (hidden during review) ─────────────────── -->
+  <div class="card" id="card-live">
+    <div class="card-header">
+      <h2>Cameras</h2>
+      <button id="btn-refresh" class="btn btn-secondary btn-sm" onclick="refreshState()">↺ Refresh</button>
+    </div>
+    <p class="card-desc">
+      Check the cameras you want a picture from, then start live view to line things up. Cameras in
+      hardware-trigger mode can't be captured this way — switch them to Calibration/Regular mode on
+      the <a href="/">Home</a> page first.
+    </p>
+    <div class="live-actions">
+      <button id="btn-live-start" class="btn btn-secondary btn-sm" onclick="liveGrid.start()">▶ Start Live View</button>
+      <button id="btn-live-stop" class="btn btn-secondary btn-sm hidden" onclick="liveGrid.stop()">■ Stop</button>
+    </div>
+    <div id="live-grid" class="card-grid-3"></div>
+
+    <div class="capture-warning">⚠ Do not move the target while capturing.</div>
+    <button id="btn-capture" class="btn btn-primary" onclick="captureSelected()" disabled>Capture Selected</button>
+  </div>
+
+  <!-- ── Review (shown after a successful capture) ────────────────────── -->
+  <div class="card hidden" id="card-review">
+    <div class="card-header">
+      <h2>Review</h2>
+    </div>
+    <p class="card-desc">Check each shot below, then Retake if anything's wrong or Upload All to send them.</p>
+    <div id="review-grid" class="card-grid-3"></div>
+    <div class="review-actions">
+      <button id="btn-retake" class="btn btn-secondary" onclick="retake()">↺ Retake</button>
+      <button id="btn-upload-all" class="btn btn-primary" onclick="uploadAll()">Upload All</button>
+    </div>
+  </div>
+
+</div>
+
+<script src="/static/debug_capture/debug_capture.js"></script>
+</body>
+</html>

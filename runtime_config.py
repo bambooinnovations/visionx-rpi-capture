@@ -29,10 +29,16 @@ UPDATABLE: dict[str, type] = {
     "hw_trigger.stitch_memory_budget_mb":  int,
     "hw_trigger.raw_memory_budget_mb":     int,
     "hw_trigger.max_queue_age_s":          float,
+    "debug.destination_url":               str,
+    "debug.destination_api_key":           str,
+    "experimental.exposure_sync_enabled":        bool,
+    "experimental.exposure_sync_reference_cam":  int,
+    "experimental.exposure_sync_exposure_us":    float,
+    "experimental.exposure_sync_analog_gain":    int,
 }
 
 # Values that are masked ("***") in GET /rpi/config responses.
-MASKED_KEYS: frozenset[str] = frozenset({"hw_trigger.destination_api_key"})
+MASKED_KEYS: frozenset[str] = frozenset({"hw_trigger.destination_api_key", "debug.destination_api_key"})
 
 
 def load() -> dict:
