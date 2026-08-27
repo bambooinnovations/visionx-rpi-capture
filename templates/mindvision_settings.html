@@ -48,6 +48,10 @@
   <!-- ── Left: settings controls ──────────────────────────────────────── -->
   <div class="settings-panel">
 
+    <div class="settings-search">
+      <input type="text" id="settings-search" placeholder="Search settings…">
+    </div>
+
     <!-- Exposure -->
     <section class="settings-section">
       <h2 class="section-title">Exposure</h2>
@@ -76,6 +80,31 @@
         </label>
         <input type="range" class="slider" id="ae-target" min="0" max="255" step="1" value="100">
       </div>
+
+      <details class="advanced-group">
+        <summary>Advanced</summary>
+        <div class="setting-row">
+          <label class="setting-label" for="anti-flick">Anti-Flicker</label>
+          <label class="toggle">
+            <input type="checkbox" id="anti-flick">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">Light Frequency</label>
+          <select id="light-frequency" class="select-input">
+            <option value="0">50 Hz</option>
+            <option value="1">60 Hz</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            Frame Speed
+            <span class="setting-value" id="frame-speed-value">—</span>
+          </label>
+          <input type="range" class="slider" id="frame-speed" min="0" max="2" step="1" value="0">
+        </div>
+      </details>
     </section>
 
     <!-- Gain -->
@@ -154,6 +183,47 @@
         </label>
         <input type="range" class="slider" id="gamma" min="0" max="250" step="1" value="100">
       </div>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          Contrast
+          <span class="setting-value" id="contrast-value">—</span>
+        </label>
+        <input type="range" class="slider" id="contrast" min="0" max="200" step="1" value="100">
+      </div>
+
+      <div class="setting-row">
+        <label class="setting-label">
+          Saturation
+          <span class="setting-value" id="saturation-value">—</span>
+        </label>
+        <input type="range" class="slider" id="saturation" min="0" max="200" step="1" value="100">
+      </div>
+
+      <details class="advanced-group">
+        <summary>Advanced</summary>
+        <div class="setting-row">
+          <label class="setting-label" for="noise-filter">Noise Filter</label>
+          <label class="toggle">
+            <input type="checkbox" id="noise-filter">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label" for="dead-pixel-correction">Dead Pixel Correction</label>
+          <label class="toggle">
+            <input type="checkbox" id="dead-pixel-correction">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label" for="invert-image">Invert Image</label>
+          <label class="toggle">
+            <input type="checkbox" id="invert-image">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+      </details>
     </section>
 
     <!-- Orientation -->
@@ -241,7 +311,8 @@
     <ul>
       <li>Auto-exposure on, target brightness 100</li>
       <li>Analog gain and RGB gains reset to neutral</li>
-      <li>Sharpness and gamma reset</li>
+      <li>Sharpness, gamma, contrast, and saturation reset</li>
+      <li>Noise filter, dead pixel correction, and image invert off</li>
       <li>Rotation 0°, mirrors off</li>
       <li>Monochrome off</li>
     </ul>

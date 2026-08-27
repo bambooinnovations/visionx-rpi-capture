@@ -549,6 +549,41 @@ def _read_mv_settings(h: int, cap) -> dict:
         s.update(gamma=100, gamma_min=0, gamma_max=250)
 
     try:
+        s["contrast"] = mvsdk.CameraGetContrast(h)
+        s["contrast_min"] = cap.sContrastRange.iMin if cap else 0
+        s["contrast_max"] = cap.sContrastRange.iMax if cap else 200
+    except Exception:
+        s.update(contrast=100, contrast_min=0, contrast_max=200)
+
+    try:
+        s["saturation"] = mvsdk.CameraGetSaturation(h)
+        s["saturation_min"] = cap.sSaturationRange.iMin if cap else 0
+        s["saturation_max"] = cap.sSaturationRange.iMax if cap else 200
+    except Exception:
+        s.update(saturation=100, saturation_min=0, saturation_max=200)
+
+    try: s["noise_filter"] = bool(mvsdk.CameraGetNoiseFilterState(h))
+    except Exception: s["noise_filter"] = False
+
+    try: s["correct_dead_pixel"] = bool(mvsdk.CameraGetCorrectDeadPixel(h))
+    except Exception: s["correct_dead_pixel"] = False
+
+    try: s["inverse"] = bool(mvsdk.CameraGetInverse(h))
+    except Exception: s["inverse"] = False
+
+    try: s["anti_flick"] = bool(mvsdk.CameraGetAntiFlick(h))
+    except Exception: s["anti_flick"] = False
+
+    try: s["light_frequency"] = mvsdk.CameraGetLightFrequency(h)
+    except Exception: s["light_frequency"] = 0
+
+    try:
+        s["frame_speed"] = mvsdk.CameraGetFrameSpeed(h)
+        s["frame_speed_max"] = max(0, (cap.iFrameSpeedDesc - 1) if cap else 2)
+    except Exception:
+        s.update(frame_speed=0, frame_speed_max=2)
+
+    try:
         s["rotation"] = mvsdk.CameraGetRotate(h)
         s["h_mirror"] = bool(mvsdk.CameraGetMirror(h, 0))
         s["v_mirror"] = bool(mvsdk.CameraGetMirror(h, 1))
@@ -660,6 +695,62 @@ def _apply_mv_settings(h: int, body: dict) -> tuple[list[str], dict[str, str]]:
             applied.append("mono_enabled")
         except Exception as exc:
             errors["mono_enabled"] = str(exc)
+
+    if "contrast" in body:
+        try:
+            mvsdk.CameraSetContrast(h, int(body["contrast"]))
+            applied.append("contrast")
+        except Exception as exc:
+            errors["contrast"] = str(exc)
+
+    if "saturation" in body:
+        try:
+            mvsdk.CameraSetSaturation(h, int(body["saturation"]))
+            applied.append("saturation")
+        except Exception as exc:
+            errors["saturation"] = str(exc)
+
+    if "noise_filter" in body:
+        try:
+            mvsdk.CameraSetNoiseFilter(h, bool(body["noise_filter"]))
+            applied.append("noise_filter")
+        except Exception as exc:
+            errors["noise_filter"] = str(exc)
+
+    if "correct_dead_pixel" in body:
+        try:
+            mvsdk.CameraSetCorrectDeadPixel(h, bool(body["correct_dead_pixel"]))
+            applied.append("correct_dead_pixel")
+        except Exception as exc:
+            errors["correct_dead_pixel"] = str(exc)
+
+    if "inverse" in body:
+        try:
+            mvsdk.CameraSetInverse(h, bool(body["inverse"]))
+            applied.append("inverse")
+        except Exception as exc:
+            errors["inverse"] = str(exc)
+
+    if "anti_flick" in body:
+        try:
+            mvsdk.CameraSetAntiFlick(h, bool(body["anti_flick"]))
+            applied.append("anti_flick")
+        except Exception as exc:
+            errors["anti_flick"] = str(exc)
+
+    if "light_frequency" in body:
+        try:
+            mvsdk.CameraSetLightFrequency(h, int(body["light_frequency"]))
+            applied.append("light_frequency")
+        except Exception as exc:
+            errors["light_frequency"] = str(exc)
+
+    if "frame_speed" in body:
+        try:
+            mvsdk.CameraSetFrameSpeed(h, int(body["frame_speed"]))
+            applied.append("frame_speed")
+        except Exception as exc:
+            errors["frame_speed"] = str(exc)
 
     return applied, errors
 
@@ -1348,6 +1439,11 @@ def create_blueprint(
             "h_mirror": False,
             "v_mirror": False,
             "mono_enabled": False,
+            "contrast": 100,
+            "saturation": 100,
+            "noise_filter": False,
+            "correct_dead_pixel": False,
+            "inverse": False,
         }
         applied, errors = _apply_mv_settings(h, defaults)
         if not errors:

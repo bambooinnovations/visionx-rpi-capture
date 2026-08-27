@@ -124,6 +124,29 @@ body {
   overflow: hidden;
 }
 
+/* ── Settings search ─────────────────────────────────────────────────── */
+.settings-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 14px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.settings-search input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+}
+.settings-search input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
 /* ── Settings sections ───────────────────────────────────────────────── */
 .settings-section {
   border-bottom: 1px solid var(--border);
@@ -221,6 +244,44 @@ body {
 .slider-red::-webkit-slider-thumb  { background: #dc2626; }
 .slider-green::-webkit-slider-thumb{ background: #16a34a; }
 .slider-blue::-webkit-slider-thumb { background: #2563eb; }
+
+/* ── Advanced (collapsible) group ────────────────────────────────────── */
+.advanced-group {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.advanced-group summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  list-style: none;
+  margin-bottom: 12px;
+}
+.advanced-group summary::-webkit-details-marker { display: none; }
+.advanced-group summary::before { content: '▸ '; }
+.advanced-group[open] summary::before { content: '▾ '; }
+.advanced-group .setting-row:last-child { margin-bottom: 0; }
+
+/* ── Select input ────────────────────────────────────────────────────── */
+.select-input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ── Search filtering ────────────────────────────────────────────────── */
+.setting-row.search-hidden,
+.settings-section.search-hidden,
+.advanced-group.search-hidden {
+  display: none;
+}
 
 /* ── Toggle switch ───────────────────────────────────────────────────── */
 .toggle {

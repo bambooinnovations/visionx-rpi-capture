@@ -107,6 +107,21 @@ function populateUI(s) {
   setSlider('gamma', s.gamma,
     s.gamma_min ?? 0, s.gamma_max ?? 250, 'gamma-value');
 
+  setSlider('contrast', s.contrast,
+    s.contrast_min ?? 0, s.contrast_max ?? 200, 'contrast-value');
+
+  setSlider('saturation', s.saturation,
+    s.saturation_min ?? 0, s.saturation_max ?? 200, 'saturation-value');
+
+  document.getElementById('noise-filter').checked = s.noise_filter;
+  document.getElementById('dead-pixel-correction').checked = s.correct_dead_pixel;
+  document.getElementById('invert-image').checked = s.inverse;
+
+  // Advanced exposure
+  document.getElementById('anti-flick').checked = s.anti_flick;
+  document.getElementById('light-frequency').value = String(s.light_frequency ?? 0);
+  setSlider('frame-speed', s.frame_speed, 0, s.frame_speed_max ?? 2, 'frame-speed-value');
+
   // Rotation
   document.querySelectorAll('#rotation-group .btn-seg').forEach(btn => {
     btn.classList.toggle('active', parseInt(btn.dataset.rotation) === s.rotation);
@@ -144,6 +159,14 @@ function collectSettings() {
     b_gain:      parseInt(document.getElementById('b-gain').value),
     sharpness:   parseInt(document.getElementById('sharpness').value),
     gamma:       parseInt(document.getElementById('gamma').value),
+    contrast:    parseInt(document.getElementById('contrast').value),
+    saturation:  parseInt(document.getElementById('saturation').value),
+    noise_filter:        document.getElementById('noise-filter').checked,
+    correct_dead_pixel:  document.getElementById('dead-pixel-correction').checked,
+    inverse:             document.getElementById('invert-image').checked,
+    anti_flick:      document.getElementById('anti-flick').checked,
+    light_frequency: parseInt(document.getElementById('light-frequency').value),
+    frame_speed:     parseInt(document.getElementById('frame-speed').value),
     rotation:    activeRot ? parseInt(activeRot.dataset.rotation) : 0,
     h_mirror:    document.getElementById('h-mirror').checked,
     v_mirror:    document.getElementById('v-mirror').checked,
@@ -333,6 +356,29 @@ async function takeSnapshot() {
   }
 }
 
+// ── Settings search ─────────────────────────────────────────────────────
+
+function applySettingsSearch(query) {
+  const q = query.trim().toLowerCase();
+
+  document.querySelectorAll('.settings-panel .setting-row').forEach(row => {
+    row.classList.toggle('search-hidden', !!q && !row.textContent.toLowerCase().includes(q));
+  });
+
+  document.querySelectorAll('.advanced-group').forEach(group => {
+    const rows = group.querySelectorAll('.setting-row');
+    const anyVisible = Array.from(rows).some(r => !r.classList.contains('search-hidden'));
+    group.classList.toggle('search-hidden', !!q && !anyVisible);
+    if (q && anyVisible) group.open = true;
+  });
+
+  document.querySelectorAll('.settings-panel .settings-section').forEach(section => {
+    const rows = section.querySelectorAll('.setting-row');
+    const anyVisible = Array.from(rows).some(r => !r.classList.contains('search-hidden'));
+    section.classList.toggle('search-hidden', !!q && !anyVisible);
+  });
+}
+
 // ── Wire all controls ─────────────────────────────────────────────────
 
 function wireControls() {
@@ -366,6 +412,9 @@ function wireControls() {
     ['b-gain',       'b-gain-value',       v => v],
     ['sharpness',    'sharpness-value',    v => v],
     ['gamma',        'gamma-value',        v => v],
+    ['contrast',     'contrast-value',     v => v],
+    ['saturation',   'saturation-value',   v => v],
+    ['frame-speed',  'frame-speed-value',  v => v],
   ].forEach(([id, valueId, fmt]) => {
     document.getElementById(id).addEventListener('input', function () {
       document.getElementById(valueId).textContent = fmt(this.value);
@@ -390,6 +439,17 @@ function wireControls() {
   document.getElementById('mono-enabled').addEventListener('change', function () {
     updateMonoWbGate(this.checked);
     onSettingChange();
+  });
+
+  // Advanced toggles / select
+  ['noise-filter', 'dead-pixel-correction', 'invert-image', 'anti-flick'].forEach(id => {
+    document.getElementById(id).addEventListener('change', onSettingChange);
+  });
+  document.getElementById('light-frequency').addEventListener('change', onSettingChange);
+
+  // Settings search
+  document.getElementById('settings-search').addEventListener('input', function () {
+    applySettingsSearch(this.value);
   });
 
   // Preview mode radio
