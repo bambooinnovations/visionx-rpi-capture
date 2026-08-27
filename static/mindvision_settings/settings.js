@@ -115,6 +115,19 @@ function populateUI(s) {
   // Mirrors
   document.getElementById('h-mirror').checked = s.h_mirror;
   document.getElementById('v-mirror').checked = s.v_mirror;
+
+  // Monochrome — hidden entirely on a hardware-mono sensor (nothing to force)
+  document.getElementById('mono-row').classList.toggle('hidden', !!s.mono_sensor);
+  document.getElementById('mono-enabled').checked = !!s.mono_enabled;
+  updateMonoWbGate(s.mono_enabled);
+}
+
+let _stitchWbLocked = false;
+
+function updateMonoWbGate(monoEnabled) {
+  document.getElementById('mono-wb-warning').classList.toggle('hidden', !monoEnabled);
+  const btn = document.getElementById('btn-wb');
+  if (btn) btn.disabled = !!monoEnabled || _stitchWbLocked;
 }
 
 // ── Collect current control values ───────────────────────────────────
@@ -134,6 +147,7 @@ function collectSettings() {
     rotation:    activeRot ? parseInt(activeRot.dataset.rotation) : 0,
     h_mirror:    document.getElementById('h-mirror').checked,
     v_mirror:    document.getElementById('v-mirror').checked,
+    mono_enabled: document.getElementById('mono-enabled').checked,
   };
 }
 
@@ -372,6 +386,12 @@ function wireControls() {
   document.getElementById('h-mirror').addEventListener('change', onSettingChange);
   document.getElementById('v-mirror').addEventListener('change', onSettingChange);
 
+  // Monochrome toggle
+  document.getElementById('mono-enabled').addEventListener('change', function () {
+    updateMonoWbGate(this.checked);
+    onSettingChange();
+  });
+
   // Preview mode radio
   document.querySelectorAll('[name="preview-mode"]').forEach(radio => {
     radio.addEventListener('change', function () {
@@ -419,6 +439,7 @@ async function checkStitchWbLock() {
                      stitchCal.cameras_calibrated.includes(CAMERA_ID);
     const hasWbCal = wbCal && wbCal.calibrated;
     if (inStitch && hasWbCal) {
+      _stitchWbLocked = true;
       document.getElementById('btn-wb').disabled = true;
       document.getElementById('wb-stitch-warning').classList.remove('hidden');
     }

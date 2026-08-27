@@ -555,6 +555,13 @@ def _read_mv_settings(h: int, cap) -> dict:
     except Exception:
         s.update(rotation=0, h_mirror=False, v_mirror=False)
 
+    # mono_sensor is a hardware capability (read-only, informs the UI whether
+    # the mono_enabled toggle is meaningful at all); mono_enabled is the
+    # user-controllable ISP color->mono conversion.
+    s["mono_sensor"] = bool(cap.sIspCapacity.bMonoSensor) if cap else False
+    try: s["mono_enabled"] = bool(mvsdk.CameraGetMonochrome(h))
+    except Exception: s["mono_enabled"] = False
+
     return s
 
 
@@ -646,6 +653,13 @@ def _apply_mv_settings(h: int, body: dict) -> tuple[list[str], dict[str, str]]:
             applied.append("v_mirror")
         except Exception as exc:
             errors["v_mirror"] = str(exc)
+
+    if "mono_enabled" in body:
+        try:
+            mvsdk.CameraSetMonochrome(h, 1 if body["mono_enabled"] else 0)
+            applied.append("mono_enabled")
+        except Exception as exc:
+            errors["mono_enabled"] = str(exc)
 
     return applied, errors
 
@@ -1333,6 +1347,7 @@ def create_blueprint(
             "rotation": 0,
             "h_mirror": False,
             "v_mirror": False,
+            "mono_enabled": False,
         }
         applied, errors = _apply_mv_settings(h, defaults)
         if not errors:

@@ -82,6 +82,17 @@
     <section class="settings-section">
       <h2 class="section-title">Gain &amp; White Balance</h2>
 
+      <div id="mono-row" class="setting-row hidden">
+        <label class="setting-label" for="mono-enabled">Monochrome</label>
+        <label class="toggle">
+          <input type="checkbox" id="mono-enabled">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <div id="mono-wb-warning" class="wb-stitch-warning hidden">
+        White balance is disabled while Monochrome is on.
+      </div>
+
       <div class="setting-row">
         <label class="setting-label">
           Analog Gain
@@ -232,6 +243,7 @@
       <li>Analog gain and RGB gains reset to neutral</li>
       <li>Sharpness and gamma reset</li>
       <li>Rotation 0°, mirrors off</li>
+      <li>Monochrome off</li>
     </ul>
     <p class="dialog-safe-note">Lens distortion and stitch calibration are <strong>not affected</strong>.</p>
     <div class="dialog-actions">

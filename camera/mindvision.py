@@ -346,7 +346,7 @@ class MindVisionCamera(BaseCamera):
         """One-push WB calibration: match QT5 demo sequence exactly."""
         if self._h_camera is None:
             raise RuntimeError("Camera not open")
-        if self._mono:
+        if self._mono or bool(mvsdk.CameraGetMonochrome(self._h_camera)):
             raise RuntimeError("White balance not applicable to monochrome cameras")
 
         # Reset to neutral so CameraSetOnceWB sees the unbiased scene.
