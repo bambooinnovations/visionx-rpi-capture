@@ -28,7 +28,29 @@ trigger_count    — encoder count at trigger time (string)
 trigger_number   — sequential trigger index since decoder start (string)
 trigger_source   — "encoder" or "manual"
 captured_at      — ISO-8601 UTC timestamp (Pi clock) of when this trigger's frames were captured
+timing           — JSON object, pipeline timing for this trigger (see below)
 ```
+
+#### `timing` field
+
+A JSON-encoded object (parse the form field as JSON), always present, with a stable schema regardless of which stages actually ran:
+
+```json
+{
+  "trigger": 118,
+  "cameras": {
+    "0": {"queue_ms": 1.2, "capture_ms": 42.7},
+    "1": {"queue_ms": 0.9, "capture_ms": 40.1}
+  },
+  "decode_ms": null,
+  "stitch_ms": null,
+  "encode_ms": null
+}
+```
+
+- `cameras` — per-camera queue wait (time sitting in this camera's trigger queue before capture started) and capture duration, keyed by camera index.
+- `decode_ms` / `stitch_ms` / `encode_ms` — only populated when `hw_trigger.use_stitch` is enabled (currently disabled by default); `null` otherwise, not omitted, so consumers can rely on the keys always existing.
+- Upload/network duration is deliberately **not** included here — it can't be known before the request is sent. Derive it server-side as `server_received_at - captured_at`, or from your own request-handling timer.
 
 ### Raw per-camera capture _(opt-in)_
 
@@ -45,6 +67,7 @@ trigger_number   — sequential trigger index (string)
 trigger_source   — "encoder" or "manual"
 camera_id        — index of the camera this frame came from (string, per-camera upload only)
 captured_at      — ISO-8601 UTC timestamp (Pi clock), same value for every camera in a trigger group
+timing           — JSON object, same shape as the stitched-capture `timing` field above
 ```
 
 **Your endpoint must return any 2xx.** The RPi calls `raise_for_status()` on the response and retries on 4xx/5xx (3 attempts, 1 s back-off by default). No specific response body is required.

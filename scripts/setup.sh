@@ -40,16 +40,14 @@ as_user() {
 }
 
 # ── App setup ─────────────────────────────────────────────────────────────────
+# use_system_site_packages=1 for the Pi-camera path (needs apt's python3-libcamera
+# bindings visible inside the venv); MindVision has no such dependency.
 _setup_app() {
+    local use_system_site_packages="${1:-0}"
+
     log INFO "━━━  App setup  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     cd "$PROJECT_ROOT"
-
-    echo ""
-    log INFO "Installing system dependencies..."
-    apt update
-    apt install -y python3-libcamera python3-kms++ libcap-dev
-    log SUCCESS "System dependencies ready."
 
     echo ""
     log INFO "Checking for uv..."
@@ -66,23 +64,22 @@ _setup_app() {
     log SUCCESS "uv available system-wide at /usr/local/bin/uv."
 
     echo ""
-    log INFO "Creating virtual environment with system site-packages..."
-    as_user uv venv --system-site-packages
+    log INFO "Creating virtual environment..."
+    if [[ "$use_system_site_packages" == "1" ]]; then
+        as_user uv venv --system-site-packages
+    else
+        as_user uv venv
+    fi
     log SUCCESS "Virtual environment ready."
 
     echo ""
     log INFO "Installing Python dependencies..."
-    as_user uv sync --extra rpi
-    log SUCCESS "Python dependencies installed."
-
-    echo ""
-    log INFO "Verifying picamera2..."
-    if as_user uv run python -c "from picamera2 import Picamera2; print('    picamera2 OK')"; then
-        log SUCCESS "Camera library is working."
+    if [[ "$use_system_site_packages" == "1" ]]; then
+        as_user uv sync --extra rpi
     else
-        log ERROR "picamera2 import failed. Check that the camera is enabled in raspi-config."
-        exit 1
+        as_user uv sync
     fi
+    log SUCCESS "Python dependencies installed."
 
     echo ""
     log INFO "Installing systemd service..."
@@ -109,6 +106,27 @@ EOF
     log SUCCESS "Service installed and enabled — will start automatically after reboot."
 
     log INFO "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# ── Pi-camera system dependencies + picamera2 verification ────────────────────
+# Only needed for the ArduCam/Pi-camera path; not applicable to MindVision.
+_setup_picamera_deps() {
+    echo ""
+    log INFO "Installing system dependencies..."
+    apt update
+    apt install -y python3-libcamera python3-kms++ libcap-dev
+    log SUCCESS "System dependencies ready."
+}
+
+_verify_picamera() {
+    echo ""
+    log INFO "Verifying picamera2..."
+    if as_user uv run python -c "from picamera2 import Picamera2; print('    picamera2 OK')"; then
+        log SUCCESS "Camera library is working."
+    else
+        log ERROR "picamera2 import failed. Check that the camera is enabled in raspi-config."
+        exit 1
+    fi
 }
 
 # ── Reboot prompt ─────────────────────────────────────────────────────────────
@@ -194,11 +212,14 @@ main() {
                 ;;
             2)
                 install_arducam
-                _setup_app
+                _setup_picamera_deps
+                _setup_app 1
+                _verify_picamera
                 _prompt_reboot
                 ;;
             3)
                 install_mindvision
+                _setup_app 0
                 _prompt_reboot
                 ;;
             4)

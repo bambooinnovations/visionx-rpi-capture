@@ -6,10 +6,12 @@ Flask API that captures images from a camera and serves them over HTTP on port *
 
 | Requirement  | Detail                                                                                            |
 | ------------ | ------------------------------------------------------------------------------------------------- |
-| **Hardware** | Raspberry Pi 5, 4B, 3B+, 3A+, Zero, Zero 2W, CM3/CM3+/CM4                                         |
+| **Hardware** | Raspberry Pi 5, 4B, 3B+, 3A+, Zero, Zero 2W, CM3/CM3+/CM4 — **or** any x86_64/ARM64 machine when using a MindVision camera only |
 | **Camera**   | Arducam 64MP Hawkeye **or** standard Pi Camera v2 / v3 / HQ (MIPI CSI-2) **or** MindVision camera |
-| **OS**       | Raspberry Pi OS — Bullseye, Bookworm, or Trixie (64-bit recommended)                              |
+| **OS**       | Raspberry Pi OS — Bullseye, Bookworm, or Trixie (64-bit recommended) for Pi-camera setups; a MindVision-only deployment also runs on plain Ubuntu (or any systemd-based Linux) |
 | **Internet** | Required during setup (driver downloads, uv installer, TLS certificates)                          |
+
+MindVision-only note: the ArduCam/Pi-camera install path (`dtoverlay`, `python3-libcamera`, `picamera2`) only works on Raspberry Pi OS. On Ubuntu, use setup menu option 3 ("Install MindVision") only — it installs the MindVision SDK plus the app and systemd service, and never touches Pi-camera packages. Set `[camera] type = "mindvision"` in `configuration.toml` to force MindVision-only detection (skips probing for a Pi CSI camera entirely).
 
 ## Installation
 

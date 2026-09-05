@@ -226,8 +226,15 @@ def _iso_from_ts_ms(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
 
 
-def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg", is_raw: bool = False, camera_id: int | None = None, ts_ms: int | None = None) -> bool:
-    """POST jpeg_bytes to url (defaults to destination_url). Returns True on success."""
+def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg", is_raw: bool = False, camera_id: int | None = None, ts_ms: int | None = None, timing: dict | None = None) -> bool:
+    """POST jpeg_bytes to url (defaults to destination_url). Returns True on success.
+
+    `timing` (queue/capture/decode/stitch/encode durations gathered upstream) is sent
+    as a JSON form field so the server can persist it for pipeline-performance analysis.
+    Upload duration itself can't be included here (it isn't known until after the
+    request completes) — it's only logged locally, and the server should derive
+    network/handling time from its own receive timestamp vs. `captured_at`.
+    """
     import requests
 
     if url is None:
@@ -252,9 +259,12 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
         data["camera_id"] = str(camera_id)
     if ts_ms is not None:
         data["captured_at"] = _iso_from_ts_ms(ts_ms)
+    if timing is not None:
+        data["timing"] = json.dumps(timing)
 
     for attempt in range(1, attempts + 1):
         try:
+            _t0 = time.perf_counter()
             resp = requests.post(
                 url,
                 files={"image": (filename, io.BytesIO(jpeg_bytes), "image/jpeg")},
@@ -262,6 +272,7 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
                 headers=headers,
                 timeout=timeout,
             )
+            upload_ms = round((time.perf_counter() - _t0) * 1000, 2)
             resp.raise_for_status()
             _log = logger.debug if is_raw else logger.info
             _log(
@@ -269,6 +280,7 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
                 url=url,
                 filename=filename,
                 status=resp.status_code,
+                upload_ms=upload_ms,
                 trigger=trigger_event,
             )
             return True
@@ -288,12 +300,13 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
     return False
 
 
-def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | None = None, ts_ms: int | None = None) -> Path | None:
+def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | None = None, ts_ms: int | None = None, timing: dict | None = None) -> Path | None:
     """Write jpeg_bytes to the local save dir. Returns the saved path.
 
     A sidecar <filename>.json is written alongside the image so that
-    _disk_retry_loop can reconstruct the trigger metadata (including ts_ms,
-    so a retried upload still carries the original captured_at) on retry.
+    _disk_retry_loop can reconstruct the trigger metadata (including ts_ms and the
+    original pipeline timing, so a retried upload still carries the original
+    captured_at and timing instead of losing them) on retry.
     """
     import json
 
@@ -312,6 +325,8 @@ def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | 
             sidecar_data = {k: v for k, v in trigger_event.items() if k != "_received_at"}
             if ts_ms is not None:
                 sidecar_data["ts_ms"] = ts_ms
+            if timing is not None:
+                sidecar_data["timing"] = timing
             sidecar.write_text(json.dumps(sidecar_data))
         except Exception:
             pass  # missing sidecar degrades gracefully; retry will still attempt upload
@@ -340,8 +355,8 @@ class _TriggerCollector:
         # trigger_num → {"event", "frames", "reported", "ts_ms"}
         self._pending: dict[int, dict] = {}
 
-    def add_frame(self, event: dict, cam_id: int, jpeg_bytes: bytes, serial: str) -> None:
-        self._report(event, cam_id, frame=(jpeg_bytes, serial))
+    def add_frame(self, event: dict, cam_id: int, jpeg_bytes: bytes, serial: str, timing: dict) -> None:
+        self._report(event, cam_id, frame=(jpeg_bytes, serial, timing))
 
     def failure(self, event: dict, cam_id: int) -> None:
         self._report(event, cam_id, frame=None)
@@ -670,10 +685,10 @@ class SerialTriggerListener:
         spill_dir = config.CAPTURE_TMP_DIR / "hw_trigger" / "spill"
         spill_dir.mkdir(parents=True, exist_ok=True)
         spilled: dict = {}
-        for cam_id, (jpeg_bytes, serial) in raw_captures.items():
+        for cam_id, (jpeg_bytes, serial, timing) in raw_captures.items():
             path = spill_dir / f"{prefix}_{ts_ms}_{cam_id}.jpg"
             path.write_bytes(jpeg_bytes)
-            spilled[cam_id] = (path, serial)
+            spilled[cam_id] = (path, serial, timing)
         return spilled
 
     def _stitch_submit(self, fn, *args, byte_count: int = 0) -> None:
@@ -892,8 +907,10 @@ class SerialTriggerListener:
                 break
 
             received_at = event.get("_received_at")
+            queue_ms: float | None = None
             if received_at is not None:
                 queue_age = time.monotonic() - received_at
+                queue_ms = round(queue_age * 1000, 2)
                 max_age = float(runtime_config.get("hw_trigger.max_queue_age_s", 5.0))
                 if queue_age > max_age:
                     logger.warning(
@@ -908,13 +925,17 @@ class SerialTriggerListener:
             try:
                 tmp_dir.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(dir=tmp_dir) as td:
-                    image_path, _ = cam.capture_image(output_folder=Path(td))
+                    image_path, capture_metrics = cam.capture_image(output_folder=Path(td))
                     jpeg_bytes = image_path.read_bytes()
                 serial = cam.serial_number or str(cam_id)
                 with self._stats_lock:
                     self._stats["captures_ok"] += 1
                 logger.debug("hw_trigger_captured", camera_id=cam_id, trigger=event)
-                self._collector.add_frame(event, cam_id, jpeg_bytes, serial)
+                timing = {
+                    "queue_ms": queue_ms,
+                    "capture_ms": round(capture_metrics.capture_duration_ms, 2),
+                }
+                self._collector.add_frame(event, cam_id, jpeg_bytes, serial, timing)
             except Exception as exc:
                 with self._stats_lock:
                     self._stats["captures_failed"] += 1
@@ -924,11 +945,11 @@ class SerialTriggerListener:
     def _on_all_captured(
         self,
         event: dict,
-        raw_captures: dict[int, tuple[bytes, str]],
+        raw_captures: dict[int, tuple[bytes, str, dict]],
         ts_ms: int,
     ) -> None:
         """Called by _TriggerCollector once every camera has reported for a trigger."""
-        total_bytes = sum(len(data) for data, _ in raw_captures.values())
+        total_bytes = sum(len(data) for data, _, _ in raw_captures.values())
         budget_bytes = int(runtime_config.get("hw_trigger.stitch_memory_budget_mb", 1024)) * 1024 * 1024
 
         with self._pool_counter_lock:
@@ -950,7 +971,7 @@ class SerialTriggerListener:
     def _stitch_and_upload(
         self,
         event: dict,
-        raw_captures: dict[int, tuple["bytes | Path", str]],
+        raw_captures: dict[int, tuple["bytes | Path", str, dict]],
         ts_ms: int,
     ) -> None:
         """Upload the primary capture(s) immediately. Debug raw uploads go to the lower-priority pool.
@@ -970,19 +991,31 @@ class SerialTriggerListener:
         import numpy as np
 
         # Materialize any captures that were spilled to disk before processing.
-        materialized: dict[int, tuple[bytes, str]] = {}
-        for cam_id, (data, serial) in raw_captures.items():
+        materialized: dict[int, tuple[bytes, str, dict]] = {}
+        for cam_id, (data, serial, timing) in raw_captures.items():
             if isinstance(data, Path):
                 try:
-                    materialized[cam_id] = (data.read_bytes(), serial)
+                    materialized[cam_id] = (data.read_bytes(), serial, timing)
                 finally:
                     try:
                         data.unlink(missing_ok=True)
                     except Exception:
                         pass
             else:
-                materialized[cam_id] = (data, serial)
+                materialized[cam_id] = (data, serial, timing)
         raw_captures = materialized
+
+        # Timing payload sent to the server with every upload from this trigger.
+        # Stage keys are always present so the schema is stable regardless of
+        # which stages actually ran (decode/stitch/encode are null unless
+        # hw_trigger.use_stitch is on).
+        timings: dict = {
+            "trigger": event.get("trigger"),
+            "cameras": {cam_id: t for cam_id, (_, _, t) in raw_captures.items()},
+            "decode_ms": None,
+            "stitch_ms": None,
+            "encode_ms": None,
+        }
 
         use_stitch = _get_use_stitch()
 
@@ -995,17 +1028,19 @@ class SerialTriggerListener:
                 import time as _time
                 frames: dict[int, np.ndarray] = {}
                 t_decode = 0.0
-                for cam_id, (jpeg_bytes, _) in raw_captures.items():
+                for cam_id, (jpeg_bytes, _, _t) in raw_captures.items():
                     arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
                     _t0 = _time.perf_counter()
                     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                     t_decode += _time.perf_counter() - _t0
                     if frame is not None:
                         frames[cam_id] = frame
+                timings["decode_ms"] = round(t_decode * 1000, 2)
 
                 _t0 = _time.perf_counter()
                 stitched = self._stitch_frames(frames, cal) if frames else None
                 t_stitch = _time.perf_counter() - _t0
+                timings["stitch_ms"] = round(t_stitch * 1000, 2)
 
                 if stitched is not None:
                     _t0 = _time.perf_counter()
@@ -1013,6 +1048,7 @@ class SerialTriggerListener:
                     t_encode = _time.perf_counter() - _t0
                     if ok_enc:
                         stitch_bytes = buf.tobytes()
+                        timings["encode_ms"] = round(t_encode * 1000, 2)
                         logger.info("hw_trigger_stitched", trigger=event,
                                     t_stitch_ms=round(t_stitch * 1000),
                                     stitch_kb=round(len(stitch_bytes) / 1024))
@@ -1038,7 +1074,7 @@ class SerialTriggerListener:
             stitch_ok = False
             url = _get_destination_url()
             if url:
-                stitch_ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename, ts_ms=ts_ms)
+                stitch_ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename, ts_ms=ts_ms, timing=timings)
                 with self._stats_lock:
                     if stitch_ok:
                         self._stats["uploads_ok"] += 1
@@ -1047,7 +1083,7 @@ class SerialTriggerListener:
 
             # Save locally if explicitly requested OR as fallback when upload failed.
             if not stitch_ok and _get_save_local():
-                _save_image_locally(stitch_bytes, event, filename=stitch_filename, ts_ms=ts_ms)
+                _save_image_locally(stitch_bytes, event, filename=stitch_filename, ts_ms=ts_ms, timing=timings)
                 if url:
                     logger.warning(
                         "hw_trigger_stitch_fallback_local",
@@ -1061,16 +1097,16 @@ class SerialTriggerListener:
             # Each image is tagged with its camera_id instead of being combined.
             url = _get_destination_url()
             if url:
-                for cam_id, (jpeg_bytes, _serial) in raw_captures.items():
+                for cam_id, (jpeg_bytes, _serial, _t) in raw_captures.items():
                     cam_filename = f"{ts_ms}_cam{cam_id}.jpg"
-                    ok = _upload_image(jpeg_bytes, event, url=url, filename=cam_filename, camera_id=cam_id, ts_ms=ts_ms)
+                    ok = _upload_image(jpeg_bytes, event, url=url, filename=cam_filename, camera_id=cam_id, ts_ms=ts_ms, timing=timings)
                     with self._stats_lock:
                         if ok:
                             self._stats["uploads_ok"] += 1
                         else:
                             self._stats["uploads_failed"] += 1
                     if not ok and _get_save_local():
-                        _save_image_locally(jpeg_bytes, event, filename=cam_filename, ts_ms=ts_ms)
+                        _save_image_locally(jpeg_bytes, event, filename=cam_filename, ts_ms=ts_ms, timing=timings)
                         logger.warning(
                             "hw_trigger_camera_fallback_local",
                             filename=cam_filename,
@@ -1082,7 +1118,7 @@ class SerialTriggerListener:
         # background and never contend with stitch uploads for network bandwidth.
         raw_url = _get_raw_destination_url() if _get_send_raw_images() else None
         if raw_url:
-            raw_bytes = sum(len(data) for data, _ in raw_captures.values())
+            raw_bytes = sum(len(data) for data, _, _ in raw_captures.values())
             raw_budget_bytes = int(runtime_config.get("hw_trigger.raw_memory_budget_mb", 2048)) * 1024 * 1024
             with self._pool_counter_lock:
                 raw_pending_bytes = self._raw_pending_bytes
@@ -1116,7 +1152,7 @@ class SerialTriggerListener:
 
     def _upload_raw_captures(
         self,
-        raw_captures: dict[int, tuple["bytes | Path", str]],
+        raw_captures: dict[int, tuple["bytes | Path", str, dict]],
         event: dict,
         ts_ms: int,
         raw_url: str,
@@ -1129,7 +1165,7 @@ class SerialTriggerListener:
         raw_captures values may hold either bytes or a Path (spilled to disk).
         """
         self._wait_for_stitch_drain()
-        for cam_id, (data, serial) in raw_captures.items():
+        for cam_id, (data, serial, timing) in raw_captures.items():
             if isinstance(data, Path):
                 try:
                     jpeg_bytes = data.read_bytes()
@@ -1141,13 +1177,13 @@ class SerialTriggerListener:
             else:
                 jpeg_bytes = data
             filename = f"{ts_ms}_{serial}.jpg"
-            ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename, is_raw=True, ts_ms=ts_ms)
+            ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename, is_raw=True, ts_ms=ts_ms, timing=timing)
             with self._stats_lock:
                 if ok:
                     self._stats["uploads_ok"] += 1
                 else:
                     self._stats["uploads_failed"] += 1
-                    _save_image_locally(jpeg_bytes, event, filename=filename, ts_ms=ts_ms)
+                    _save_image_locally(jpeg_bytes, event, filename=filename, ts_ms=ts_ms, timing=timing)
                     logger.warning(
                         "hw_trigger_raw_fallback_local",
                         filename=filename,
@@ -1192,8 +1228,9 @@ class SerialTriggerListener:
                         f.unlink(missing_ok=True)
                         continue
                     retry_ts_ms = trigger_event.pop("ts_ms", None)
+                    retry_timing = trigger_event.pop("timing", None)
                     image_bytes = f.read_bytes()
-                    ok = _upload_image(image_bytes, trigger_event, url=url, filename=f.name, ts_ms=retry_ts_ms)
+                    ok = _upload_image(image_bytes, trigger_event, url=url, filename=f.name, ts_ms=retry_ts_ms, timing=retry_timing)
                     if ok:
                         f.unlink(missing_ok=True)
                         sidecar.unlink(missing_ok=True)

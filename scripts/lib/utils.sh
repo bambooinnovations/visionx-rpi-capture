@@ -33,6 +33,11 @@ check_root() {
 
 # ── OS detection ──────────────────────────────────────────────────────────────
 # Sets: OS_CODENAME, CONFIG_TXT, CAM_APP_PREFIX
+# CONFIG_TXT/CAM_APP_PREFIX are only meaningful on Raspberry Pi OS (needed by
+# the ArduCam/Pi-camera install path); on any other distro they're left unset
+# and the Pi-camera path fails with a clear error if selected. MindVision-only
+# setups (a plain Ubuntu box) never touch these, so unrecognized OSes are not
+# fatal here.
 detect_os() {
     if [[ ! -f /etc/os-release ]]; then
         log ERROR "Cannot detect OS: /etc/os-release not found."
@@ -53,13 +58,14 @@ detect_os() {
             CAM_APP_PREFIX="rpicam"
             ;;
         *)
-            log ERROR "Unsupported OS: '${OS_CODENAME}'. Supported: bullseye, bookworm, trixie."
-            exit 1
+            CONFIG_TXT=""
+            CAM_APP_PREFIX=""
+            log WARN "OS '${OS_CODENAME}' is not Raspberry Pi OS — ArduCam/Pi-camera setup is unavailable. MindVision-only setup is unaffected."
             ;;
     esac
 
     export OS_CODENAME CONFIG_TXT CAM_APP_PREFIX
-    log SUCCESS "Detected OS: ${OS_CODENAME} | config: ${CONFIG_TXT} | app prefix: ${CAM_APP_PREFIX}"
+    log SUCCESS "Detected OS: ${OS_CODENAME}"
 }
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
