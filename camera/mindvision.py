@@ -584,7 +584,13 @@ class MindVisionCamera(BaseCamera):
         target_resolution = resolution or self._capture_size
 
         captured_at = datetime.now(timezone.utc).isoformat()
-        output_image = output_folder / f"{int(time.time())}.jpg"
+        # The name must be unique per camera AND per call. capture_all grabs every
+        # camera concurrently into one shared output_folder, so a name built only
+        # from whole seconds collided: all three writes landed on the same path,
+        # the last one won, and the zip shipped that single frame three times
+        # under camera_0/1/2.jpg. The failure was silent and produced three
+        # database rows, one per camera serial, all holding the same image.
+        output_image = output_folder / f"cam{self._camera_index}_{time.time_ns()}.jpg"
 
         with self._lock:
             if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
