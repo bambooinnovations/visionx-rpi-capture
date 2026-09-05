@@ -545,8 +545,17 @@ class MindVisionCamera(BaseCamera):
                     frame, _head = self._grab_frame(timeout_ms=self.exposure_grab_timeout_ms())
                     if frame is not None:
                         native_height, native_width = frame.shape[:2]
-                        if width is not None or height is not None:
-                            resize = (width or native_width, height or native_height)
+                        if width is not None and height is not None:
+                            resize = (width, height)
+                        elif width is not None:
+                            # Derive the missing dimension from the native aspect.
+                            # Falling back to the native height instead squashed the
+                            # frame: a 2448x2048 sensor asked for width=640 returned
+                            # 640x2048, so callers that pass only one dimension got a
+                            # distorted preview rather than a scaled one.
+                            resize = (width, max(1, round(width * native_height / native_width)))
+                        elif height is not None:
+                            resize = (max(1, round(height * native_width / native_height)), height)
                         elif self._stream_size is not None and self._stream_size != (native_width, native_height):
                             resize = self._stream_size
                         else:
