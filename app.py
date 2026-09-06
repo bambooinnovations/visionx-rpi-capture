@@ -557,7 +557,10 @@ def capture():
             return response
 
         logger.info("image_captured", camera_id=cam_id, resolution=target_resolution, file=image_path.name)
-        return send_file(image_path)
+        response = send_file(image_path)
+        for stage, ms in capture_metrics.stage_timings.items():
+            response.headers[f"X-Capture-{stage.replace('_', '-')}"] = str(ms)
+        return response
     finally:
         lock.release()
 

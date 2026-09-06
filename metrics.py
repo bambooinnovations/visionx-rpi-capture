@@ -1,5 +1,5 @@
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import config
@@ -14,6 +14,10 @@ class CaptureMetrics:
     width: int
     height: int
     file_size_bytes: int
+    # Optional per-stage breakdown (e.g. autofocus_ms, switch_to_still_ms) for
+    # cameras that measure it. Not persisted — record_capture() below only
+    # reads the fixed columns above, so this stays request-scoped only.
+    stage_timings: dict = field(default_factory=dict)
 
 
 def init_db(db_path: Path = METRICS_DB_PATH) -> None:

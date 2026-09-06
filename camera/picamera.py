@@ -282,23 +282,46 @@ class PiCamera(BaseCamera):
             controls=still_controls,
         )
 
+        t_wait0 = time.perf_counter()
         with self._lock:
+            lock_wait_ms = (time.perf_counter() - t_wait0) * 1000
+
+            t0 = time.perf_counter()
             if "AfMode" in cam.camera_controls and config.LENS_POSITION is None:
                 success = cam.autofocus_cycle()
                 if not success:
                     logger.warning("autofocus_failed", path=str(output_image))
+            autofocus_ms = (time.perf_counter() - t0) * 1000
 
+            t0 = time.perf_counter()
             cam.stop()
             cam.configure(still_config)
             cam.start()
+            switch_to_still_ms = (time.perf_counter() - t0) * 1000
 
             t0 = time.perf_counter()
             cam.capture_file(str(output_image))
             capture_duration_ms = (time.perf_counter() - t0) * 1000
 
+            t0 = time.perf_counter()
             cam.stop()
             cam.configure(self._preview_config)
             cam.start()
+            switch_to_preview_ms = (time.perf_counter() - t0) * 1000
+
+        stage_timings = {
+            "lock_wait_ms": round(lock_wait_ms, 1),
+            "autofocus_ms": round(autofocus_ms, 1),
+            "switch_to_still_ms": round(switch_to_still_ms, 1),
+            "capture_file_ms": round(capture_duration_ms, 1),
+            "switch_to_preview_ms": round(switch_to_preview_ms, 1),
+        }
+        logger.info(
+            "capture_stage_timings",
+            path=str(output_image),
+            total_ms=round(sum(stage_timings.values()), 1),
+            **stage_timings,
+        )
 
         sharpness = _laplacian_score(str(output_image))
         logger.info("capture_sharpness", score=sharpness, path=str(output_image))
@@ -309,6 +332,7 @@ class PiCamera(BaseCamera):
             width=resolution[0],
             height=resolution[1],
             file_size_bytes=output_image.stat().st_size,
+            stage_timings=stage_timings,
         )
         return output_image, metrics
 
