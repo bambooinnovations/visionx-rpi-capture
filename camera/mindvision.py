@@ -586,6 +586,7 @@ class MindVisionCamera(BaseCamera):
         self,
         resolution: tuple[int, int] | None = None,
         output_folder: Path = config.CAPTURE_TMP_DIR,
+        autofocus: bool = False,  # MindVision lenses are fixed; accepted for interface parity
     ) -> tuple[Path, CaptureMetrics]:
         if self._h_camera is None:
             self.open()

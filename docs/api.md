@@ -46,6 +46,7 @@ Returns `429` if a capture is already in progress, `503` if no camera is availab
 | `camera_id` | int | `0` | Camera to capture from |
 | `width` | int | sensor native | Output width in pixels — must be provided with `height` |
 | `height` | int | sensor native | Output height in pixels — must be provided with `width` |
+| `autofocus` | bool | `0` | Pi CSI cameras with autofocus run one blocking AF sweep on the first capture, then lock and reuse that lens position. Set `1`/`true` to force a fresh sweep (e.g. after the rig's working distance changed). Ignored when `camera.lens_position` is configured or the camera has no autofocus. |
 
 ---
 

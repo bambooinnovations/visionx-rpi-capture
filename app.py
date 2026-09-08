@@ -529,6 +529,9 @@ def capture():
             return jsonify({"error": "width and height must be positive integers"}), 400
 
         target_resolution = (width, height) if width is not None else None
+        # Pi CSI cameras lock focus after the first capture; ?autofocus=1
+        # forces a fresh sweep (e.g. after the rig was re-adjusted).
+        force_autofocus = request.args.get("autofocus", "").strip().lower() in ("1", "true", "yes")
 
         CAPTURE_TMP_DIR.mkdir(parents=True, exist_ok=True)
         tmp_path = Path(tempfile.mkdtemp(dir=CAPTURE_TMP_DIR))
@@ -536,6 +539,7 @@ def capture():
             image_path, capture_metrics = cam.capture_image(
                 resolution=target_resolution,
                 output_folder=tmp_path,
+                autofocus=force_autofocus,
             )
         except RuntimeError as e:
             shutil.rmtree(tmp_path, ignore_errors=True)

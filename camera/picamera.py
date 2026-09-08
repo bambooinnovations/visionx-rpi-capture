@@ -261,6 +261,7 @@ class PiCamera(BaseCamera):
         self,
         resolution: tuple[int, int] | None = None,
         output_folder: Path = config.CAPTURE_TMP_DIR,
+        autofocus: bool = False,
     ) -> tuple[Path, CaptureMetrics]:
         if self._cam is None:
             self.open()
@@ -286,10 +287,21 @@ class PiCamera(BaseCamera):
         with self._lock:
             lock_wait_ms = (time.perf_counter() - t_wait0) * 1000
 
+            # autofocus_cycle() is a blocking full-range lens sweep (~1.5-4s).
+            # On a fixed-mount rig the focus distance never changes, so run it
+            # once, lock to the converged LensPosition, and reuse it for every
+            # later capture. Pass autofocus=True to force a fresh sweep after
+            # the rig has been re-adjusted. Mirrors the LOCK_EXPOSURE lock in
+            # open().
             t0 = time.perf_counter()
-            if "AfMode" in cam.camera_controls and config.LENS_POSITION is None:
-                success = cam.autofocus_cycle()
-                if not success:
+            af_supported = "AfMode" in cam.camera_controls and config.LENS_POSITION is None
+            if af_supported and (autofocus or "LensPosition" not in self._focus_controls):
+                if cam.autofocus_cycle():
+                    pos = cam.capture_metadata().get("LensPosition")
+                    if pos is not None:
+                        self._focus_controls = {"AfMode": 0, "LensPosition": round(float(pos), 4)}
+                        logger.info("autofocus_locked", lens_position=self._focus_controls["LensPosition"])
+                else:
                     logger.warning("autofocus_failed", path=str(output_image))
             autofocus_ms = (time.perf_counter() - t0) * 1000
 
@@ -348,9 +360,13 @@ class PiCamera(BaseCamera):
 
 
 def _laplacian_score(path: str) -> float:
-    import numpy as np
-    from PIL import Image
-    arr = np.array(Image.open(path).convert("L"), dtype=np.float64)
-    lap = (arr[:-2, 1:-1] + arr[2:, 1:-1] +
-           arr[1:-1, :-2] + arr[1:-1, 2:] - 4 * arr[1:-1, 1:-1])
-    return round(float(lap.var()), 2)
+    """Variance of the Laplacian (4-neighbour kernel) — higher = sharper.
+
+    Debug signal only: logged as capture_sharpness, never returned to the
+    caller. Uses cv2 (C, single pass) instead of a pure-NumPy float64 pass
+    over the full-resolution frame, which cost 0.5-2s on the request path.
+    """
+    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return 0.0
+    return round(float(cv2.Laplacian(img, cv2.CV_64F).var()), 2)

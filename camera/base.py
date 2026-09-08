@@ -29,8 +29,14 @@ class BaseCamera(ABC):
         self,
         resolution: tuple[int, int] | None = None,
         output_folder: Path = config.CAPTURE_TMP_DIR,
+        autofocus: bool = False,
     ) -> tuple[Path, CaptureMetrics]:
-        """Capture a high-quality still and return (path, metrics)."""
+        """Capture a high-quality still and return (path, metrics).
+
+        autofocus: force a fresh autofocus sweep before capture. Only
+        meaningful for cameras with a controllable lens (picamera2); ignored
+        by cameras that have no autofocus.
+        """
 
     @abstractmethod
     def stream_frames(

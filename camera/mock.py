@@ -95,6 +95,7 @@ class MockCamera(BaseCamera):
         self,
         resolution: tuple[int, int] | None = None,
         output_folder: Path = config.CAPTURE_TMP_DIR,
+        autofocus: bool = False,  # no lens to focus; accepted for interface parity
     ) -> tuple[Path, CaptureMetrics]:
         self.open()
 
