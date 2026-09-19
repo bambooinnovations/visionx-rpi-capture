@@ -277,8 +277,16 @@ class PiCamera(BaseCamera):
             "NoiseReductionMode": 2,
             **self._focus_controls,
         }
+        # Pin the raw stream to a full-FOV sensor mode, same as the preview.
+        # Left unpinned, libcamera picks the smallest raw mode covering the
+        # output (8000x6000 on the Arducam 64MP), which is a centre CROP of
+        # the sensor - the still then frames ~14% tighter than the preview.
+        still_raw_size = self._fastest_covering_mode(
+            self._full_sensor_modes(cam.sensor_modes), resolution
+        )
         still_config = cam.create_still_configuration(
             main={"size": resolution},
+            raw={"size": still_raw_size},
             controls=still_controls,
         )
 

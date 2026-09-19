@@ -52,7 +52,10 @@ def _startup_info() -> dict:
 logger.info("app_startup", **_startup_info())
 
 app = Flask(__name__)
-CORS(app)
+# expose_headers: the VisionX UI reads the X-Capture-* stage timings off the
+# capture response; without this, browsers hide custom headers cross-origin
+# and the per-stage breakdown never reaches the operator's timing chip.
+CORS(app, expose_headers="*")
 
 start_cleanup_task()
 init_db()
