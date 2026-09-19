@@ -53,6 +53,9 @@ def is_capture_station() -> bool:
 CAMERA_TYPE: str = _get("camera", "type", "auto")
 CAMERA_SHARPNESS: float = _get("camera", "sharpness", 1.0)
 LOCK_EXPOSURE: bool = _get("camera", "lock_exposure", False)
+# MindVision: when the saved exposure is manual, apply it only while capturing a
+# still; live streams run on auto-exposure. false = manual applies everywhere.
+MANUAL_EXPOSURE_CAPTURE_ONLY: bool = _get("camera", "manual_exposure_capture_only", True)
 # None = use continuous autofocus; a float value = lock to that LensPosition.
 LENS_POSITION: float | None = _get("camera", "lens_position", None)
 

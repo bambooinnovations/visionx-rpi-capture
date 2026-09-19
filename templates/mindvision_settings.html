@@ -35,7 +35,7 @@
     <a href="/" class="btn-back">← Home</a>
     <div>
       <h1 id="page-title">Camera {{ camera_id }} Settings</h1>
-      <p class="page-subtitle">MindVision — SDK parameters</p>
+      <p class="page-subtitle">MindVision — capture profile</p>
     </div>
   </div>
   <div class="page-header-right">
@@ -52,9 +52,16 @@
       <input type="text" id="settings-search" placeholder="Search settings…">
     </div>
 
+    <div class="profile-banner">
+      <strong>You are tuning the capture profile.</strong>
+      These values are what a captured still image uses, and Save stores them for the camera.
+      <div class="profile-banner-note" id="profile-banner-note"></div>
+    </div>
+
     <!-- Exposure -->
     <section class="settings-section">
-      <h2 class="section-title">Exposure</h2>
+      <h2 class="section-title">Exposure <span class="scope-badge scope-capture" id="exposure-scope-badge">Capture</span></h2>
+      <p class="section-note" id="exposure-scope-note"></p>
 
       <div class="setting-row">
         <label class="setting-label" for="ae-enabled">Auto Exposure</label>
@@ -109,7 +116,7 @@
 
     <!-- Gain -->
     <section class="settings-section">
-      <h2 class="section-title">Gain &amp; White Balance</h2>
+      <h2 class="section-title">Gain &amp; White Balance <span class="scope-badge scope-both">Stream + capture</span></h2>
 
       <div id="mono-row" class="setting-row hidden">
         <label class="setting-label" for="mono-enabled">Monochrome</label>
@@ -159,14 +166,14 @@
         <a href="/stitch">Recalibrate on the Stitch page.</a>
       </div>
       <div class="setting-row wb-row">
-        <div class="wb-hint">Point at a neutral white/grey surface under working lights</div>
+        <div class="wb-hint">Point at a neutral white/grey surface under working lights. Calibrates at the capture exposure and saves to the capture profile.</div>
         <button id="btn-wb" class="btn btn-secondary" onclick="autoTuneWB()">Auto Tune WB</button>
       </div>
     </section>
 
     <!-- Image Processing -->
     <section class="settings-section">
-      <h2 class="section-title">Image Processing</h2>
+      <h2 class="section-title">Image Processing <span class="scope-badge scope-both">Stream + capture</span></h2>
 
       <div class="setting-row">
         <label class="setting-label">
@@ -228,7 +235,7 @@
 
     <!-- Orientation -->
     <section class="settings-section">
-      <h2 class="section-title">Orientation</h2>
+      <h2 class="section-title">Orientation <span class="scope-badge scope-both">Stream + capture</span></h2>
 
       <div class="setting-row">
         <label class="setting-label">Rotation</label>
@@ -289,6 +296,10 @@
     </div>
 
     <p class="stream-hint" id="preview-hint">Changes visible in stream within a few frames.</p>
+    <div id="preview-ae-warning" class="exposure-warning hidden">
+      Another live stream is running on auto-exposure, so this preview can look brighter or darker than a captured image.
+      Use <strong>Photo</strong> mode to see the real capture exposure.
+    </div>
 
   </div>
 

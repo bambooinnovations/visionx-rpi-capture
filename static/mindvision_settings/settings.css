@@ -163,6 +163,39 @@ body {
   margin-bottom: 14px;
 }
 
+/* ── Capture-profile banner and per-section scope badges ─────────────── */
+.profile-banner {
+  background: var(--pill-blue-bg);
+  color: var(--pill-blue-text);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.profile-banner strong { font-weight: 700; }
+.profile-banner .profile-banner-note { margin-top: 6px; }
+
+.section-title .scope-badge {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  vertical-align: middle;
+}
+.scope-badge.scope-capture { background: var(--pill-blue-bg); color: var(--pill-blue-text); }
+.scope-badge.scope-both    { background: var(--pill-green-bg); color: var(--pill-green-text); }
+
+.section-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: -6px 0 12px;
+}
+
 .setting-row {
   display: flex;
   align-items: center;

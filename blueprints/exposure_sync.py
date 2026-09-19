@@ -82,7 +82,7 @@ def apply_saved_state_if_enabled(cam: MindVisionCamera, cam_id: int) -> None:
             "ae_enabled": False,
             "exposure_us": exposure_us,
             "analog_gain": analog_gain,
-        })
+        }, cam)
         if errors:
             logger.warning("exposure_sync_apply_on_trigger_entry_partial", camera_id=cam_id, errors=errors)
         else:
@@ -158,7 +158,7 @@ def create_blueprint(
             for cam_id, cam in cameras.items():
                 if cam_id == ref_id or cam._h_camera is None:
                     continue
-                _apply_mv_settings(cam._h_camera, {"ae_enabled": True})
+                _apply_mv_settings(cam._h_camera, {"ae_enabled": True}, cam)
 
         logger.info("exposure_sync_enabled_changed", enabled=enabled)
         return jsonify({"enabled": enabled})
@@ -262,7 +262,7 @@ def create_blueprint(
                 "ae_enabled": False,
                 "exposure_us": exposure_us,
                 "analog_gain": analog_gain,
-            })
+            }, cam)
             results[cam_id] = {"applied": applied, "errors": errors}
 
         any_errors = any(r["errors"] for r in results.values())
@@ -341,13 +341,12 @@ def create_blueprint(
         if not isinstance(ref_id, int) or isinstance(ref_id, bool) or ref_id not in cameras:
             return jsonify({"error": f"camera_id must be one of {sorted(cameras.keys())}"}), 400
 
-        import mvsdk
         save_errors: dict[int, str] = {}
         for cam_id, cam in cameras.items():
             if cam_id == ref_id or cam._h_camera is None:
                 continue
             try:
-                mvsdk.CameraSaveParameter(cam._h_camera, 0)
+                cam.save_parameters()
             except Exception as exc:
                 save_errors[cam_id] = str(exc)
 

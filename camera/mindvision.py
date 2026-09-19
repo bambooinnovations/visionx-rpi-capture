@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -95,6 +96,15 @@ class MindVisionCamera(BaseCamera):
         self._capture_size: tuple[int, int] | None = None
         # Keep a strong reference to the ctypes callback so it isn't GC'd.
         self._connection_cb = None
+        # The "capture profile" exposure: what stills are taken with, and what the
+        # settings page edits and saves. [ae_state, ae_target, exposure_us].
+        # With config.MANUAL_EXPOSURE_CAPTURE_ONLY and a manual profile, live
+        # streams run on auto-exposure instead (_stream_ae_active) and the
+        # profile is applied only around a capture. Ordering: _lock, then
+        # _exposure_lock, never the reverse.
+        self._capture_exposure: list = [1, 100, 30000.0]
+        self._stream_ae_active: bool = False
+        self._exposure_lock = threading.RLock()
 
     def open(self) -> None:
         global _sdk_initialized, _dev_list_cache
@@ -166,6 +176,7 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CameraSetAeState(h, 1)
             mvsdk.CameraSetAeTarget(h, 100)
             mvsdk.CameraSaveParameter(h, 0)
+            self._capture_exposure = [1, 100, 30000.0]
         else:
             # CameraLoadParameter restores all saved params (including trigger
             # mode), so reload Team A config first, then re-assert software
@@ -183,6 +194,8 @@ class MindVisionCamera(BaseCamera):
             mvsdk.CameraSetAeTarget(h, _ae_target)
             if not _ae_state:
                 mvsdk.CameraSetExposureTime(h, _exp_time)
+            self._capture_exposure = [_ae_state, _ae_target, _exp_time]
+        self._stream_ae_active = False
 
         # CameraPlay starts the SDK's internal grab thread; subsequent
         # CameraGetImageBuffer calls pull from its ring buffer.
@@ -291,6 +304,109 @@ class MindVisionCamera(BaseCamera):
             except Exception:
                 logger.warning("mindvision_reapply_ae_after_trigger_failed")
 
+    # ── Capture profile vs. stream exposure ──────────────────────────────────
+    # The camera has one exposure state. The capture profile (saved manual
+    # values) is what stills use; while a live stream runs and the profile is
+    # manual, the camera is switched to auto-exposure so the preview stays
+    # usable, and the profile is swapped back in around each capture / save /
+    # white-balance calibration.
+
+    @property
+    def capture_exposure(self) -> dict:
+        ae, target, exp = self._capture_exposure
+        return {"ae_enabled": bool(ae), "ae_target": target, "exposure_us": exp}
+
+    def _stream_override_wanted(self) -> bool:
+        return (
+            config.MANUAL_EXPOSURE_CAPTURE_ONLY
+            and not self._capture_exposure[0]
+            and self._mode != CameraMode.HARDWARE_TRIGGER
+        )
+
+    def _write_capture_exposure(self) -> None:
+        h = self._h_camera
+        ae, target, exp = self._capture_exposure
+        mvsdk.CameraSetAeState(h, ae)
+        mvsdk.CameraSetAeTarget(h, target)
+        if not ae:
+            mvsdk.CameraSetExposureTime(h, exp)
+
+    def _write_stream_exposure(self) -> None:
+        mvsdk.CameraSetAeState(self._h_camera, 1)
+        mvsdk.CameraSetAeTarget(self._h_camera, self._capture_exposure[1])
+
+    def begin_stream_exposure(self) -> None:
+        """Switch to auto-exposure for a live stream if the capture profile is manual.
+
+        Call after set_trigger_mode(0), which would otherwise reset AE.
+        """
+        with self._exposure_lock:
+            if self._h_camera is None or self._stream_ae_active or not self._stream_override_wanted():
+                return
+            self._write_stream_exposure()
+            self._stream_ae_active = True
+            logger.info("mindvision_stream_auto_exposure", camera_id=self._camera_index)
+
+    def end_stream_exposure(self) -> None:
+        """Put the capture profile back on the camera once no stream needs AE."""
+        with self._exposure_lock:
+            if not self._stream_ae_active:
+                return
+            self._stream_ae_active = False
+            if self._h_camera is not None:
+                self._write_capture_exposure()
+
+    @contextmanager
+    def capture_exposure_applied(self):
+        """Temporarily apply the capture profile while a stream holds AE.
+
+        Yields True if the profile was swapped in (the caller should let the
+        exposure settle), False if it was already in effect.
+        """
+        with self._exposure_lock:
+            swapped = self._stream_ae_active and self._h_camera is not None
+            if swapped:
+                self._write_capture_exposure()
+            try:
+                yield swapped
+            finally:
+                if swapped and self._stream_ae_active and self._h_camera is not None:
+                    self._write_stream_exposure()
+
+    def set_capture_exposure(
+        self,
+        ae_enabled: bool | None = None,
+        ae_target: int | None = None,
+        exposure_us: float | None = None,
+    ) -> None:
+        """Update the capture profile's exposure (what the settings page edits).
+
+        Applied to the hardware immediately unless a live stream is holding AE,
+        in which case only the stored profile changes.
+        """
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        with self._exposure_lock:
+            if ae_enabled is not None:
+                self._capture_exposure[0] = 1 if ae_enabled else 0
+            if ae_target is not None:
+                self._capture_exposure[1] = int(ae_target)
+            if exposure_us is not None:
+                self._capture_exposure[2] = float(exposure_us)
+            if self._streaming and self._stream_override_wanted():
+                self._write_stream_exposure()
+                self._stream_ae_active = True
+            else:
+                self._stream_ae_active = False
+                self._write_capture_exposure()
+
+    def save_parameters(self) -> None:
+        """Persist camera parameters with the capture profile (not stream AE) on disk."""
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        with self.capture_exposure_applied():
+            mvsdk.CameraSaveParameter(self._h_camera, 0)
+
     def set_mode(self, mode: CameraMode) -> None:
         if self._h_camera is None:
             raise RuntimeError("Camera not open")
@@ -301,6 +417,9 @@ class MindVisionCamera(BaseCamera):
             # activates continuous mode automatically while a stream is active.
             self.set_trigger_mode(1)
         self._mode = mode
+        if mode == CameraMode.HARDWARE_TRIGGER:
+            # Hardware trigger uses the saved/manual exposure everywhere.
+            self.end_stream_exposure()
         logger.info("camera_mode_changed", mode=mode.value)
 
     def apply_config(self, key: str, value) -> None:
@@ -328,7 +447,7 @@ class MindVisionCamera(BaseCamera):
         if rotation not in (0, 1, 2, 3):
             raise ValueError(f"rotation must be 0-3, got {rotation}")
         mvsdk.CameraSetRotate(self._h_camera, rotation)
-        mvsdk.CameraSaveParameter(self._h_camera, 0)
+        self.save_parameters()
         logger.info("camera_rotation_set", rotation=rotation)
 
     def set_mirror(self, direction: int, enable: bool) -> None:
@@ -338,7 +457,7 @@ class MindVisionCamera(BaseCamera):
         if direction not in (0, 1):
             raise ValueError(f"direction must be 0 (horizontal) or 1 (vertical), got {direction}")
         mvsdk.CameraSetMirror(self._h_camera, direction, int(enable))
-        mvsdk.CameraSaveParameter(self._h_camera, 0)
+        self.save_parameters()
         label = "horizontal" if direction == 0 else "vertical"
         logger.info("camera_mirror_set", direction=label, enabled=enable)
 
@@ -349,17 +468,25 @@ class MindVisionCamera(BaseCamera):
         if self._mono or bool(mvsdk.CameraGetMonochrome(self._h_camera)):
             raise RuntimeError("White balance not applicable to monochrome cameras")
 
-        # Reset to neutral so CameraSetOnceWB sees the unbiased scene.
-        # Old stored gains make the image look "already white", causing OnceWB
-        # to compute near-zero correction instead of the real scene values.
-        mvsdk.CameraSetWbMode(self._h_camera, False)
-        mvsdk.CameraSetGain(self._h_camera, 100, 100, 100)
-        time.sleep(0.3)  # wait for neutral gains to take effect in the ISP
-        mvsdk.CameraSetOnceWB(self._h_camera)
-        r, g, b = mvsdk.CameraGetGain(self._h_camera)
-        mvsdk.CameraSetGain(self._h_camera, r, g, b)
+        # Calibrate under the capture exposure, not the stream's auto-exposure:
+        # the gains are what stills will be taken with.
+        with self.capture_exposure_applied() as swapped:
+            if swapped:
+                exp_us = self._capture_exposure[2]
+                time.sleep(0.5 + 3 * exp_us / 1_000_000)  # let the exposure settle
 
-        mvsdk.CameraSaveParameter(self._h_camera, 0)  # persist to Configs/<sn>-Group0.config
+            # Reset to neutral so CameraSetOnceWB sees the unbiased scene.
+            # Old stored gains make the image look "already white", causing OnceWB
+            # to compute near-zero correction instead of the real scene values.
+            mvsdk.CameraSetWbMode(self._h_camera, False)
+            mvsdk.CameraSetGain(self._h_camera, 100, 100, 100)
+            time.sleep(0.3)  # wait for neutral gains to take effect in the ISP
+            mvsdk.CameraSetOnceWB(self._h_camera)
+            r, g, b = mvsdk.CameraGetGain(self._h_camera)
+            mvsdk.CameraSetGain(self._h_camera, r, g, b)
+
+            # persist to Configs/<sn>-Group0.config
+            mvsdk.CameraSaveParameter(self._h_camera, 0)
         logger.info("white_balance_calibrated", r=r, g=g, b=b)
 
         return {"r_gain": r, "g_gain": g, "b_gain": b}
@@ -422,6 +549,26 @@ class MindVisionCamera(BaseCamera):
                 frames_lost=stat.iLost,
             )
             return None, None
+
+    def _discard_until_exposure_settled(self, max_frames: int = 8) -> None:
+        """Drop streamed frames still carrying the stream's auto-exposure.
+
+        Frames queued before the capture exposure took effect carry the old
+        exposure in their header; stop once one matches the capture profile.
+        Caller must hold self._lock.
+        """
+        target_us = self._capture_exposure[2]
+        timeout_ms = self.exposure_grab_timeout_ms()
+        for _ in range(max_frames):
+            try:
+                raw, head = mvsdk.CameraGetImageBuffer(self._h_camera, timeout_ms)
+                mvsdk.CameraReleaseImageBuffer(self._h_camera, raw)
+            except mvsdk.CameraException:
+                return
+            if abs(head.uiExpTime - target_us) <= max(50.0, 0.02 * target_us):
+                # This frame matches, but it's the one we just dropped; the next
+                # grab (the real capture) is guaranteed to be at capture exposure.
+                return
 
     def _build_exif(self, captured_at: str) -> bytes | None:
         """Build a piexif EXIF blob by querying live camera state from the SDK."""
@@ -536,6 +683,7 @@ class MindVisionCamera(BaseCamera):
 
                 if not _continuous_active and self._mode != CameraMode.HARDWARE_TRIGGER:
                     self.set_trigger_mode(0)  # continuous while streaming (preserves AE)
+                    self.begin_stream_exposure()  # manual capture exposure -> AE for the preview
                     _continuous_active = True
 
                 start = time.monotonic()
@@ -581,6 +729,11 @@ class MindVisionCamera(BaseCamera):
                     logger.info("stream_ended_reverted_to_software_trigger")
                 except Exception:
                     logger.warning("mindvision_revert_trigger_failed")
+            if self._stream_count == 0:
+                try:
+                    self.end_stream_exposure()  # restore the manual capture exposure
+                except Exception:
+                    logger.warning("mindvision_restore_capture_exposure_failed")
 
     def capture_image(
         self,
@@ -601,10 +754,14 @@ class MindVisionCamera(BaseCamera):
         # database rows, one per camera serial, all holding the same image.
         output_image = output_folder / f"cam{self._camera_index}_{time.time_ns()}.jpg"
 
-        with self._lock:
+        # Holding _lock for the whole swap keeps the stream from serving (or
+        # stealing) frames taken at the wrong exposure.
+        with self._lock, self.capture_exposure_applied() as swapped:
             if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
                 mvsdk.CameraSoftTrigger(self._h_camera)
             t0 = time.perf_counter()
+            if swapped:
+                self._discard_until_exposure_settled()
             frame, head = self._grab_frame(timeout_ms=self.exposure_grab_timeout_ms())
             capture_duration_ms = (time.perf_counter() - t0) * 1000
 

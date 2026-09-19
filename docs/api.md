@@ -412,6 +412,8 @@ Return all tunable SDK settings and their valid ranges for a camera.
 | ----------- | ---- | ------- | ----------- |
 | `camera_id` | int | `0` | Target camera |
 
+**Capture profile.** With `manual_exposure_capture_only = true` (default), the exposure fields (`ae_enabled`, `exposure_us`, `ae_target`) describe the *capture profile*: the values used when a still is captured. While a live stream runs and the profile is manual, the camera stays on auto-exposure and the profile is swapped in only around each capture, `/settings/snapshot`, `/calibrate-wb` and saves. Gains, white balance, gamma etc. apply to both. Extra response fields: `manual_exposure_capture_only`, `stream_auto_exposure` (a stream currently holds AE).
+
 **Response** includes: `ae_enabled`, `exposure_us`, `exposure_min_us`, `exposure_max_us`, `ae_target`, `analog_gain`, `analog_gain_min`, `analog_gain_max`, `r_gain`, `g_gain`, `b_gain`, `r/g/b_gain_min/max`, `sharpness`, `sharpness_min/max`, `gamma`, `gamma_min/max`, `rotation`, `h_mirror`, `v_mirror`.
 
 ---

@@ -112,6 +112,7 @@ type = "auto"              # "auto" (default) probes for MindVision devices and 
                             # (or a generated test frame) — for local development without hardware.
 sharpness = 1.0            # ISP sharpness; 0 = off (picamera2 only)
 lock_exposure = false      # Lock AE/AWB after startup for consistent captures (picamera2 only)
+manual_exposure_capture_only = true  # MindVision: manual exposure applies to still captures only; live streams stay on auto-exposure
 # lens_position = 2.0      # Manual focus in dioptres; omit for continuous autofocus (picamera2 only)
 
 [stream]

@@ -488,8 +488,25 @@ def _render_lens_stream_frame(
     return buf.getvalue()
 
 
-def _read_mv_settings(h: int, cap) -> dict:
-    """Read all tunable SDK parameters for a camera handle."""
+def _read_mv_settings(h: int, cap, cam: "MindVisionCamera | None" = None) -> dict:
+    """Read all tunable SDK parameters for a camera handle.
+
+    With `cam`, the exposure fields report its capture profile rather than the
+    live hardware state (which is auto-exposure while a stream overrides it).
+    """
+    s = _read_mv_settings_hw(h, cap)
+    if cam is not None:
+        profile = cam.capture_exposure
+        s["ae_enabled"] = profile["ae_enabled"]
+        s["ae_target"] = profile["ae_target"]
+        if not profile["ae_enabled"]:
+            s["exposure_us"] = profile["exposure_us"]
+        s["stream_auto_exposure"] = bool(cam._stream_ae_active)
+        s["manual_exposure_capture_only"] = bool(config.MANUAL_EXPOSURE_CAPTURE_ONLY)
+    return s
+
+
+def _read_mv_settings_hw(h: int, cap) -> dict:
     import mvsdk
     s = {}
 
@@ -600,11 +617,30 @@ def _read_mv_settings(h: int, cap) -> dict:
     return s
 
 
-def _apply_mv_settings(h: int, body: dict) -> tuple[list[str], dict[str, str]]:
-    """Apply body fields to camera hardware without saving. Returns (applied, errors)."""
+def _apply_mv_settings(
+    h: int, body: dict, cam: "MindVisionCamera | None" = None,
+) -> tuple[list[str], dict[str, str]]:
+    """Apply body fields to camera hardware without saving. Returns (applied, errors).
+
+    Pass `cam` so exposure/AE edits update its capture profile (which a live
+    stream may be overriding with auto-exposure) instead of poking the hardware.
+    """
     import mvsdk
     applied: list[str] = []
     errors: dict[str, str] = {}
+
+    exposure_keys = [k for k in ("ae_enabled", "exposure_us", "ae_target") if k in body]
+    if cam is not None and exposure_keys:
+        try:
+            cam.set_capture_exposure(
+                ae_enabled=body.get("ae_enabled"),
+                ae_target=body.get("ae_target"),
+                exposure_us=body.get("exposure_us"),
+            )
+            applied.extend(exposure_keys)
+        except Exception as exc:
+            errors["exposure"] = str(exc)
+        body = {k: v for k, v in body.items() if k not in exposure_keys}
 
     if "ae_enabled" in body:
         try:
@@ -1380,7 +1416,7 @@ def create_blueprint(
         cam, cam_id = _resolve_camera()
         if cam is None or cam._h_camera is None:
             return jsonify({"error": f"Camera {cam_id} not found or not open"}), 404
-        s = _read_mv_settings(cam._h_camera, cam._cap)
+        s = _read_mv_settings(cam._h_camera, cam._cap, cam)
         s["camera_id"] = cam_id
         return jsonify(s)
 
@@ -1396,21 +1432,20 @@ def create_blueprint(
         if cam is None or cam._h_camera is None:
             return jsonify({"error": f"Camera {cam_id} not found or not open"}), 404
         body = request.get_json(silent=True) or {}
-        applied, errors = _apply_mv_settings(cam._h_camera, body)
+        applied, errors = _apply_mv_settings(cam._h_camera, body, cam)
         status = 207 if errors else 200
         return jsonify({"camera_id": cam_id, "applied": applied, "errors": errors}), status
 
     @bp.route("/settings/save", methods=["POST"])
     def save_settings():
         """Apply settings and persist them to the SDK's per-serial config file."""
-        import mvsdk
         cam, cam_id = _resolve_camera()
         if cam is None or cam._h_camera is None:
             return jsonify({"error": f"Camera {cam_id} not found or not open"}), 404
         body = request.get_json(silent=True) or {}
-        applied, errors = _apply_mv_settings(cam._h_camera, body)
+        applied, errors = _apply_mv_settings(cam._h_camera, body, cam)
         if applied:
-            mvsdk.CameraSaveParameter(cam._h_camera, 0)
+            cam.save_parameters()
             logger.info("camera_settings_saved", camera_id=cam_id, keys=applied)
         return jsonify({"camera_id": cam_id, "applied": applied, "errors": errors,
                         "saved": bool(applied)}), (207 if errors else 200)
@@ -1445,9 +1480,9 @@ def create_blueprint(
             "correct_dead_pixel": False,
             "inverse": False,
         }
-        applied, errors = _apply_mv_settings(h, defaults)
+        applied, errors = _apply_mv_settings(h, defaults, cam)
         if not errors:
-            mvsdk.CameraSaveParameter(h, 0)
+            cam.save_parameters()
             logger.info("camera_factory_reset", camera_id=cam_id)
         return jsonify({"camera_id": cam_id, "applied": applied, "errors": errors,
                         "saved": not bool(errors)}), (207 if errors else 200)
@@ -1504,9 +1539,13 @@ def create_blueprint(
         max_width = request.args.get("max_width", 1280, type=int)
 
         try:
-            with cam._lock:
+            # Same path as a real capture: the capture profile's exposure is
+            # applied even if another stream is holding auto-exposure.
+            with cam._lock, cam.capture_exposure_applied() as swapped:
                 if not cam._streaming and cam.mode != CameraMode.HARDWARE_TRIGGER:
                     _mvsdk.CameraSoftTrigger(cam._h_camera)
+                if swapped:
+                    cam._discard_until_exposure_settled()
                 frame, _head = cam._grab_frame(timeout_ms=cam.exposure_grab_timeout_ms())
         except Exception as exc:
             return jsonify({"error": str(exc)}), 503

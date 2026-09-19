@@ -71,13 +71,43 @@ function updateExposureWarning(us) {
   }
 }
 
+// ── Capture-profile scope messaging ───────────────────────────────────
+
+let _captureOnly = true; // server: manual exposure applies to stills only
+
+function updateExposureScope(aeEnabled) {
+  const badge = document.getElementById('exposure-scope-badge');
+  const note = document.getElementById('exposure-scope-note');
+  const banner = document.getElementById('profile-banner-note');
+
+  const stillsOnly = _captureOnly && !aeEnabled;
+  badge.textContent = stillsOnly ? 'Capture only' : 'Stream + capture';
+  badge.classList.toggle('scope-capture', stillsOnly);
+  badge.classList.toggle('scope-both', !stillsOnly);
+
+  if (aeEnabled) {
+    note.textContent = 'Auto exposure is on: live streams and captured images both adjust automatically.';
+  } else if (_captureOnly) {
+    note.textContent = 'Manual exposure is used only when an image is captured. Live streams stay on auto exposure.';
+  } else {
+    note.textContent = 'Manual exposure applies to live streams and captured images.';
+  }
+
+  banner.textContent = _captureOnly
+    ? 'Exposure is the one exception: while Auto Exposure is off, live streams elsewhere (Home, Monitor…) keep using auto exposure. Everything else below applies to both.'
+    : 'Manual exposure applies everywhere, including live streams.';
+}
+
 // ── Populate controls from a settings object ──────────────────────────
 
 function populateUI(s) {
   // Exposure
+  _captureOnly = s.manual_exposure_capture_only !== false;
   const aeEl = document.getElementById('ae-enabled');
   aeEl.checked = s.ae_enabled;
   document.getElementById('manual-exposure-row').classList.toggle('hidden', s.ae_enabled);
+  updateExposureScope(s.ae_enabled);
+  document.getElementById('preview-ae-warning').classList.toggle('hidden', !s.stream_auto_exposure);
 
   setSlider('exposure-us', s.exposure_us,
     s.exposure_min_us || 26, s.exposure_max_us || 1_000_000,
@@ -247,7 +277,7 @@ async function autoTuneWB() {
   clearError();
   try {
     const res = await apiFetch(`${API}/calibrate-wb?camera_id=${CAMERA_ID}`, {method: 'POST'});
-    // calibrate-wb saves via CameraSaveParameter internally — update sliders + baseline
+    // calibrate-wb runs at the capture exposure and saves it internally — update sliders + baseline
     const gains = {r_gain: res.r_gain, g_gain: res.g_gain, b_gain: res.b_gain};
     document.getElementById('r-gain').value = gains.r_gain;
     document.getElementById('g-gain').value = gains.g_gain;
@@ -385,6 +415,7 @@ function wireControls() {
   // AE toggle
   document.getElementById('ae-enabled').addEventListener('change', function () {
     document.getElementById('manual-exposure-row').classList.toggle('hidden', this.checked);
+    updateExposureScope(this.checked);
     onSettingChange();
   });
 
