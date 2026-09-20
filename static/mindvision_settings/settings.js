@@ -49,12 +49,41 @@ function setSlider(id, value, min, max, valueId, fmt) {
   el.min = min;
   el.max = max;
   el.value = value;
-  if (valueId) document.getElementById(valueId).textContent = fmt ? fmt(value) : value;
+  if (valueId) {
+    const box = document.getElementById(valueId);
+    box.min = min;
+    box.max = max;
+    box.value = fmt ? fmt(value) : value;
+  }
 }
 
-function formatExposure(us) {
-  const ms = us / 1000;
-  return ms >= 1 ? `${ms.toFixed(1)} ms` : `${us.toFixed(0)} µs`;
+// The exposure slider works in whole milliseconds; the API stays in µs.
+// Slider position is 0..1000 on a quadratic curve so short exposures (where
+// most tuning happens) get much finer control than a linear 1 ms/px scale.
+const EXPOSURE_POS_MAX = 1000;
+let exposureMinMs = 1;
+let exposureMaxMs = 1000;
+
+function formatExposure(ms) {
+  return Math.round(ms);
+}
+function exposurePosToMs(pos) {
+  const t = pos / EXPOSURE_POS_MAX;
+  return Math.round(exposureMinMs + (exposureMaxMs - exposureMinMs) * t * t);
+}
+function exposureMsToPos(ms) {
+  const span = Math.max(1, exposureMaxMs - exposureMinMs);
+  const t = Math.sqrt(Math.min(Math.max(ms - exposureMinMs, 0), span) / span);
+  return Math.round(t * EXPOSURE_POS_MAX);
+}
+function getExposureMs() {
+  return exposurePosToMs(parseFloat(document.getElementById('exposure-us').value));
+}
+function setExposureMs(ms) {
+  const clamped = Math.min(Math.max(Math.round(ms), exposureMinMs), exposureMaxMs);
+  document.getElementById('exposure-us').value = exposureMsToPos(clamped);
+  document.getElementById('exposure-value').value = clamped;
+  return clamped;
 }
 
 function updateExposureWarning(us) {
@@ -109,9 +138,12 @@ function populateUI(s) {
   updateExposureScope(s.ae_enabled);
   document.getElementById('preview-ae-warning').classList.toggle('hidden', !s.stream_auto_exposure);
 
-  setSlider('exposure-us', s.exposure_us,
-    s.exposure_min_us || 26, s.exposure_max_us || 1_000_000,
-    'exposure-value', formatExposure);
+  exposureMinMs = Math.max(1, Math.ceil((s.exposure_min_us || 1000) / 1000));
+  exposureMaxMs = Math.floor((s.exposure_max_us || 1_000_000) / 1000);
+  const exposureBox = document.getElementById('exposure-value');
+  exposureBox.min = exposureMinMs;
+  exposureBox.max = exposureMaxMs;
+  setExposureMs(s.exposure_us / 1000);
   updateExposureWarning(s.exposure_us);
 
   setSlider('ae-target', s.ae_target, 0, 255, 'ae-target-value');
@@ -181,7 +213,7 @@ function collectSettings() {
   const activeRot = document.querySelector('#rotation-group .btn-seg.active');
   return {
     ae_enabled:  document.getElementById('ae-enabled').checked,
-    exposure_us: parseFloat(document.getElementById('exposure-us').value),
+    exposure_us: getExposureMs() * 1000,
     ae_target:   parseInt(document.getElementById('ae-target').value),
     analog_gain: parseInt(document.getElementById('analog-gain').value),
     r_gain:      parseInt(document.getElementById('r-gain').value),
@@ -282,9 +314,9 @@ async function autoTuneWB() {
     document.getElementById('r-gain').value = gains.r_gain;
     document.getElementById('g-gain').value = gains.g_gain;
     document.getElementById('b-gain').value = gains.b_gain;
-    document.getElementById('r-gain-value').textContent = gains.r_gain;
-    document.getElementById('g-gain-value').textContent = gains.g_gain;
-    document.getElementById('b-gain-value').textContent = gains.b_gain;
+    document.getElementById('r-gain-value').value = gains.r_gain;
+    document.getElementById('g-gain-value').value = gains.g_gain;
+    document.getElementById('b-gain-value').value = gains.b_gain;
     // Merge into initialSettings since WB cal already saved
     initialSettings = {...initialSettings, ...gains};
     markClean();
@@ -423,8 +455,9 @@ function wireControls() {
   // live-apply on release ('change') to avoid hammering the camera with
   // intermediate values that stall the preview at long exposures.
   document.getElementById('exposure-us').addEventListener('input', function () {
-    const us = parseFloat(this.value);
-    document.getElementById('exposure-value').textContent = formatExposure(us);
+    const ms = getExposureMs();
+    const us = ms * 1000;
+    document.getElementById('exposure-value').value = formatExposure(ms);
     updateExposureWarning(us);
     markDirty();
   });
@@ -448,9 +481,63 @@ function wireControls() {
     ['frame-speed',  'frame-speed-value',  v => v],
   ].forEach(([id, valueId, fmt]) => {
     document.getElementById(id).addEventListener('input', function () {
-      document.getElementById(valueId).textContent = fmt(this.value);
+      document.getElementById(valueId).value = fmt(this.value);
       onSettingChange();
     });
+  });
+
+  // Typed values: every value box drives its slider. The slider clamps to its
+  // min/max/step, so the box snaps back to what was actually applied.
+  document.querySelectorAll('input.setting-value').forEach(box => {
+    const slider = document.getElementById(box.id.replace(/-value$/, '').replace(/^exposure$/, 'exposure-us'));
+    if (!slider) return;
+    box.addEventListener('change', function () {
+      if (this.value === '' || isNaN(parseFloat(this.value))) {
+        this.value = slider.value;
+        return;
+      }
+      if (slider.id === 'exposure-us') setExposureMs(parseFloat(this.value));
+      else slider.value = this.value;
+      slider.dispatchEvent(new Event('input'));
+      if (slider.id === 'exposure-us') slider.dispatchEvent(new Event('change'));
+    });
+    box.addEventListener('keydown', e => { if (e.key === 'Enter') box.blur(); });
+  });
+
+  // − / + nudge buttons on every slider: one click = one unit (1 ms for
+  // exposure), hold to repeat. Much easier than pixel-hunting with the thumb.
+  document.querySelectorAll('input.slider').forEach(slider => {
+    const nudge = dir => {
+      if (slider.id === 'exposure-us') setExposureMs(getExposureMs() + dir);
+      else if (dir > 0) slider.stepUp();
+      else slider.stepDown();
+      slider.dispatchEvent(new Event('input'));
+      return slider.id === 'exposure-us';
+    };
+    const makeBtn = (label, dir) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'slider-nudge';
+      btn.textContent = label;
+      btn.setAttribute('aria-label', dir > 0 ? 'Increase' : 'Decrease');
+      let delay, repeat, fired = false;
+      const stop = () => {
+        clearTimeout(delay);
+        clearInterval(repeat);
+        if (fired && slider.id === 'exposure-us') slider.dispatchEvent(new Event('change'));
+        fired = false;
+      };
+      btn.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        fired = true;
+        nudge(dir);
+        delay = setTimeout(() => { repeat = setInterval(() => nudge(dir), 60); }, 350);
+      });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, stop));
+      return btn;
+    };
+    slider.before(makeBtn('−', -1));
+    slider.after(makeBtn('+', 1));
   });
 
   // Rotation buttons
