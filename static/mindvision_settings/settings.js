@@ -62,7 +62,8 @@ function setSlider(id, value, min, max, valueId, fmt) {
 // most tuning happens) get much finer control than a linear 1 ms/px scale.
 const EXPOSURE_POS_MAX = 1000;
 let exposureMinMs = 1;
-let exposureMaxMs = 1000;
+const EXPOSURE_MAX_MS = 2000; // UI cap, regardless of what the camera reports
+let exposureMaxMs = EXPOSURE_MAX_MS;
 
 function formatExposure(ms) {
   return Math.round(ms);
@@ -139,7 +140,7 @@ function populateUI(s) {
   document.getElementById('preview-ae-warning').classList.toggle('hidden', !s.stream_auto_exposure);
 
   exposureMinMs = Math.max(1, Math.ceil((s.exposure_min_us || 1000) / 1000));
-  exposureMaxMs = Math.floor((s.exposure_max_us || 1_000_000) / 1000);
+  exposureMaxMs = EXPOSURE_MAX_MS;
   const exposureBox = document.getElementById('exposure-value');
   exposureBox.min = exposureMinMs;
   exposureBox.max = exposureMaxMs;
@@ -491,17 +492,38 @@ function wireControls() {
   document.querySelectorAll('input.setting-value').forEach(box => {
     const slider = document.getElementById(box.id.replace(/-value$/, '').replace(/^exposure$/, 'exposure-us'));
     if (!slider) return;
-    box.addEventListener('change', function () {
-      if (this.value === '' || isNaN(parseFloat(this.value))) {
-        this.value = slider.value;
+    const commit = () => {
+      if (box.value === '' || isNaN(parseFloat(box.value))) {
+        box.value = slider.id === 'exposure-us' ? getExposureMs() : slider.value;
         return;
       }
-      if (slider.id === 'exposure-us') setExposureMs(parseFloat(this.value));
-      else slider.value = this.value;
+      if (slider.id === 'exposure-us') setExposureMs(parseFloat(box.value));
+      else slider.value = box.value;
       slider.dispatchEvent(new Event('input'));
       if (slider.id === 'exposure-us') slider.dispatchEvent(new Event('change'));
+    };
+    box.addEventListener('change', commit);
+    box.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { commit(); box.select(); }
     });
-    box.addEventListener('keydown', e => { if (e.key === 'Enter') box.blur(); });
+    // Select everything on focus so typing replaces the old value.
+    box.addEventListener('focus', () => box.select());
+    box.addEventListener('mouseup', e => e.preventDefault());
+  });
+
+  // Layout: [name] [− slider +] [value box]. The value box is moved out of the
+  // label into a fixed-width cell at the row's right edge so it (and the slider)
+  // never shift as the value changes.
+  document.querySelectorAll('.setting-label input.setting-value').forEach(box => {
+    const label = box.closest('.setting-label');
+    const row = label.closest('.setting-row');
+    const cell = document.createElement('span');
+    cell.className = 'value-cell';
+    cell.append(box);
+    const unit = label.querySelector('.setting-unit');
+    if (unit) cell.append(unit);
+    row.classList.add('has-slider');
+    row.append(cell);
   });
 
   // − / + nudge buttons on every slider: one click = one unit (1 ms for
