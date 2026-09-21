@@ -570,25 +570,52 @@ class MindVisionCamera(BaseCamera):
                 # grab (the real capture) is guaranteed to be at capture exposure.
                 return
 
-    def _build_exif(self, captured_at: str) -> bytes | None:
-        """Build a piexif EXIF blob by querying live camera state from the SDK."""
+    def _snapshot_capture_state(self, head) -> dict:
+        """Camera settings that produced the frame just grabbed.
+
+        Exposure, analog gain, gamma/contrast/saturation and the RGB digital
+        gains come from the frame header, which the SDK fills per frame, so
+        they describe exactly this image. AE state/target are read from the
+        camera; caller must hold self._lock so nothing changes them mid-read.
+        """
+        state: dict = {}
+        if head is not None:
+            state.update(
+                exposure_us=int(head.uiExpTime),
+                analog_gain_x=round(float(head.fAnalogGain), 4),
+                gamma=int(head.iGamma),
+                contrast=int(head.iContrast),
+                saturation=int(head.iSaturation),
+                r_gain=round(float(head.fRgain), 4),
+                g_gain=round(float(head.fGgain), 4),
+                b_gain=round(float(head.fBgain), 4),
+            )
+        h = self._h_camera
+        for key, getter in (
+            ("ae_enabled", lambda: bool(mvsdk.CameraGetAeState(h))),
+            ("ae_target", lambda: int(mvsdk.CameraGetAeTarget(h))),
+            ("analog_gain_raw", lambda: int(mvsdk.CameraGetAnalogGain(h))),
+        ):
+            try:
+                state[key] = getter()
+            except Exception:
+                state[key] = None
+        return state
+
+    def _build_exif(self, captured_at: str, state: dict | None = None) -> bytes | None:
+        """Build a piexif EXIF blob from the settings captured with the frame.
+
+        ExposureTime and ISOSpeedRatings hold the headline values; the full
+        snapshot is written as JSON in UserComment.
+        """
         try:
+            import json
+
             import piexif
 
-            # Query actual exposure time and gain from the SDK.
-            # The frame header's iExpTime is unreliable in hardware trigger mode.
-            exp_us = 0
-            gain_raw = 100
-            if self._h_camera is not None:
-                try:
-                    exp_us = int(mvsdk.CameraGetExposureTime(self._h_camera))
-                except Exception:
-                    pass
-                try:
-                    # CameraGetAnalogGain returns the current analog gain value
-                    gain_raw = int(mvsdk.CameraGetAnalogGain(self._h_camera))
-                except Exception:
-                    pass
+            state = state or {}
+            exp_us = int(state.get("exposure_us") or 0)
+            gain_raw = int(state.get("analog_gain_raw") or 0)
 
             model = ""
             serial = ""
@@ -620,7 +647,13 @@ class MindVisionCamera(BaseCamera):
                     piexif.ExifIFD.DateTimeOriginal: exif_dt,
                     piexif.ExifIFD.ExposureTime: (exp_us, 1_000_000),
                     piexif.ExifIFD.ISOSpeedRatings: gain_raw,
+                    # Standard EXIF tag so any viewer shows AE: 0 = auto, 1 = manual.
+                    piexif.ExifIFD.ExposureMode: 0 if state.get("ae_enabled") else 1,
                     piexif.ExifIFD.BodySerialNumber: serial.encode(),
+                    piexif.ExifIFD.UserComment: (
+                        b"ASCII\x00\x00\x00"
+                        + json.dumps(state, sort_keys=True).encode("ascii")
+                    ),
                 },
                 "GPS": {},
                 "1st": {},
@@ -764,6 +797,10 @@ class MindVisionCamera(BaseCamera):
                 self._discard_until_exposure_settled()
             frame, head = self._grab_frame(timeout_ms=self.exposure_grab_timeout_ms())
             capture_duration_ms = (time.perf_counter() - t0) * 1000
+            # Read the camera state while the capture profile is still applied
+            # and the lock is held; after this block a running stream may swap
+            # auto-exposure back in and the values would describe the stream.
+            exif_state = self._snapshot_capture_state(head) if frame is not None else None
 
         if frame is None:
             raise RuntimeError("Failed to capture frame from MindVision camera")
@@ -775,7 +812,7 @@ class MindVisionCamera(BaseCamera):
             else None
         )
 
-        exif_bytes = self._build_exif(captured_at)
+        exif_bytes = self._build_exif(captured_at, exif_state)
         jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes, resize=resize)
         output_image.write_bytes(jpeg_bytes)
 
