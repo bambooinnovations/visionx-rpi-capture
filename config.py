@@ -77,6 +77,10 @@ CLEANUP_INTERVAL_SECONDS: int = _get("cleanup", "interval_seconds", 300)
 MAX_AGE_SECONDS: int = _get("cleanup", "max_age_seconds", 300)
 
 # Hardware trigger (MindVision only)
+# Gate for the boot-time decoder auto-start on fabric stations. The camera-UI
+# HW Trigger toggle is runtime-only: a stop there does NOT survive a service
+# restart or power cut - this flag is the persistent off switch.
+HW_TRIGGER_AUTO_START: bool = _get("hw_trigger", "auto_start", True)
 HW_TRIGGER_SERIAL_PORT: str = _get("hw_trigger", "serial_port", "/dev/ttyACM0")
 HW_TRIGGER_SERIAL_BAUD: int = _get("hw_trigger", "serial_baud", 115200)
 HW_TRIGGER_DESTINATION_URL: str = _get("hw_trigger", "destination_url", "")
