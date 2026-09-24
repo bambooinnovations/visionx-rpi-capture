@@ -425,13 +425,13 @@ Return all tunable SDK settings and their valid ranges for a camera.
 
 `analog_gain` is in raw SDK units; the multiplier is `analog_gain * analog_gain_step` (from `sExposeDesc.fAnalogGainStep`). Captured JPEGs record the gain in the EXIF `UserComment` JSON (`analog_gain_raw`, `analog_gain_x`); `ISOSpeedRatings` is not written because the camera has no calibrated ISO. Extra response fields: `manual_exposure_capture_only`, `stream_auto_exposure` (a stream currently holds AE).
 
-**Response** includes: `ae_enabled`, `exposure_us`, `exposure_min_us`, `exposure_max_us`, `ae_target`, `auto_gain`, `analog_gain`, `analog_gain_min`, `analog_gain_max`, `analog_gain_step`, `r_gain`, `g_gain`, `b_gain`, `r/g/b_gain_min/max`, `sharpness`, `sharpness_min/max`, `gamma`, `gamma_min/max`, `rotation`, `h_mirror`, `v_mirror`.
+**Response** includes: `ae_enabled`, `exposure_us`, `exposure_min_us`, `exposure_max_us`, `ae_target`, `auto_gain`, `analog_gain`, `analog_gain_min`, `analog_gain_max`, `analog_gain_step`, `r_gain`, `g_gain`, `b_gain`, `r/g/b_gain_min/max`, `sharpness`, `sharpness_min/max`, `gamma`, `gamma_min/max`, `rotation`, `h_mirror`, `v_mirror`, and `draft_changes` (`{key: {"production": …, "draft": …}}` for each unsaved draft edit; empty when there is no draft).
 
 ---
 
 ### `POST /api/cameras/settings`
 
-Apply settings to the camera hardware without persisting. Changes are live immediately but lost on camera restart unless followed by `/settings/save`.
+Apply settings as a **draft**. The camera holds the draft, so the settings page's preview and `/settings/snapshot` show it, but real captures (`/rpi/capture`, `/capture-all`, debug capture, hardware trigger) keep using the **production** settings: `capture_image()` applies production around every grab while a draft exists. `/settings/save` commits the draft; `/settings/draft/discard` throws it away. Drafts are refused with `409` in hardware-trigger mode (triggered frames are exposed before a swap could happen), and entering that mode discards any draft. The response includes `draft_changes`.
 
 | Query param | Type | Default | Description |
 | ----------- | ---- | ------- | ----------- |
@@ -461,7 +461,13 @@ Apply settings to the camera hardware without persisting. Changes are live immed
 
 ### `POST /api/cameras/settings/save`
 
-Apply settings and persist them to the SDK's per-serial config file. Same body as `POST /settings`. Persisted settings survive camera reconnection.
+**Save to production.** Applies the body, then commits everything the camera holds (including any draft) as the production settings and persists it to the SDK's per-serial config file. Same body as `POST /settings`. Persisted settings survive camera reconnection.
+
+---
+
+### `POST /api/cameras/settings/draft/discard`
+
+Throw away the draft: puts the production settings back on the camera. Returns `{"camera_id": 0, "reverted": [keys]}`. The settings page calls this when it is left with a draft (via `sendBeacon`).
 
 ---
 

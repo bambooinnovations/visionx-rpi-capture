@@ -39,7 +39,14 @@
     </div>
   </div>
   <div class="page-header-right">
-    <span id="unsaved-badge" class="pill pill-yellow hidden">Unsaved changes</span>
+    <button id="draft-badge" class="pill pill-yellow draft-badge hidden" type="button"
+            aria-expanded="false" aria-controls="draft-list">Draft</button>
+    <div id="draft-list" class="draft-list hidden">
+      <table class="draft-table">
+        <thead><tr><th>Setting</th><th>Production</th><th>Draft</th></tr></thead>
+        <tbody id="draft-list-items"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -53,15 +60,12 @@
     </div>
 
     <div class="profile-banner">
-      <strong>You are tuning the capture profile.</strong>
-      These values are what a captured still image uses, and Save stores them for the camera.
-      <div class="profile-banner-note" id="profile-banner-note"></div>
+      Changes are a draft until you <strong>Save to production</strong>.
     </div>
 
     <!-- Exposure -->
     <section class="settings-section">
       <h2 class="section-title">Exposure <span class="scope-badge scope-capture" id="exposure-scope-badge">Capture</span></h2>
-      <p class="section-note" id="exposure-scope-note"></p>
 
       <div class="setting-row">
         <label class="setting-label" for="ae-enabled">Auto Exposure</label>
@@ -74,7 +78,7 @@
       <div id="manual-exposure-row" class="setting-row indent hidden">
         <label class="setting-label">
           Exposure Time
-          <input type="number" class="setting-value" id="exposure-value" step="1"><span class="setting-unit">ms</span>
+          <input type="number" class="setting-value" id="exposure-value" step="any"><span class="setting-unit">ms</span>
         </label>
         <input type="range" class="slider" id="exposure-us" min="0" max="1000" step="1" value="170">
       </div>
@@ -174,7 +178,7 @@
         <a href="/stitch">Recalibrate on the Stitch page.</a>
       </div>
       <div class="setting-row wb-row">
-        <div class="wb-hint">Point at a neutral white/grey surface under working lights. Calibrates at the capture exposure and saves to the capture profile.</div>
+        <div class="wb-hint">Point at a white or grey surface.</div>
         <button id="btn-wb" class="btn btn-secondary" onclick="autoTuneWB()">Auto Tune WB</button>
       </div>
     </section>
@@ -279,34 +283,38 @@
 
     <div class="preview-controls">
       <div class="mode-selector">
-        <label class="mode-option" title="Every change is applied to the live stream as you make it">
-          <input type="radio" name="preview-mode" value="live" checked>
-          Live
-        </label>
-        <label class="mode-option" title="Changes are applied only when you press Apply">
-          <input type="radio" name="preview-mode" value="manual">
-          Manual Apply
-        </label>
-        <label class="mode-option" title="Stream stops; take a still snapshot at the real capture exposure">
-          <input type="radio" name="preview-mode" value="photo">
+        <label class="mode-option" title="Take still snapshots with the draft settings">
+          <input type="radio" name="preview-mode" value="photo" checked>
           Photo
         </label>
+        <label class="mode-option" title="Live stream showing the draft settings as you change them">
+          <input type="radio" name="preview-mode" value="live">
+          Live
+        </label>
       </div>
-      <button id="btn-action" class="btn btn-secondary" style="visibility:hidden">Apply</button>
+      <button id="btn-action" class="btn btn-secondary" onclick="takeSnapshot()">Take Snapshot</button>
     </div>
 
     <div class="stream-wrap">
-      <img id="preview-stream" class="stream-img" alt="Camera stream">
+      <img id="preview-stream" class="stream-img hidden" alt="Camera stream">
       <img id="snapshot-img" class="stream-img hidden" alt="Snapshot">
-      <div id="snapshot-placeholder" class="snapshot-placeholder hidden">
-        <p>Press "Take Snapshot" to capture a frame</p>
+      <div id="snapshot-placeholder" class="snapshot-placeholder">
+        <p>Take a snapshot to preview</p>
+      </div>
+
+      <button id="snapshot-info-open" class="snapshot-info-open hidden" type="button">Snapshot settings</button>
+      <div id="snapshot-info" class="snapshot-info hidden" role="dialog" aria-labelledby="snapshot-info-title">
+        <div class="snapshot-info-head">
+          <strong id="snapshot-info-title">Snapshot settings</strong>
+          <button id="snapshot-info-close" class="snapshot-info-close" type="button" aria-label="Close">✕</button>
+        </div>
+        <dl id="snapshot-info-list" class="snapshot-info-list"></dl>
+        <button id="btn-use-manual" class="btn btn-primary snapshot-info-use" type="button">Use as manual</button>
       </div>
     </div>
 
-    <p class="stream-hint" id="preview-hint">Changes visible in stream within a few frames.</p>
     <div id="preview-ae-warning" class="exposure-warning hidden">
-      Another live stream is running on auto-exposure, so this preview can look brighter or darker than a captured image.
-      Use <strong>Photo</strong> mode to see the real capture exposure.
+      Another stream is on auto exposure, so this preview may differ. Use <strong>Photo</strong>.
     </div>
 
   </div>
@@ -317,8 +325,8 @@
 <div class="action-bar">
   <button class="btn btn-danger-outline" onclick="confirmFactoryReset()">Factory Reset</button>
   <div class="action-bar-right">
-    <button class="btn btn-secondary" onclick="resetChanges()">Reset</button>
-    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+    <button id="btn-discard" class="btn btn-secondary" onclick="discardDraft()" disabled>Discard draft</button>
+    <button id="btn-save" class="btn btn-primary" onclick="saveSettings()" disabled>Save to production</button>
   </div>
 </div>
 
@@ -326,7 +334,7 @@
 <div id="factory-reset-dialog" class="dialog-backdrop hidden">
   <div class="dialog">
     <h3>Factory Reset Camera {{ camera_id }}</h3>
-    <p>This will reset all camera parameters to factory defaults:</p>
+    <p>This will reset all camera parameters to factory defaults and <strong>save them to production</strong>:</p>
     <ul>
       <li>Auto-exposure and auto gain on, target brightness 100</li>
       <li>Analog gain and RGB gains reset to neutral</li>

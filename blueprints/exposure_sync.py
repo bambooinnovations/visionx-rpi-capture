@@ -29,7 +29,7 @@ import structlog
 from camera.mindvision import CameraMode, MindVisionCamera
 from flask import Blueprint, jsonify, request
 
-from blueprints.mindvision import _apply_mv_settings, _encode_raw_frame, _read_mv_settings
+from blueprints.mindvision import _encode_raw_frame, _read_mv_settings
 
 logger = structlog.get_logger()
 
@@ -78,12 +78,14 @@ def apply_saved_state_if_enabled(cam: MindVisionCamera, cam_id: int) -> None:
     if cam._h_camera is None:
         return
     try:
-        applied, errors = _apply_mv_settings(cam._h_camera, {
+        # Straight to production: this runs on hardware-trigger entry, where
+        # captures must use these values and drafts aren't allowed.
+        applied, errors = cam.apply_production({
             "ae_enabled": False,
             "auto_gain": False,
             "exposure_us": exposure_us,
             "analog_gain": analog_gain,
-        }, cam)
+        })
         if errors:
             logger.warning("exposure_sync_apply_on_trigger_entry_partial", camera_id=cam_id, errors=errors)
         else:
@@ -159,7 +161,7 @@ def create_blueprint(
             for cam_id, cam in cameras.items():
                 if cam_id == ref_id or cam._h_camera is None:
                     continue
-                _apply_mv_settings(cam._h_camera, {"ae_enabled": True, "auto_gain": True}, cam)
+                cam.apply_production({"ae_enabled": True, "auto_gain": True})
 
         logger.info("exposure_sync_enabled_changed", enabled=enabled)
         return jsonify({"enabled": enabled})
@@ -238,9 +240,9 @@ def create_blueprint(
 
     @bp.route("/apply", methods=["POST"])
     def apply_to_followers():
-        """Write exposure_us/analog_gain to every non-reference camera's live SDK
-        handle (AE off). In-memory only — does not call CameraSaveParameter;
-        only /save persists durably.
+        """Write exposure_us/analog_gain (AE and auto gain off) to every
+        non-reference camera as a draft: visible in previews, but real captures
+        keep the production settings until /save commits them.
         """
         ref_id = _get_reference_cam()
         if ref_id is None:
@@ -259,12 +261,16 @@ def create_blueprint(
             if cam._h_camera is None:
                 results[cam_id] = {"applied": [], "errors": {"camera": "not open"}}
                 continue
-            applied, errors = _apply_mv_settings(cam._h_camera, {
-                "ae_enabled": False,
-                "auto_gain": False,
-                "exposure_us": exposure_us,
-                "analog_gain": analog_gain,
-            }, cam)
+            # A draft: previewable, but real captures keep production until /save.
+            try:
+                applied, errors = cam.apply_draft({
+                    "ae_enabled": False,
+                    "auto_gain": False,
+                    "exposure_us": exposure_us,
+                    "analog_gain": analog_gain,
+                })
+            except RuntimeError as exc:
+                applied, errors = [], {"camera": str(exc)}
             results[cam_id] = {"applied": applied, "errors": errors}
 
         any_errors = any(r["errors"] for r in results.values())

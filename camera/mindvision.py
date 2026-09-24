@@ -73,6 +73,322 @@ def _parse_exposure_config(config_file: Path) -> tuple[int, int, float]:
     return ae_state, ae_target, exp_time
 
 
+def read_hw_settings(h: int, cap) -> dict:
+    """Read every tunable SDK parameter (and its range) from the camera hardware."""
+    import mvsdk
+    s = {}
+
+    try: s["ae_enabled"] = bool(mvsdk.CameraGetAeState(h))
+    except Exception: s["ae_enabled"] = True
+
+    try: s["exposure_us"] = mvsdk.CameraGetExposureTime(h)
+    except Exception: s["exposure_us"] = 30000.0
+
+    try:
+        exp_min, exp_max, _ = mvsdk.CameraGetExposureTimeRange(h)
+        s["exposure_min_us"] = exp_min
+        s["exposure_max_us"] = exp_max
+    except Exception:
+        s["exposure_min_us"] = 26.0
+        s["exposure_max_us"] = 1_000_000.0
+
+    try: s["ae_target"] = mvsdk.CameraGetAeTarget(h)
+    except Exception: s["ae_target"] = 100
+
+    # Analog gain is in raw SDK units; multiplier = raw * analog_gain_step.
+    try:
+        s["analog_gain"] = mvsdk.CameraGetAnalogGain(h)
+        s["analog_gain_min"] = cap.sExposeDesc.uiAnalogGainMin if cap else 16
+        s["analog_gain_max"] = cap.sExposeDesc.uiAnalogGainMax if cap else 128
+        s["analog_gain_step"] = float(cap.sExposeDesc.fAnalogGainStep) if cap else 0.125
+    except Exception:
+        s.update(analog_gain=16, analog_gain_min=16, analog_gain_max=128, analog_gain_step=0.125)
+
+    try:
+        gain_lo, gain_hi = mvsdk.CameraGetAeAnalogGainRange(h)
+        s["auto_gain"] = bool(s["ae_enabled"]) and gain_lo != gain_hi
+    except Exception:
+        s["auto_gain"] = bool(s["ae_enabled"])
+
+    try:
+        r, g, b = mvsdk.CameraGetGain(h)
+        s.update(r_gain=r, g_gain=g, b_gain=b)
+        if cap:
+            s.update(
+                r_gain_min=cap.sRgbGainRange.iRGainMin, r_gain_max=cap.sRgbGainRange.iRGainMax,
+                g_gain_min=cap.sRgbGainRange.iGGainMin, g_gain_max=cap.sRgbGainRange.iGGainMax,
+                b_gain_min=cap.sRgbGainRange.iBGainMin, b_gain_max=cap.sRgbGainRange.iBGainMax,
+            )
+        else:
+            s.update(r_gain_min=0, r_gain_max=400, g_gain_min=0, g_gain_max=400,
+                     b_gain_min=0, b_gain_max=400)
+    except Exception:
+        s.update(r_gain=100, g_gain=100, b_gain=100,
+                 r_gain_min=0, r_gain_max=400, g_gain_min=0, g_gain_max=400,
+                 b_gain_min=0, b_gain_max=400)
+
+    try:
+        s["sharpness"] = mvsdk.CameraGetSharpness(h)
+        s["sharpness_min"] = cap.sSharpnessRange.iMin if cap else 0
+        s["sharpness_max"] = cap.sSharpnessRange.iMax if cap else 100
+    except Exception:
+        s.update(sharpness=0, sharpness_min=0, sharpness_max=100)
+
+    try:
+        s["gamma"] = mvsdk.CameraGetGamma(h)
+        s["gamma_min"] = cap.sGammaRange.iMin if cap else 0
+        s["gamma_max"] = cap.sGammaRange.iMax if cap else 250
+    except Exception:
+        s.update(gamma=100, gamma_min=0, gamma_max=250)
+
+    try:
+        s["contrast"] = mvsdk.CameraGetContrast(h)
+        s["contrast_min"] = cap.sContrastRange.iMin if cap else 0
+        s["contrast_max"] = cap.sContrastRange.iMax if cap else 200
+    except Exception:
+        s.update(contrast=100, contrast_min=0, contrast_max=200)
+
+    try:
+        s["saturation"] = mvsdk.CameraGetSaturation(h)
+        s["saturation_min"] = cap.sSaturationRange.iMin if cap else 0
+        s["saturation_max"] = cap.sSaturationRange.iMax if cap else 200
+    except Exception:
+        s.update(saturation=100, saturation_min=0, saturation_max=200)
+
+    try: s["noise_filter"] = bool(mvsdk.CameraGetNoiseFilterState(h))
+    except Exception: s["noise_filter"] = False
+
+    try: s["correct_dead_pixel"] = bool(mvsdk.CameraGetCorrectDeadPixel(h))
+    except Exception: s["correct_dead_pixel"] = False
+
+    try: s["inverse"] = bool(mvsdk.CameraGetInverse(h))
+    except Exception: s["inverse"] = False
+
+    try: s["anti_flick"] = bool(mvsdk.CameraGetAntiFlick(h))
+    except Exception: s["anti_flick"] = False
+
+    try: s["light_frequency"] = mvsdk.CameraGetLightFrequency(h)
+    except Exception: s["light_frequency"] = 0
+
+    try:
+        s["frame_speed"] = mvsdk.CameraGetFrameSpeed(h)
+        s["frame_speed_max"] = max(0, (cap.iFrameSpeedDesc - 1) if cap else 2)
+    except Exception:
+        s.update(frame_speed=0, frame_speed_max=2)
+
+    try:
+        s["rotation"] = mvsdk.CameraGetRotate(h)
+        s["h_mirror"] = bool(mvsdk.CameraGetMirror(h, 0))
+        s["v_mirror"] = bool(mvsdk.CameraGetMirror(h, 1))
+    except Exception:
+        s.update(rotation=0, h_mirror=False, v_mirror=False)
+
+    # mono_sensor is a hardware capability (read-only, informs the UI whether
+    # the mono_enabled toggle is meaningful at all); mono_enabled is the
+    # user-controllable ISP color->mono conversion.
+    s["mono_sensor"] = bool(cap.sIspCapacity.bMonoSensor) if cap else False
+    try: s["mono_enabled"] = bool(mvsdk.CameraGetMonochrome(h))
+    except Exception: s["mono_enabled"] = False
+
+    return s
+
+
+def apply_settings(
+    h: int, body: dict, cam: "MindVisionCamera | None" = None,
+) -> tuple[list[str], dict[str, str]]:
+    """Apply body fields to camera hardware without saving. Returns (applied, errors).
+
+    Pass `cam` so exposure/AE edits update its capture profile (which a live
+    stream may be overriding with auto-exposure) instead of poking the hardware.
+    """
+    import mvsdk
+    applied: list[str] = []
+    errors: dict[str, str] = {}
+
+    exposure_keys = [
+        k for k in ("ae_enabled", "exposure_us", "ae_target", "auto_gain", "analog_gain")
+        if k in body
+    ]
+    if cam is not None and exposure_keys:
+        try:
+            cam.set_capture_exposure(
+                ae_enabled=body.get("ae_enabled"),
+                ae_target=body.get("ae_target"),
+                exposure_us=body.get("exposure_us"),
+                auto_gain=body.get("auto_gain"),
+                analog_gain=body.get("analog_gain"),
+            )
+            applied.extend(exposure_keys)
+        except Exception as exc:
+            errors["exposure"] = str(exc)
+        body = {k: v for k, v in body.items() if k not in exposure_keys}
+
+    if "ae_enabled" in body:
+        try:
+            mvsdk.CameraSetAeState(h, 1 if body["ae_enabled"] else 0)
+            applied.append("ae_enabled")
+        except Exception as exc:
+            errors["ae_enabled"] = str(exc)
+
+    # Skip manual exposure when AE is being enabled — setting exposure time
+    # while AE is on can cause some SDK builds to silently disable AE.
+    ae_on = body.get("ae_enabled", None)
+    if "exposure_us" in body and ae_on is not True:
+        try:
+            mvsdk.CameraSetExposureTime(h, float(body["exposure_us"]))
+            applied.append("exposure_us")
+        except Exception as exc:
+            errors["exposure_us"] = str(exc)
+
+    if "ae_target" in body:
+        try:
+            mvsdk.CameraSetAeTarget(h, int(body["ae_target"]))
+            applied.append("ae_target")
+        except Exception as exc:
+            errors["ae_target"] = str(exc)
+
+    if "analog_gain" in body:
+        try:
+            mvsdk.CameraSetAnalogGain(h, int(body["analog_gain"]))
+            applied.append("analog_gain")
+        except Exception as exc:
+            errors["analog_gain"] = str(exc)
+
+    rgb_keys = ("r_gain", "g_gain", "b_gain")
+    if any(k in body for k in rgb_keys):
+        try:
+            r, g, b = mvsdk.CameraGetGain(h)
+            mvsdk.CameraSetGain(
+                h,
+                int(body.get("r_gain", r)),
+                int(body.get("g_gain", g)),
+                int(body.get("b_gain", b)),
+            )
+            applied.extend(k for k in rgb_keys if k in body)
+        except Exception as exc:
+            errors["rgb_gain"] = str(exc)
+
+    if "sharpness" in body:
+        try:
+            mvsdk.CameraSetSharpness(h, int(body["sharpness"]))
+            applied.append("sharpness")
+        except Exception as exc:
+            errors["sharpness"] = str(exc)
+
+    if "gamma" in body:
+        try:
+            mvsdk.CameraSetGamma(h, int(body["gamma"]))
+            applied.append("gamma")
+        except Exception as exc:
+            errors["gamma"] = str(exc)
+
+    if "rotation" in body:
+        try:
+            rot = int(body["rotation"])
+            if rot not in (0, 1, 2, 3):
+                raise ValueError("must be 0–3")
+            mvsdk.CameraSetRotate(h, rot)
+            applied.append("rotation")
+        except Exception as exc:
+            errors["rotation"] = str(exc)
+
+    if "h_mirror" in body:
+        try:
+            mvsdk.CameraSetMirror(h, 0, int(bool(body["h_mirror"])))
+            applied.append("h_mirror")
+        except Exception as exc:
+            errors["h_mirror"] = str(exc)
+
+    if "v_mirror" in body:
+        try:
+            mvsdk.CameraSetMirror(h, 1, int(bool(body["v_mirror"])))
+            applied.append("v_mirror")
+        except Exception as exc:
+            errors["v_mirror"] = str(exc)
+
+    if "mono_enabled" in body:
+        try:
+            mvsdk.CameraSetMonochrome(h, 1 if body["mono_enabled"] else 0)
+            applied.append("mono_enabled")
+        except Exception as exc:
+            errors["mono_enabled"] = str(exc)
+
+    if "contrast" in body:
+        try:
+            mvsdk.CameraSetContrast(h, int(body["contrast"]))
+            applied.append("contrast")
+        except Exception as exc:
+            errors["contrast"] = str(exc)
+
+    if "saturation" in body:
+        try:
+            mvsdk.CameraSetSaturation(h, int(body["saturation"]))
+            applied.append("saturation")
+        except Exception as exc:
+            errors["saturation"] = str(exc)
+
+    if "noise_filter" in body:
+        try:
+            mvsdk.CameraSetNoiseFilter(h, bool(body["noise_filter"]))
+            applied.append("noise_filter")
+        except Exception as exc:
+            errors["noise_filter"] = str(exc)
+
+    if "correct_dead_pixel" in body:
+        try:
+            mvsdk.CameraSetCorrectDeadPixel(h, bool(body["correct_dead_pixel"]))
+            applied.append("correct_dead_pixel")
+        except Exception as exc:
+            errors["correct_dead_pixel"] = str(exc)
+
+    if "inverse" in body:
+        try:
+            mvsdk.CameraSetInverse(h, bool(body["inverse"]))
+            applied.append("inverse")
+        except Exception as exc:
+            errors["inverse"] = str(exc)
+
+    if "anti_flick" in body:
+        try:
+            mvsdk.CameraSetAntiFlick(h, bool(body["anti_flick"]))
+            applied.append("anti_flick")
+        except Exception as exc:
+            errors["anti_flick"] = str(exc)
+
+    if "light_frequency" in body:
+        try:
+            mvsdk.CameraSetLightFrequency(h, int(body["light_frequency"]))
+            applied.append("light_frequency")
+        except Exception as exc:
+            errors["light_frequency"] = str(exc)
+
+    if "frame_speed" in body:
+        try:
+            mvsdk.CameraSetFrameSpeed(h, int(body["frame_speed"]))
+            applied.append("frame_speed")
+        except Exception as exc:
+            errors["frame_speed"] = str(exc)
+
+    return applied, errors
+
+
+# Everything the settings page edits. A "production" set of these values is
+# what real captures use; the page edits a draft on the live hardware.
+SETTING_KEYS: tuple[str, ...] = (
+    "ae_enabled", "ae_target", "exposure_us", "auto_gain", "analog_gain",
+    "r_gain", "g_gain", "b_gain", "sharpness", "gamma", "contrast", "saturation",
+    "noise_filter", "correct_dead_pixel", "inverse", "anti_flick",
+    "light_frequency", "frame_speed", "rotation", "h_mirror", "v_mirror",
+    "mono_enabled",
+)
+
+
+def _same_setting(key: str, a, b) -> bool:
+    if key == "exposure_us":
+        return abs(float(a) - float(b)) < 0.5
+    return a == b
+
+
 class MindVisionCamera(BaseCamera):
     def __init__(self, camera_index: int = 0) -> None:
         self._camera_index = camera_index
@@ -106,6 +422,12 @@ class MindVisionCamera(BaseCamera):
         self._capture_exposure: list = [1, 100, 30000.0, 1, 16]
         self._stream_ae_active: bool = False
         self._exposure_lock = threading.RLock()
+        # Draft vs production. The settings page edits a draft that lives on the
+        # hardware; _production holds the values real captures must use, and
+        # capture_image() swaps them in around the grab while a draft exists.
+        # Both are guarded by _exposure_lock.
+        self._production: dict = {}
+        self._draft_dirty: bool = False
         # Ranges the SDK's AE may roam over when exposure / gain are "auto".
         # A fixed value is expressed by collapsing the matching range to it.
         self._ae_exposure_range: tuple[float, float] = (100.0, 2_000_000.0)
@@ -218,6 +540,8 @@ class MindVisionCamera(BaseCamera):
         )
         self._frame_buffer = mvsdk.CameraAlignMalloc(buf_size, 16)
         self._h_camera = h
+        self._production = self.current_settings()
+        self._draft_dirty = False
 
         # Register connection-status callback so we get explicit log entries
         # when USB drops rather than only seeing C++ bulk-transfer errors.
@@ -496,10 +820,104 @@ class MindVisionCamera(BaseCamera):
                 self._write_capture_exposure()
 
     def save_parameters(self) -> None:
-        """Persist camera parameters with the capture profile (not stream AE) on disk."""
+        """Commit the current settings (including any draft) to production and disk.
+
+        Persists with the capture profile applied, not a stream's AE override.
+        """
         if self._h_camera is None:
             raise RuntimeError("Camera not open")
-        with self.capture_exposure_applied():
+        with self._exposure_lock:
+            with self.capture_exposure_applied():
+                mvsdk.CameraSaveParameter(self._h_camera, 0)
+            self._production = self.current_settings()
+            self._draft_dirty = False
+
+    # ── Draft vs production ──────────────────────────────────────────────────
+    # The camera has one set of hardware settings. Settings-page edits go onto
+    # the hardware as a draft (so its preview and snapshots show them), while
+    # _production keeps the saved values; capture_image() applies production
+    # around every real capture, so a draft never reaches production images.
+
+    def current_settings(self) -> dict:
+        """The settings the camera currently holds (the draft, if one exists)."""
+        s = read_hw_settings(self._h_camera, self._cap)
+        # Exposure/gain come from the capture profile: the hardware reads back
+        # a stream's auto-exposure override while one is running.
+        s.update(self.capture_exposure)
+        return {k: s[k] for k in SETTING_KEYS if k in s}
+
+    def draft_changes(self) -> dict[str, tuple]:
+        """{key: (production value, draft value)} for every setting that differs."""
+        with self._exposure_lock:
+            if not self._draft_dirty or self._h_camera is None:
+                return {}
+            current = self.current_settings()
+            changes = {
+                k: (self._production[k], current[k])
+                for k in SETTING_KEYS
+                if k in current and k in self._production
+                and not _same_setting(k, self._production[k], current[k])
+            }
+            if not changes:
+                self._draft_dirty = False
+            return changes
+
+    def apply_draft(self, body: dict) -> tuple[list[str], dict[str, str]]:
+        """Apply settings as a draft: live on the camera, not used by captures."""
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        if self._mode == CameraMode.HARDWARE_TRIGGER:
+            # Hardware-triggered frames are exposed before capture_image() runs,
+            # too late to swap production in, so no drafts in this mode.
+            raise RuntimeError("Settings can't be tested while in hardware-trigger mode")
+        with self._exposure_lock:
+            applied, errors = apply_settings(self._h_camera, body, self)
+            if applied:
+                self._draft_dirty = True
+            return applied, errors
+
+    def apply_production(self, body: dict) -> tuple[list[str], dict[str, str]]:
+        """Apply settings straight to production (in memory; not saved to disk)."""
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        with self._exposure_lock:
+            applied, errors = apply_settings(self._h_camera, body, self)
+            current = self.current_settings()
+            for key in applied:
+                if key in current:
+                    self._production[key] = current[key]
+            return applied, errors
+
+    def discard_draft(self) -> list[str]:
+        """Put the production settings back on the camera. Returns the keys reverted."""
+        with self._exposure_lock:
+            changes = self.draft_changes()
+            if changes:
+                apply_settings(self._h_camera, {k: p for k, (p, _) in changes.items()}, self)
+            self._draft_dirty = False
+            return list(changes)
+
+    @contextmanager
+    def production_applied(self):
+        """Apply the production settings for the duration of a real capture.
+
+        Yields True if a draft was swapped out (the caller should let queued
+        frames settle), False if production was already in effect.
+        """
+        with self._exposure_lock:
+            changes = self.draft_changes() if self._h_camera is not None else {}
+            if not changes:
+                yield False
+                return
+            apply_settings(self._h_camera, {k: p for k, (p, _) in changes.items()}, self)
+            try:
+                yield True
+            finally:
+                apply_settings(self._h_camera, {k: d for k, (_, d) in changes.items()}, self)
+
+    def _persist_production(self) -> None:
+        """Write the production settings to disk without committing a draft."""
+        with self._exposure_lock, self.production_applied(), self.capture_exposure_applied():
             mvsdk.CameraSaveParameter(self._h_camera, 0)
 
     def set_mode(self, mode: CameraMode) -> None:
@@ -513,8 +931,13 @@ class MindVisionCamera(BaseCamera):
             self.set_trigger_mode(1)
         self._mode = mode
         if mode == CameraMode.HARDWARE_TRIGGER:
-            # Hardware trigger uses the saved/manual exposure everywhere.
+            # Hardware trigger uses the saved/manual exposure everywhere, and
+            # production settings must already be on the camera when a trigger
+            # fires, so any draft is dropped.
             self.end_stream_exposure()
+            reverted = self.discard_draft()
+            if reverted:
+                logger.info("mindvision_draft_discarded", camera_id=self._camera_index, keys=reverted)
         logger.info("camera_mode_changed", mode=mode.value)
 
     def apply_config(self, key: str, value) -> None:
@@ -580,8 +1003,11 @@ class MindVisionCamera(BaseCamera):
             r, g, b = mvsdk.CameraGetGain(self._h_camera)
             mvsdk.CameraSetGain(self._h_camera, r, g, b)
 
-            # persist to Configs/<sn>-Group0.config
-            mvsdk.CameraSaveParameter(self._h_camera, 0)
+        # Persist to Configs/<sn>-Group0.config. The new gains go to production;
+        # any other draft edits stay a draft instead of being saved with them.
+        with self._exposure_lock:
+            self._production.update(r_gain=r, g_gain=g, b_gain=b)
+            self._persist_production()
         logger.info("white_balance_calibrated", r=r, g=g, b=b)
 
         return {"r_gain": r, "g_gain": g, "b_gain": b}
@@ -652,7 +1078,7 @@ class MindVisionCamera(BaseCamera):
         exposure in their header; stop once one matches the capture profile.
         Caller must hold self._lock.
         """
-        _, _, target_us, auto_gain, gain_raw = self._capture_exposure
+        ae, _, target_us, auto_gain, gain_raw = self._capture_exposure
         # Fixed gain must match too: a frame can carry the capture exposure
         # while still holding the gain the stream's AE left behind.
         target_gain_x = None
@@ -666,7 +1092,8 @@ class MindVisionCamera(BaseCamera):
             except mvsdk.CameraException:
                 return
             gain_ok = target_gain_x is None or abs(head.fAnalogGain - target_gain_x) <= 0.02 * target_gain_x
-            if gain_ok and abs(head.uiExpTime - target_us) <= max(50.0, 0.02 * target_us):
+            exp_ok = bool(ae) or abs(head.uiExpTime - target_us) <= max(50.0, 0.02 * target_us)
+            if gain_ok and exp_ok:
                 # This frame matches, but it's the one we just dropped; the next
                 # grab (the real capture) is guaranteed to be at capture exposure.
                 return
@@ -676,8 +1103,9 @@ class MindVisionCamera(BaseCamera):
 
         Exposure, analog gain, gamma/contrast/saturation and the RGB digital
         gains come from the frame header, which the SDK fills per frame, so
-        they describe exactly this image. AE state/target are read from the
-        camera; caller must hold self._lock so nothing changes them mid-read.
+        they describe exactly this image. The auto/manual flags come from the
+        capture profile: the hardware AE flag is also on for fixed exposure
+        with auto gain. Caller must hold self._lock.
         """
         state: dict = {}
         if head is not None:
@@ -691,17 +1119,19 @@ class MindVisionCamera(BaseCamera):
                 g_gain=round(float(head.fGgain), 4),
                 b_gain=round(float(head.fBgain), 4),
             )
-        h = self._h_camera
-        for key, getter in (
-            ("ae_enabled", lambda: bool(mvsdk.CameraGetAeState(h))),
-            ("ae_target", lambda: int(mvsdk.CameraGetAeTarget(h))),
-            ("analog_gain_raw", lambda: int(mvsdk.CameraGetAnalogGain(h))),
-        ):
-            try:
-                state[key] = getter()
-            except Exception:
-                state[key] = None
+        state["ae_enabled"] = bool(self._capture_exposure[0])
         state["auto_gain"] = bool(self._capture_exposure[3])
+        state["ae_target"] = int(self._capture_exposure[1])
+        # Raw gain for this frame (multiplier / step), so it can be fed back
+        # into the manual gain setting; falls back to the camera's current value.
+        step = float(self._cap.sExposeDesc.fAnalogGainStep) if self._cap is not None else 0.0
+        if head is not None and step > 0:
+            state["analog_gain_raw"] = round(float(head.fAnalogGain) / step)
+        else:
+            try:
+                state["analog_gain_raw"] = int(mvsdk.CameraGetAnalogGain(self._h_camera))
+            except Exception:
+                state["analog_gain_raw"] = None
         return state
 
     def _build_exif(self, captured_at: str, state: dict | None = None) -> bytes | None:
@@ -889,12 +1319,15 @@ class MindVisionCamera(BaseCamera):
         output_image = output_folder / f"cam{self._camera_index}_{time.time_ns()}.jpg"
 
         # Holding _lock for the whole swap keeps the stream from serving (or
-        # stealing) frames taken at the wrong exposure.
-        with self._lock, self.capture_exposure_applied() as swapped:
+        # stealing) frames taken at the wrong settings. production_applied()
+        # swaps out a settings-page draft; capture_exposure_applied() swaps
+        # out a stream's auto-exposure override.
+        with self._lock, self.production_applied() as draft_swapped, \
+                self.capture_exposure_applied() as swapped:
             if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
                 mvsdk.CameraSoftTrigger(self._h_camera)
             t0 = time.perf_counter()
-            if swapped:
+            if swapped or (draft_swapped and self._streaming):
                 self._discard_until_exposure_settled()
             frame, head = self._grab_frame(timeout_ms=self.exposure_grab_timeout_ms())
             capture_duration_ms = (time.perf_counter() - t0) * 1000

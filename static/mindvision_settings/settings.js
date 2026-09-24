@@ -2,10 +2,10 @@
 
 const API = `/api/cameras`;
 
-let initialSettings = {};
-let previewMode = 'live'; // 'live' | 'manual' | 'photo'
-let liveMode = true;
+let previewMode = 'photo'; // 'photo' | 'live'
 let liveTimer = null;
+let _draftCount = 0;   // settings that differ from production, per the server
+let _pending = false;  // a local change not yet acknowledged by the server
 
 // ── API helpers ───────────────────────────────────────────────────────
 
@@ -37,11 +37,70 @@ function showSuccess(msg = 'Settings saved') {
     setTimeout(() => el.classList.add('hidden'), 400);
   }, 2000);
 }
-function markDirty() {
-  document.getElementById('unsaved-badge').classList.remove('hidden');
+// ── Draft state ───────────────────────────────────────────────────────
+// Every change is applied to the camera as a draft (preview + snapshots only);
+// real captures keep the production settings until "Save to production".
+
+const DRAFT_LABELS = {
+  ae_enabled: 'Auto Exposure', ae_target: 'AE target', exposure_us: 'Exposure',
+  auto_gain: 'Auto Gain', analog_gain: 'Analog gain',
+  r_gain: 'Red gain', g_gain: 'Green gain', b_gain: 'Blue gain',
+  sharpness: 'Sharpness', gamma: 'Gamma', contrast: 'Contrast', saturation: 'Saturation',
+  noise_filter: 'Noise filter', correct_dead_pixel: 'Dead pixel correction',
+  inverse: 'Invert image', anti_flick: 'Anti-flicker', light_frequency: 'Light frequency',
+  frame_speed: 'Frame speed', rotation: 'Rotation', h_mirror: 'Horizontal mirror',
+  v_mirror: 'Vertical mirror', mono_enabled: 'Monochrome',
+};
+
+function formatDraftValue(key, v) {
+  if (typeof v === 'boolean') return v ? 'on' : 'off';
+  if (key === 'exposure_us') return `${formatExposure(v / 1000)} ms`;
+  if (key === 'analog_gain') return `${gainRawToX(v)}×`;
+  if (key === 'rotation') return `${v * 90}°`;
+  if (key === 'light_frequency') return v ? '60 Hz' : '50 Hz';
+  return String(v);
 }
-function markClean() {
-  document.getElementById('unsaved-badge').classList.add('hidden');
+
+function updateDraftButtons() {
+  const hasDraft = _draftCount > 0 || _pending;
+  document.getElementById('btn-save').disabled = !hasDraft;
+  document.getElementById('btn-discard').disabled = !hasDraft;
+}
+
+// A control changed; the debounced apply will report the real draft state.
+function markDirty() {
+  _pending = true;
+  updateDraftButtons();
+}
+
+function renderDraft(changes) {
+  _pending = false;
+  const entries = Object.entries(changes || {});
+  _draftCount = entries.length;
+  const badge = document.getElementById('draft-badge');
+  badge.textContent = `Draft: ${_draftCount} change${_draftCount === 1 ? '' : 's'}`;
+  badge.classList.toggle('hidden', _draftCount === 0);
+  if (_draftCount === 0) toggleDraftList(false);
+
+  const body = document.getElementById('draft-list-items');
+  body.replaceChildren();
+  for (const [key, {production, draft}] of entries) {
+    const tr = document.createElement('tr');
+    for (const text of [DRAFT_LABELS[key] || key, formatDraftValue(key, production), formatDraftValue(key, draft)]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+  updateDraftButtons();
+}
+
+function toggleDraftList(open) {
+  const list = document.getElementById('draft-list');
+  const show = open ?? list.classList.contains('hidden');
+  list.classList.toggle('hidden', !show);
+  document.getElementById('draft-badge').setAttribute('aria-expanded', String(show));
 }
 
 function setSlider(id, value, min, max, valueId, fmt) {
@@ -57,16 +116,20 @@ function setSlider(id, value, min, max, valueId, fmt) {
   }
 }
 
-// The exposure slider works in whole milliseconds; the API stays in µs.
+// The exposure UI works in milliseconds; the API stays in µs. Dragging the
+// slider and the − / + buttons move in whole milliseconds, but the value itself
+// keeps µs precision so a typed, loaded or snapshot-copied exposure (e.g.
+// 12.48 ms) is applied exactly instead of being rounded.
 // Slider position is 0..1000 on a quadratic curve so short exposures (where
 // most tuning happens) get much finer control than a linear 1 ms/px scale.
 const EXPOSURE_POS_MAX = 1000;
 let exposureMinMs = 1;
 const EXPOSURE_MAX_MS = 2000; // UI cap, regardless of what the camera reports
 let exposureMaxMs = EXPOSURE_MAX_MS;
+let exposureMs = 30;
 
 function formatExposure(ms) {
-  return Math.round(ms);
+  return parseFloat(ms.toFixed(3));
 }
 function exposurePosToMs(pos) {
   const t = pos / EXPOSURE_POS_MAX;
@@ -78,13 +141,13 @@ function exposureMsToPos(ms) {
   return Math.round(t * EXPOSURE_POS_MAX);
 }
 function getExposureMs() {
-  return exposurePosToMs(parseFloat(document.getElementById('exposure-us').value));
+  return exposureMs;
 }
 function setExposureMs(ms) {
-  const clamped = Math.min(Math.max(Math.round(ms), exposureMinMs), exposureMaxMs);
-  document.getElementById('exposure-us').value = exposureMsToPos(clamped);
-  document.getElementById('exposure-value').value = clamped;
-  return clamped;
+  exposureMs = formatExposure(Math.min(Math.max(ms, exposureMinMs), exposureMaxMs));
+  document.getElementById('exposure-us').value = exposureMsToPos(exposureMs);
+  document.getElementById('exposure-value').value = exposureMs;
+  return exposureMs;
 }
 
 function updateExposureWarning(us) {
@@ -117,43 +180,21 @@ function gainXToRaw(x) {
 
 let _captureOnly = true; // server: manual exposure applies to stills only
 
-function autoModeNote(aeEnabled, autoGain) {
-  if (aeEnabled && autoGain) return 'Exposure time and gain both adjust to reach the AE target.';
-  if (aeEnabled) return 'Exposure time adjusts to reach the AE target; gain stays fixed.';
-  if (autoGain) return 'Exposure time stays fixed; gain adjusts to reach the AE target.';
-  return 'Exposure time and gain are both fixed.';
-}
-
 function updateAutoRows() {
   const ae = document.getElementById('ae-enabled').checked;
   const autoGain = document.getElementById('auto-gain').checked;
   document.getElementById('manual-exposure-row').classList.toggle('hidden', ae);
   document.getElementById('manual-gain-row').classList.toggle('hidden', autoGain);
-  updateExposureScope(ae, autoGain);
+  updateExposureScope(ae);
 }
 
-function updateExposureScope(aeEnabled, autoGain) {
+// Manual exposure is capture-only while other live streams run on auto.
+function updateExposureScope(aeEnabled) {
   const badge = document.getElementById('exposure-scope-badge');
-  const note = document.getElementById('exposure-scope-note');
-  const banner = document.getElementById('profile-banner-note');
-
   const stillsOnly = _captureOnly && !aeEnabled;
   badge.textContent = stillsOnly ? 'Capture only' : 'Stream + capture';
   badge.classList.toggle('scope-capture', stillsOnly);
   badge.classList.toggle('scope-both', !stillsOnly);
-
-  const mode = autoModeNote(aeEnabled, autoGain);
-  if (aeEnabled) {
-    note.textContent = `${mode} Applies to live streams and captured images.`;
-  } else if (_captureOnly) {
-    note.textContent = `${mode} Used only when an image is captured; live streams stay on full auto exposure.`;
-  } else {
-    note.textContent = `${mode} Applies to live streams and captured images.`;
-  }
-
-  banner.textContent = _captureOnly
-    ? 'Exposure and gain are the one exception: while Auto Exposure is off, live streams elsewhere (Home, Monitor…) keep using full auto exposure. Everything else below applies to both.'
-    : 'Manual exposure applies everywhere, including live streams.';
 }
 
 // ── Populate controls from a settings object ──────────────────────────
@@ -275,15 +316,14 @@ function collectSettings() {
 async function loadSettings() {
   try {
     const s = await apiFetch(`${API}/settings?camera_id=${CAMERA_ID}`);
-    initialSettings = {...s};
     populateUI(s);
-    markClean();
+    renderDraft(s.draft_changes);
   } catch (e) {
     showError('Failed to load camera settings: ' + e.message);
   }
 }
 
-// ── Apply (live or on-click) ──────────────────────────────────────────
+// ── Apply the controls as a draft ─────────────────────────────────────
 
 async function applyChanges() {
   const s = collectSettings();
@@ -298,14 +338,16 @@ async function applyChanges() {
     } else {
       clearError();
     }
+    renderDraft(res.draft_changes);
   } catch (e) {
     showError('Apply error: ' + e.message);
   }
 }
 
-// ── Save to SDK config file ───────────────────────────────────────────
+// ── Save to production (and the SDK config file) ──────────────────────
 
 async function saveSettings() {
+  clearTimeout(liveTimer);
   const s = collectSettings();
   try {
     const res = await apiFetch(`${API}/settings/save?camera_id=${CAMERA_ID}`, {
@@ -316,23 +358,37 @@ async function saveSettings() {
     if (res.errors && Object.keys(res.errors).length > 0) {
       showError('Save had errors: ' + JSON.stringify(res.errors));
     } else {
-      initialSettings = {...s};
-      markClean();
+      renderDraft({});
       clearError();
-      showSuccess('Settings saved');
+      showSuccess('Saved to production');
     }
   } catch (e) {
     showError('Save error: ' + e.message);
   }
 }
 
-// ── Reset to last saved state ─────────────────────────────────────────
+// ── Discard the draft ─────────────────────────────────────────────────
 
-async function resetChanges() {
-  populateUI(initialSettings);
-  markClean();
-  if (liveMode) await applyChanges();
+async function discardDraft() {
+  clearTimeout(liveTimer);
+  try {
+    await apiFetch(`${API}/settings/draft/discard?camera_id=${CAMERA_ID}`, {method: 'POST'});
+    await loadSettings(); // controls back to the production values
+    clearError();
+    showSuccess('Draft discarded');
+  } catch (e) {
+    showError('Discard failed: ' + e.message);
+  }
 }
+
+// Leaving the page throws the draft away so no test settings are left on
+// the camera. sendBeacon still delivers while the page unloads.
+window.addEventListener('pagehide', () => {
+  clearTimeout(liveTimer);
+  if (_draftCount > 0 || _pending) {
+    navigator.sendBeacon(`${API}/settings/draft/discard?camera_id=${CAMERA_ID}`);
+  }
+});
 
 // ── Auto white balance ────────────────────────────────────────────────
 
@@ -351,9 +407,9 @@ async function autoTuneWB() {
     document.getElementById('r-gain-value').value = gains.r_gain;
     document.getElementById('g-gain-value').value = gains.g_gain;
     document.getElementById('b-gain-value').value = gains.b_gain;
-    // Merge into initialSettings since WB cal already saved
-    initialSettings = {...initialSettings, ...gains};
-    markClean();
+    // The new gains are saved straight to production; refresh the draft list.
+    const s = await apiFetch(`${API}/settings?camera_id=${CAMERA_ID}`);
+    renderDraft(s.draft_changes);
   } catch (e) {
     showError('WB calibration failed: ' + e.message);
   } finally {
@@ -385,7 +441,6 @@ async function doFactoryReset() {
 
 function onSettingChange() {
   markDirty();
-  if (!liveMode) return;
   clearTimeout(liveTimer);
   liveTimer = setTimeout(applyChanges, 250);
 }
@@ -418,6 +473,65 @@ function stopStream() {
 }
 
 let _snapshotObjectUrl = null;
+let _snapshotState = null; // settings the last snapshot was taken with
+
+// ── Snapshot settings card ────────────────────────────────────────────
+
+function showSnapshotInfo(open) {
+  const has = !!_snapshotState;
+  document.getElementById('snapshot-info').classList.toggle('hidden', !(has && open));
+  document.getElementById('snapshot-info-open').classList.toggle('hidden', !(has && !open));
+}
+
+function renderSnapshotInfo(st) {
+  const list = document.getElementById('snapshot-info-list');
+  list.replaceChildren();
+  const row = (label, value, mode) => {
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    if (mode) {
+      const tag = document.createElement('span');
+      tag.className = `mode mode-${mode}`;
+      tag.textContent = mode;
+      dd.append(tag);
+    }
+    list.append(dt, dd);
+  };
+  const fmt = (v, digits) => (v == null ? '—' : String(parseFloat(Number(v).toFixed(digits))));
+
+  row('Exposure', st.exposure_us == null ? '—' : `${fmt(st.exposure_us / 1000, 3)} ms`,
+      st.ae_enabled ? 'auto' : 'manual');
+  row('Analog gain', st.analog_gain_x == null ? '—' : `${fmt(st.analog_gain_x, 3)}×`,
+      st.auto_gain ? 'auto' : 'manual');
+  if (st.ae_enabled || st.auto_gain) row('AE target', fmt(st.ae_target, 0));
+  row('Gamma', fmt(st.gamma, 0));
+  row('Contrast', fmt(st.contrast, 0));
+  row('Saturation', fmt(st.saturation, 0));
+  row('R / G / B gain', [st.r_gain, st.g_gain, st.b_gain].map(v => fmt(v, 2)).join(' / '));
+
+  const canUse = st.exposure_us != null && st.analog_gain_raw != null;
+  document.getElementById('btn-use-manual').disabled = !canUse;
+}
+
+// Copy the snapshot's exposure and gain into the manual controls and apply
+// them, so the next snapshot is taken with the same values held fixed.
+async function useSnapshotAsManual() {
+  const st = _snapshotState;
+  if (!st) return;
+  document.getElementById('ae-enabled').checked = false;
+  document.getElementById('auto-gain').checked = false;
+  const ms = setExposureMs(st.exposure_us / 1000);
+  updateExposureWarning(ms * 1000);
+  const gain = document.getElementById('analog-gain');
+  gain.value = st.analog_gain_raw;
+  document.getElementById('analog-gain-value').value = gainRawToX(gain.value);
+  updateAutoRows();
+  markDirty();
+  await applyChanges();
+  showSuccess(`Manual: ${ms} ms, ${gainRawToX(gain.value)}×`);
+}
 
 async function takeSnapshot() {
   const btn = document.getElementById('btn-action');
@@ -429,12 +543,22 @@ async function takeSnapshot() {
   placeholder.querySelector('p').textContent = 'Capturing…';
   placeholder.classList.remove('hidden');
   img.classList.add('hidden');
+  _snapshotState = null;
+  showSnapshotInfo(false);
 
   try {
+    // Photo mode doesn't live-apply, so push the current controls first;
+    // otherwise the snapshot would use whatever was last applied.
+    await applyChanges();
     const res = await fetch(`${API}/settings/snapshot?camera_id=${CAMERA_ID}`);
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       throw new Error(j.error || `HTTP ${res.status}`);
+    }
+    try {
+      _snapshotState = JSON.parse(res.headers.get('X-Capture-State') || 'null');
+    } catch (_) {
+      _snapshotState = null;
     }
     const blob = await res.blob();
     if (_snapshotObjectUrl) URL.revokeObjectURL(_snapshotObjectUrl);
@@ -442,10 +566,14 @@ async function takeSnapshot() {
     img.src = _snapshotObjectUrl;
     img.classList.remove('hidden');
     placeholder.classList.add('hidden');
+    if (_snapshotState) {
+      renderSnapshotInfo(_snapshotState);
+      showSnapshotInfo(true);
+    }
     clearError();
   } catch (e) {
     showError('Snapshot failed: ' + e.message);
-    placeholder.querySelector('p').textContent = 'Press "Take Snapshot" to capture a frame';
+    placeholder.querySelector('p').textContent = 'Take a snapshot to preview';
   } finally {
     btn.disabled = false;
     btn.textContent = 'Take Snapshot';
@@ -492,14 +620,14 @@ function wireControls() {
   // live-apply on release ('change') to avoid hammering the camera with
   // intermediate values that stall the preview at long exposures.
   document.getElementById('exposure-us').addEventListener('input', function () {
-    const ms = getExposureMs();
+    exposureMs = exposurePosToMs(parseFloat(this.value));
+    const ms = exposureMs;
     const us = ms * 1000;
     document.getElementById('exposure-value').value = formatExposure(ms);
     updateExposureWarning(us);
     markDirty();
   });
   document.getElementById('exposure-us').addEventListener('change', function () {
-    if (!liveMode) return;
     clearTimeout(liveTimer);
     liveTimer = setTimeout(applyChanges, 100);
   });
@@ -568,7 +696,7 @@ function wireControls() {
   // exposure), hold to repeat. Much easier than pixel-hunting with the thumb.
   document.querySelectorAll('input.slider').forEach(slider => {
     const nudge = dir => {
-      if (slider.id === 'exposure-us') setExposureMs(getExposureMs() + dir);
+      if (slider.id === 'exposure-us') setExposureMs(Math.round(getExposureMs()) + dir);
       else if (dir > 0) slider.stepUp();
       else slider.stepDown();
       slider.dispatchEvent(new Event('input'));
@@ -630,35 +758,36 @@ function wireControls() {
     applySettingsSearch(this.value);
   });
 
+  // Snapshot settings card
+  document.getElementById('snapshot-info-close').addEventListener('click', () => showSnapshotInfo(false));
+  document.getElementById('snapshot-info-open').addEventListener('click', () => showSnapshotInfo(true));
+  document.getElementById('btn-use-manual').addEventListener('click', useSnapshotAsManual);
+
+  // Draft badge opens the list of changes
+  document.getElementById('draft-badge').addEventListener('click', () => toggleDraftList());
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.page-header-right')) toggleDraftList(false);
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') toggleDraftList(false);
+  });
+
   // Preview mode radio
   document.querySelectorAll('[name="preview-mode"]').forEach(radio => {
     radio.addEventListener('change', function () {
       const prev = previewMode;
       previewMode = this.value;
-      liveMode = previewMode === 'live';
 
-      const btn = document.getElementById('btn-action');
-      if (previewMode === 'manual') {
-        btn.textContent = 'Apply';
-        btn.onclick = applyChanges;
-        btn.style.visibility = 'visible';
-      } else if (previewMode === 'photo') {
-        btn.textContent = 'Take Snapshot';
-        btn.onclick = takeSnapshot;
-        btn.style.visibility = 'visible';
-      } else {
-        btn.style.visibility = 'hidden';
-      }
+      document.getElementById('btn-action').style.visibility =
+        previewMode === 'photo' ? 'visible' : 'hidden';
 
       if (previewMode === 'photo') {
         stopStream();
         document.getElementById('snapshot-placeholder').classList.remove('hidden');
         document.getElementById('snapshot-img').classList.add('hidden');
-        document.getElementById('preview-hint').textContent =
-          'Click "Take Snapshot" to capture a frame — works at any exposure time.';
       } else if (prev === 'photo') {
-        document.getElementById('preview-hint').textContent =
-          'Changes visible in stream within a few frames.';
+        _snapshotState = null;
+        showSnapshotInfo(false);
         startStream();
       }
     });
@@ -689,6 +818,5 @@ async function checkStitchWbLock() {
 document.addEventListener('DOMContentLoaded', async () => {
   wireControls();
   await loadSettings();
-  startStream();
   checkStitchWbLock();
 });
