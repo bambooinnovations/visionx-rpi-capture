@@ -101,11 +101,38 @@ function updateExposureWarning(us) {
   }
 }
 
+// Analog gain: the slider moves in raw SDK units (one tick = one hardware
+// step), the value box shows the multiplier. Per the MindVision spec the
+// multiplier is raw * sExposeDesc.fAnalogGainStep.
+let gainStep = 0.125;
+
+function gainRawToX(raw) {
+  return parseFloat((raw * gainStep).toFixed(3));
+}
+function gainXToRaw(x) {
+  return Math.round(x / gainStep);
+}
+
 // ── Capture-profile scope messaging ───────────────────────────────────
 
 let _captureOnly = true; // server: manual exposure applies to stills only
 
-function updateExposureScope(aeEnabled) {
+function autoModeNote(aeEnabled, autoGain) {
+  if (aeEnabled && autoGain) return 'Exposure time and gain both adjust to reach the AE target.';
+  if (aeEnabled) return 'Exposure time adjusts to reach the AE target; gain stays fixed.';
+  if (autoGain) return 'Exposure time stays fixed; gain adjusts to reach the AE target.';
+  return 'Exposure time and gain are both fixed.';
+}
+
+function updateAutoRows() {
+  const ae = document.getElementById('ae-enabled').checked;
+  const autoGain = document.getElementById('auto-gain').checked;
+  document.getElementById('manual-exposure-row').classList.toggle('hidden', ae);
+  document.getElementById('manual-gain-row').classList.toggle('hidden', autoGain);
+  updateExposureScope(ae, autoGain);
+}
+
+function updateExposureScope(aeEnabled, autoGain) {
   const badge = document.getElementById('exposure-scope-badge');
   const note = document.getElementById('exposure-scope-note');
   const banner = document.getElementById('profile-banner-note');
@@ -115,16 +142,17 @@ function updateExposureScope(aeEnabled) {
   badge.classList.toggle('scope-capture', stillsOnly);
   badge.classList.toggle('scope-both', !stillsOnly);
 
+  const mode = autoModeNote(aeEnabled, autoGain);
   if (aeEnabled) {
-    note.textContent = 'Auto exposure is on: live streams and captured images both adjust automatically.';
+    note.textContent = `${mode} Applies to live streams and captured images.`;
   } else if (_captureOnly) {
-    note.textContent = 'Manual exposure is used only when an image is captured. Live streams stay on auto exposure.';
+    note.textContent = `${mode} Used only when an image is captured; live streams stay on full auto exposure.`;
   } else {
-    note.textContent = 'Manual exposure applies to live streams and captured images.';
+    note.textContent = `${mode} Applies to live streams and captured images.`;
   }
 
   banner.textContent = _captureOnly
-    ? 'Exposure is the one exception: while Auto Exposure is off, live streams elsewhere (Home, Monitor…) keep using auto exposure. Everything else below applies to both.'
+    ? 'Exposure and gain are the one exception: while Auto Exposure is off, live streams elsewhere (Home, Monitor…) keep using full auto exposure. Everything else below applies to both.'
     : 'Manual exposure applies everywhere, including live streams.';
 }
 
@@ -133,10 +161,9 @@ function updateExposureScope(aeEnabled) {
 function populateUI(s) {
   // Exposure
   _captureOnly = s.manual_exposure_capture_only !== false;
-  const aeEl = document.getElementById('ae-enabled');
-  aeEl.checked = s.ae_enabled;
-  document.getElementById('manual-exposure-row').classList.toggle('hidden', s.ae_enabled);
-  updateExposureScope(s.ae_enabled);
+  document.getElementById('ae-enabled').checked = s.ae_enabled;
+  document.getElementById('auto-gain').checked = s.auto_gain !== false;
+  updateAutoRows();
   document.getElementById('preview-ae-warning').classList.toggle('hidden', !s.stream_auto_exposure);
 
   exposureMinMs = Math.max(1, Math.ceil((s.exposure_min_us || 1000) / 1000));
@@ -149,10 +176,15 @@ function populateUI(s) {
 
   setSlider('ae-target', s.ae_target, 0, 255, 'ae-target-value');
 
-  // Gain
+  // Analog gain
+  gainStep = s.analog_gain_step > 0 ? s.analog_gain_step : 0.125;
   setSlider('analog-gain', s.analog_gain,
     s.analog_gain_min || 16, s.analog_gain_max || 128,
-    'analog-gain-value');
+    'analog-gain-value', gainRawToX);
+  const gainBox = document.getElementById('analog-gain-value');
+  gainBox.min = gainRawToX(s.analog_gain_min || 16);
+  gainBox.max = gainRawToX(s.analog_gain_max || 128);
+  gainBox.step = gainStep;
 
   setSlider('r-gain', s.r_gain,
     s.r_gain_min ?? 0, s.r_gain_max ?? 400, 'r-gain-value');
@@ -216,6 +248,7 @@ function collectSettings() {
     ae_enabled:  document.getElementById('ae-enabled').checked,
     exposure_us: getExposureMs() * 1000,
     ae_target:   parseInt(document.getElementById('ae-target').value),
+    auto_gain:   document.getElementById('auto-gain').checked,
     analog_gain: parseInt(document.getElementById('analog-gain').value),
     r_gain:      parseInt(document.getElementById('r-gain').value),
     g_gain:      parseInt(document.getElementById('g-gain').value),
@@ -447,8 +480,11 @@ function applySettingsSearch(query) {
 function wireControls() {
   // AE toggle
   document.getElementById('ae-enabled').addEventListener('change', function () {
-    document.getElementById('manual-exposure-row').classList.toggle('hidden', this.checked);
-    updateExposureScope(this.checked);
+    updateAutoRows();
+    onSettingChange();
+  });
+  document.getElementById('auto-gain').addEventListener('change', function () {
+    updateAutoRows();
     onSettingChange();
   });
 
@@ -471,7 +507,7 @@ function wireControls() {
   // Simple value-display sliders
   [
     ['ae-target',    'ae-target-value',    v => v],
-    ['analog-gain',  'analog-gain-value',  v => v],
+    ['analog-gain',  'analog-gain-value',  gainRawToX],
     ['r-gain',       'r-gain-value',       v => v],
     ['g-gain',       'g-gain-value',       v => v],
     ['b-gain',       'b-gain-value',       v => v],
@@ -494,10 +530,12 @@ function wireControls() {
     if (!slider) return;
     const commit = () => {
       if (box.value === '' || isNaN(parseFloat(box.value))) {
-        box.value = slider.id === 'exposure-us' ? getExposureMs() : slider.value;
+        box.value = slider.id === 'exposure-us' ? getExposureMs()
+          : slider.id === 'analog-gain' ? gainRawToX(slider.value) : slider.value;
         return;
       }
       if (slider.id === 'exposure-us') setExposureMs(parseFloat(box.value));
+      else if (slider.id === 'analog-gain') slider.value = gainXToRaw(parseFloat(box.value));
       else slider.value = box.value;
       slider.dispatchEvent(new Event('input'));
       if (slider.id === 'exposure-us') slider.dispatchEvent(new Event('change'));

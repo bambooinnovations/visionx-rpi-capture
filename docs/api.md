@@ -412,9 +412,20 @@ Return all tunable SDK settings and their valid ranges for a camera.
 | ----------- | ---- | ------- | ----------- |
 | `camera_id` | int | `0` | Target camera |
 
-**Capture profile.** With `manual_exposure_capture_only = true` (default), the exposure fields (`ae_enabled`, `exposure_us`, `ae_target`) describe the *capture profile*: the values used when a still is captured. While a live stream runs and the profile is manual, the camera stays on auto-exposure and the profile is swapped in only around each capture, `/settings/snapshot`, `/calibrate-wb` and saves. Gains, white balance, gamma etc. apply to both. Extra response fields: `manual_exposure_capture_only`, `stream_auto_exposure` (a stream currently holds AE).
+**Capture profile.** With `manual_exposure_capture_only = true` (default), the exposure fields (`ae_enabled`, `exposure_us`, `ae_target`, `auto_gain`, `analog_gain`) describe the *capture profile*: the values used when a still is captured. While a live stream runs and the profile is manual, the camera stays on auto-exposure and the profile is swapped in only around each capture, `/settings/snapshot`, `/calibrate-wb` and saves. RGB gains, white balance, gamma etc. apply to both.
 
-**Response** includes: `ae_enabled`, `exposure_us`, `exposure_min_us`, `exposure_max_us`, `ae_target`, `analog_gain`, `analog_gain_min`, `analog_gain_max`, `r_gain`, `g_gain`, `b_gain`, `r/g/b_gain_min/max`, `sharpness`, `sharpness_min/max`, `gamma`, `gamma_min/max`, `rotation`, `h_mirror`, `v_mirror`.
+**Auto / fixed gain.** The SDK has no separate auto-gain switch: auto exposure drives exposure time and analog gain together. `auto_gain` is implemented through the AE ranges (`CameraSetAeExposureRange` / `CameraSetAeAnalogGainRange`), which the SDK persists in its config file:
+
+| `ae_enabled` | `auto_gain` | Behaviour |
+| --- | --- | --- |
+| true | true | AE adjusts exposure and gain |
+| true | false | AE adjusts exposure only; gain held at `analog_gain` |
+| false | true | Exposure held at `exposure_us`; AE adjusts gain only |
+| false | false | Fully manual |
+
+`analog_gain` is in raw SDK units; the multiplier is `analog_gain * analog_gain_step` (from `sExposeDesc.fAnalogGainStep`). Captured JPEGs record the gain in the EXIF `UserComment` JSON (`analog_gain_raw`, `analog_gain_x`); `ISOSpeedRatings` is not written because the camera has no calibrated ISO. Extra response fields: `manual_exposure_capture_only`, `stream_auto_exposure` (a stream currently holds AE).
+
+**Response** includes: `ae_enabled`, `exposure_us`, `exposure_min_us`, `exposure_max_us`, `ae_target`, `auto_gain`, `analog_gain`, `analog_gain_min`, `analog_gain_max`, `analog_gain_step`, `r_gain`, `g_gain`, `b_gain`, `r/g/b_gain_min/max`, `sharpness`, `sharpness_min/max`, `gamma`, `gamma_min/max`, `rotation`, `h_mirror`, `v_mirror`.
 
 ---
 
@@ -433,6 +444,7 @@ Apply settings to the camera hardware without persisting. Changes are live immed
   "ae_enabled": false,
   "exposure_us": 50000,
   "ae_target": 120,
+  "auto_gain": false,
   "analog_gain": 32,
   "r_gain": 112, "g_gain": 100, "b_gain": 138,
   "sharpness": 10,

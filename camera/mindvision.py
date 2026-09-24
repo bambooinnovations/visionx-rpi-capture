@@ -97,14 +97,19 @@ class MindVisionCamera(BaseCamera):
         # Keep a strong reference to the ctypes callback so it isn't GC'd.
         self._connection_cb = None
         # The "capture profile" exposure: what stills are taken with, and what the
-        # settings page edits and saves. [ae_state, ae_target, exposure_us].
+        # settings page edits and saves.
+        # [ae_state, ae_target, exposure_us, auto_gain, analog_gain_raw].
         # With config.MANUAL_EXPOSURE_CAPTURE_ONLY and a manual profile, live
         # streams run on auto-exposure instead (_stream_ae_active) and the
         # profile is applied only around a capture. Ordering: _lock, then
         # _exposure_lock, never the reverse.
-        self._capture_exposure: list = [1, 100, 30000.0]
+        self._capture_exposure: list = [1, 100, 30000.0, 1, 16]
         self._stream_ae_active: bool = False
         self._exposure_lock = threading.RLock()
+        # Ranges the SDK's AE may roam over when exposure / gain are "auto".
+        # A fixed value is expressed by collapsing the matching range to it.
+        self._ae_exposure_range: tuple[float, float] = (100.0, 2_000_000.0)
+        self._ae_gain_range: tuple[int, int] = (16, 128)
 
     def open(self) -> None:
         global _sdk_initialized, _dev_list_cache
@@ -171,12 +176,15 @@ class MindVisionCamera(BaseCamera):
         # call (verified empirically — it clears the auto-exposure flag). So the
         # trigger mode must always be set BEFORE auto-exposure, never after, or
         # AE gets silently clobbered back to off.
+        self._ae_gain_range = (
+            int(cap.sExposeDesc.uiAnalogGainMin), int(cap.sExposeDesc.uiAnalogGainMax)
+        )
         if _first_run:
             mvsdk.CameraSetTriggerMode(h, 1)  # software trigger; continuous only while streaming
-            mvsdk.CameraSetAeState(h, 1)
-            mvsdk.CameraSetAeTarget(h, 100)
+            self._ae_exposure_range = self._default_ae_exposure_range(h)
+            self._capture_exposure = [1, 100, 30000.0, 1, self._ae_gain_range[0]]
+            self._write_capture_exposure(h)
             mvsdk.CameraSaveParameter(h, 0)
-            self._capture_exposure = [1, 100, 30000.0]
         else:
             # CameraLoadParameter restores all saved params (including trigger
             # mode), so reload Team A config first, then re-assert software
@@ -190,11 +198,10 @@ class MindVisionCamera(BaseCamera):
             # Re-assert software trigger — CameraLoadParameter may have restored
             # continuous mode (0) from a previous stream session's saved config.
             mvsdk.CameraSetTriggerMode(h, 1)
-            mvsdk.CameraSetAeState(h, _ae_state)
-            mvsdk.CameraSetAeTarget(h, _ae_target)
-            if not _ae_state:
-                mvsdk.CameraSetExposureTime(h, _exp_time)
-            self._capture_exposure = [_ae_state, _ae_target, _exp_time]
+            self._capture_exposure = self._load_capture_profile(
+                h, _ae_state, _ae_target, _exp_time,
+            )
+            self._write_capture_exposure(h)
         self._stream_ae_active = False
 
         # CameraPlay starts the SDK's internal grab thread; subsequent
@@ -311,10 +318,63 @@ class MindVisionCamera(BaseCamera):
     # usable, and the profile is swapped back in around each capture / save /
     # white-balance calibration.
 
+    def _default_ae_exposure_range(self, h: int) -> tuple[float, float]:
+        """AE exposure range the SDK currently holds, unless it is collapsed.
+
+        A collapsed range (min == max) is a saved fixed-exposure/auto-gain
+        profile, not a usable auto range, so fall back to the sensor range
+        capped at 2 s (the settings page's exposure limit).
+        """
+        try:
+            lo, hi = mvsdk.CameraGetAeExposureRange(h)
+            if hi - lo > 1.0:
+                return float(lo), float(hi)
+        except Exception:
+            pass
+        try:
+            lo, hi, _ = mvsdk.CameraGetExposureTimeRange(h)
+            return float(lo), float(min(hi, 2_000_000.0))
+        except Exception:
+            return 100.0, 2_000_000.0
+
+    def _load_capture_profile(
+        self, h: int, ae_state: int, ae_target: int, exp_time: float,
+    ) -> list:
+        """Rebuild the capture profile from the loaded SDK parameters.
+
+        The gain mode isn't stored as its own flag; it's encoded in the AE ranges
+        the SDK persists (user_ae_{min,max}_{exposure_time,analog_gain}):
+          AE on, gain range collapsed      -> auto exposure, fixed gain
+          AE on, exposure range collapsed  -> fixed exposure, auto gain
+        """
+        gain_lo, gain_hi = self._ae_gain_range
+        try:
+            gain = int(mvsdk.CameraGetAnalogGain(h))
+        except Exception:
+            gain = gain_lo
+        auto_gain = 1 if ae_state else 0
+        exp_lo = exp_hi = None
+        if ae_state:
+            try:
+                exp_lo, exp_hi = mvsdk.CameraGetAeExposureRange(h)
+                ae_gain_lo, ae_gain_hi = mvsdk.CameraGetAeAnalogGainRange(h)
+                if ae_gain_lo == ae_gain_hi:
+                    auto_gain, gain = 0, int(ae_gain_lo)
+            except Exception:
+                pass
+        self._ae_exposure_range = self._default_ae_exposure_range(h)
+        if ae_state and auto_gain and exp_lo is not None and exp_hi - exp_lo <= 1.0:
+            ae_state, exp_time = 0, float(exp_lo)
+        gain = min(max(gain, gain_lo), gain_hi)
+        return [ae_state, ae_target, exp_time, auto_gain, gain]
+
     @property
     def capture_exposure(self) -> dict:
-        ae, target, exp = self._capture_exposure
-        return {"ae_enabled": bool(ae), "ae_target": target, "exposure_us": exp}
+        ae, target, exp, auto_gain, gain = self._capture_exposure
+        return {
+            "ae_enabled": bool(ae), "ae_target": target, "exposure_us": exp,
+            "auto_gain": bool(auto_gain), "analog_gain": gain,
+        }
 
     def _stream_override_wanted(self) -> bool:
         return (
@@ -323,17 +383,45 @@ class MindVisionCamera(BaseCamera):
             and self._mode != CameraMode.HARDWARE_TRIGGER
         )
 
-    def _write_capture_exposure(self) -> None:
-        h = self._h_camera
-        ae, target, exp = self._capture_exposure
-        mvsdk.CameraSetAeState(h, ae)
-        mvsdk.CameraSetAeTarget(h, target)
-        if not ae:
+    def _write_capture_exposure(self, h: int | None = None) -> None:
+        """Put the capture profile on the camera.
+
+        The SDK has no separate auto-gain switch: AE drives exposure and analog
+        gain together within CameraSetAe{Exposure,AnalogGain}Range. Fixed gain
+        collapses the gain range to one value; fixed exposure with auto gain
+        keeps AE on with the exposure range collapsed instead.
+        """
+        h = self._h_camera if h is None else h
+        ae, target, exp, auto_gain, gain = self._capture_exposure
+        if ae or auto_gain:
+            exp_range = self._ae_exposure_range if ae else (exp, exp)
+            gain_range = self._ae_gain_range if auto_gain else (gain, gain)
+            mvsdk.CameraSetAeExposureRange(h, *exp_range)
+            mvsdk.CameraSetAeAnalogGainRange(h, *gain_range)
+            # Set fixed values before AE goes on: writing exposure while AE is
+            # on can make some SDK builds silently drop AE.
+            if not ae:
+                mvsdk.CameraSetExposureTime(h, exp)
+            if not auto_gain:
+                mvsdk.CameraSetAnalogGain(h, gain)
+            mvsdk.CameraSetAeState(h, 1)
+            mvsdk.CameraSetAeTarget(h, target)
+        else:
+            # Leave the AE ranges open so a saved manual profile doesn't persist
+            # collapsed ranges that would later read back as a fixed-gain profile.
+            mvsdk.CameraSetAeExposureRange(h, *self._ae_exposure_range)
+            mvsdk.CameraSetAeAnalogGainRange(h, *self._ae_gain_range)
+            mvsdk.CameraSetAeState(h, 0)
+            mvsdk.CameraSetAeTarget(h, target)
             mvsdk.CameraSetExposureTime(h, exp)
+            mvsdk.CameraSetAnalogGain(h, gain)
 
     def _write_stream_exposure(self) -> None:
-        mvsdk.CameraSetAeState(self._h_camera, 1)
-        mvsdk.CameraSetAeTarget(self._h_camera, self._capture_exposure[1])
+        h = self._h_camera
+        mvsdk.CameraSetAeExposureRange(h, *self._ae_exposure_range)
+        mvsdk.CameraSetAeAnalogGainRange(h, *self._ae_gain_range)
+        mvsdk.CameraSetAeState(h, 1)
+        mvsdk.CameraSetAeTarget(h, self._capture_exposure[1])
 
     def begin_stream_exposure(self) -> None:
         """Switch to auto-exposure for a live stream if the capture profile is manual.
@@ -378,6 +466,8 @@ class MindVisionCamera(BaseCamera):
         ae_enabled: bool | None = None,
         ae_target: int | None = None,
         exposure_us: float | None = None,
+        auto_gain: bool | None = None,
+        analog_gain: int | None = None,
     ) -> None:
         """Update the capture profile's exposure (what the settings page edits).
 
@@ -393,6 +483,11 @@ class MindVisionCamera(BaseCamera):
                 self._capture_exposure[1] = int(ae_target)
             if exposure_us is not None:
                 self._capture_exposure[2] = float(exposure_us)
+            if auto_gain is not None:
+                self._capture_exposure[3] = 1 if auto_gain else 0
+            if analog_gain is not None:
+                lo, hi = self._ae_gain_range
+                self._capture_exposure[4] = min(max(int(analog_gain), lo), hi)
             if self._streaming and self._stream_override_wanted():
                 self._write_stream_exposure()
                 self._stream_ae_active = True
@@ -557,7 +652,12 @@ class MindVisionCamera(BaseCamera):
         exposure in their header; stop once one matches the capture profile.
         Caller must hold self._lock.
         """
-        target_us = self._capture_exposure[2]
+        _, _, target_us, auto_gain, gain_raw = self._capture_exposure
+        # Fixed gain must match too: a frame can carry the capture exposure
+        # while still holding the gain the stream's AE left behind.
+        target_gain_x = None
+        if not auto_gain and self._cap is not None:
+            target_gain_x = gain_raw * float(self._cap.sExposeDesc.fAnalogGainStep)
         timeout_ms = self.exposure_grab_timeout_ms()
         for _ in range(max_frames):
             try:
@@ -565,7 +665,8 @@ class MindVisionCamera(BaseCamera):
                 mvsdk.CameraReleaseImageBuffer(self._h_camera, raw)
             except mvsdk.CameraException:
                 return
-            if abs(head.uiExpTime - target_us) <= max(50.0, 0.02 * target_us):
+            gain_ok = target_gain_x is None or abs(head.fAnalogGain - target_gain_x) <= 0.02 * target_gain_x
+            if gain_ok and abs(head.uiExpTime - target_us) <= max(50.0, 0.02 * target_us):
                 # This frame matches, but it's the one we just dropped; the next
                 # grab (the real capture) is guaranteed to be at capture exposure.
                 return
@@ -600,13 +701,15 @@ class MindVisionCamera(BaseCamera):
                 state[key] = getter()
             except Exception:
                 state[key] = None
+        state["auto_gain"] = bool(self._capture_exposure[3])
         return state
 
     def _build_exif(self, captured_at: str, state: dict | None = None) -> bytes | None:
         """Build a piexif EXIF blob from the settings captured with the frame.
 
-        ExposureTime and ISOSpeedRatings hold the headline values; the full
-        snapshot is written as JSON in UserComment.
+        ExposureTime holds the headline value; the full snapshot (including
+        analog gain) is written as JSON in UserComment. ISOSpeedRatings is left
+        out on purpose: the camera has analog gain, not a calibrated ISO.
         """
         try:
             import json
@@ -615,7 +718,6 @@ class MindVisionCamera(BaseCamera):
 
             state = state or {}
             exp_us = int(state.get("exposure_us") or 0)
-            gain_raw = int(state.get("analog_gain_raw") or 0)
 
             model = ""
             serial = ""
@@ -646,7 +748,6 @@ class MindVisionCamera(BaseCamera):
                 "Exif": {
                     piexif.ExifIFD.DateTimeOriginal: exif_dt,
                     piexif.ExifIFD.ExposureTime: (exp_us, 1_000_000),
-                    piexif.ExifIFD.ISOSpeedRatings: gain_raw,
                     # Standard EXIF tag so any viewer shows AE: 0 = auto, 1 = manual.
                     piexif.ExifIFD.ExposureMode: 0 if state.get("ae_enabled") else 1,
                     piexif.ExifIFD.BodySerialNumber: serial.encode(),

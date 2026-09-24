@@ -1,6 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+<head><script>
+window.__posts = [];
+const MOCK = {ae_enabled: true, auto_gain: false, exposure_us: 30000, exposure_min_us: 26, exposure_max_us: 1000000,
+  ae_target: 100, analog_gain: 24, analog_gain_min: 16, analog_gain_max: 128, analog_gain_step: 0.125,
+  r_gain: 100, g_gain: 100, b_gain: 100, sharpness: 0, gamma: 100, contrast: 100, saturation: 100,
+  noise_filter: false, correct_dead_pixel: false, inverse: false, anti_flick: false, light_frequency: 0,
+  frame_speed: 0, frame_speed_max: 2, rotation: 0, h_mirror: false, v_mirror: false, mono_sensor: false,
+  mono_enabled: false, stream_auto_exposure: false, manual_exposure_capture_only: true};
+window.fetch = async (url, opts = {}) => {
+  if (opts.method === 'POST') window.__posts.push(JSON.parse(opts.body || '{}'));
+  const body = String(url).includes('/settings?') && !opts.method ? MOCK : {applied: [], errors: {}};
+  return new Response(JSON.stringify(body), {status: 200, headers: {'Content-Type': 'application/json'}});
+};
+</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VisionX — Camera Settings</title>
@@ -34,7 +47,7 @@
   <div class="page-header-left">
     <a href="/" class="btn-back">← Home</a>
     <div>
-      <h1 id="page-title">Camera {{ camera_id }} Settings</h1>
+      <h1 id="page-title">Camera 0 Settings</h1>
       <p class="page-subtitle">MindVision — capture profile</p>
     </div>
   </div>
@@ -325,7 +338,7 @@
 <!-- ── Factory reset confirm dialog ───────────────────────────────────── -->
 <div id="factory-reset-dialog" class="dialog-backdrop hidden">
   <div class="dialog">
-    <h3>Factory Reset Camera {{ camera_id }}</h3>
+    <h3>Factory Reset Camera 0</h3>
     <p>This will reset all camera parameters to factory defaults:</p>
     <ul>
       <li>Auto-exposure and auto gain on, target brightness 100</li>
@@ -344,7 +357,7 @@
 </div>
 
 <script>
-  const CAMERA_ID = {{ camera_id }};
+  const CAMERA_ID = 0;
 </script>
 <script src="/static/mindvision_settings/settings.js"></script>
 </body>

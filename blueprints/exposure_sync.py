@@ -80,6 +80,7 @@ def apply_saved_state_if_enabled(cam: MindVisionCamera, cam_id: int) -> None:
     try:
         applied, errors = _apply_mv_settings(cam._h_camera, {
             "ae_enabled": False,
+            "auto_gain": False,
             "exposure_us": exposure_us,
             "analog_gain": analog_gain,
         }, cam)
@@ -158,7 +159,7 @@ def create_blueprint(
             for cam_id, cam in cameras.items():
                 if cam_id == ref_id or cam._h_camera is None:
                     continue
-                _apply_mv_settings(cam._h_camera, {"ae_enabled": True}, cam)
+                _apply_mv_settings(cam._h_camera, {"ae_enabled": True, "auto_gain": True}, cam)
 
         logger.info("exposure_sync_enabled_changed", enabled=enabled)
         return jsonify({"enabled": enabled})
@@ -260,6 +261,7 @@ def create_blueprint(
                 continue
             applied, errors = _apply_mv_settings(cam._h_camera, {
                 "ae_enabled": False,
+                "auto_gain": False,
                 "exposure_us": exposure_us,
                 "analog_gain": analog_gain,
             }, cam)

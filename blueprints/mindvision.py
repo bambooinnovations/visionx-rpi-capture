@@ -501,6 +501,9 @@ def _read_mv_settings(h: int, cap, cam: "MindVisionCamera | None" = None) -> dic
         s["ae_target"] = profile["ae_target"]
         if not profile["ae_enabled"]:
             s["exposure_us"] = profile["exposure_us"]
+        s["auto_gain"] = profile["auto_gain"]
+        if not profile["auto_gain"]:
+            s["analog_gain"] = profile["analog_gain"]
         s["stream_auto_exposure"] = bool(cam._stream_ae_active)
         s["manual_exposure_capture_only"] = bool(config.MANUAL_EXPOSURE_CAPTURE_ONLY)
     return s
@@ -527,12 +530,20 @@ def _read_mv_settings_hw(h: int, cap) -> dict:
     try: s["ae_target"] = mvsdk.CameraGetAeTarget(h)
     except Exception: s["ae_target"] = 100
 
+    # Analog gain is in raw SDK units; multiplier = raw * analog_gain_step.
     try:
         s["analog_gain"] = mvsdk.CameraGetAnalogGain(h)
         s["analog_gain_min"] = cap.sExposeDesc.uiAnalogGainMin if cap else 16
         s["analog_gain_max"] = cap.sExposeDesc.uiAnalogGainMax if cap else 128
+        s["analog_gain_step"] = float(cap.sExposeDesc.fAnalogGainStep) if cap else 0.125
     except Exception:
-        s.update(analog_gain=16, analog_gain_min=16, analog_gain_max=128)
+        s.update(analog_gain=16, analog_gain_min=16, analog_gain_max=128, analog_gain_step=0.125)
+
+    try:
+        gain_lo, gain_hi = mvsdk.CameraGetAeAnalogGainRange(h)
+        s["auto_gain"] = bool(s["ae_enabled"]) and gain_lo != gain_hi
+    except Exception:
+        s["auto_gain"] = bool(s["ae_enabled"])
 
     try:
         r, g, b = mvsdk.CameraGetGain(h)
@@ -629,13 +640,18 @@ def _apply_mv_settings(
     applied: list[str] = []
     errors: dict[str, str] = {}
 
-    exposure_keys = [k for k in ("ae_enabled", "exposure_us", "ae_target") if k in body]
+    exposure_keys = [
+        k for k in ("ae_enabled", "exposure_us", "ae_target", "auto_gain", "analog_gain")
+        if k in body
+    ]
     if cam is not None and exposure_keys:
         try:
             cam.set_capture_exposure(
                 ae_enabled=body.get("ae_enabled"),
                 ae_target=body.get("ae_target"),
                 exposure_us=body.get("exposure_us"),
+                auto_gain=body.get("auto_gain"),
+                analog_gain=body.get("analog_gain"),
             )
             applied.extend(exposure_keys)
         except Exception as exc:
@@ -1425,7 +1441,7 @@ def create_blueprint(
         """Apply settings to the camera hardware without persisting.
 
         Send any subset of the writable fields: ae_enabled, exposure_us, ae_target,
-        analog_gain, r_gain, g_gain, b_gain, sharpness, gamma, rotation, h_mirror, v_mirror.
+        auto_gain, analog_gain, r_gain, g_gain, b_gain, sharpness, gamma, rotation, h_mirror, v_mirror.
         Changes are live immediately but lost on camera restart unless followed by /settings/save.
         """
         cam, cam_id = _resolve_camera()
@@ -1466,6 +1482,7 @@ def create_blueprint(
         defaults = {
             "ae_enabled": True,
             "ae_target": 100,
+            "auto_gain": True,
             "analog_gain": cap.sExposeDesc.uiAnalogGainMin if cap else 16,
             "r_gain": 100, "g_gain": 100, "b_gain": 100,
             "sharpness": cap.sSharpnessRange.iMin if cap else 0,
