@@ -148,8 +148,11 @@ if mindvision_cameras:
                 logger.info("qc_station_ready", camera_ids=sorted(mindvision_cameras.keys()))
         else:
             # Fabric station (default): auto-start decoder if the Arduino serial
-            # port is already present at boot.
-            if os.path.exists(config.HW_TRIGGER_SERIAL_PORT):
+            # port is already present at boot, unless auto-start is disabled in
+            # config (a UI stop alone does not survive restarts).
+            if not config.HW_TRIGGER_AUTO_START:
+                logger.info("decoder_auto_start_disabled_by_config")
+            elif os.path.exists(config.HW_TRIGGER_SERIAL_PORT):
                 _mode_errors = {}
                 for _cam_id, _cam in mindvision_cameras.items():
                     try:

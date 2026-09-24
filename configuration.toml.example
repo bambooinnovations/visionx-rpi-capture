@@ -64,6 +64,8 @@ db_path = "/tmp/visionx_metrics.db"
 # captures + uploads an image on each trigger event.
 # destination_url and destination_api_key can also be updated live via PATCH /rpi/config.
 [hw_trigger]
+# auto_start = false   # persistent off switch for the boot-time decoder auto-start
+#                      # (the camera UI HW Trigger toggle does not survive restarts)
 # serial_port         = "/dev/ttyACM0"   # serial port the Arduino is connected to
 # serial_baud         = 115200           # must match the Arduino sketch (default 115200)
 # destination_url     = "https://yoursite.com/api/captures"  # where to POST triggered images
