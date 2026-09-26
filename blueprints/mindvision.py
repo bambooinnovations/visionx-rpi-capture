@@ -754,6 +754,70 @@ def _read_full_config(h: int, cam: "MindVisionCamera") -> dict:
     }
 
 
+# ── ChArUco focus check ─────────────────────────────────────────────────────
+
+class _FocusSession:
+    """Per-camera state for the focus-check page (reset on each new stream)."""
+
+    def __init__(self) -> None:
+        from camera.focus_check import FocusTracker
+        self.tracker = FocusTracker()
+        self.smoothed: float | None = None
+        self.best: float | None = None
+        self.samples = 0
+        self.latest: dict = {"detected": False, "reason": "Waiting for frames…"}
+
+    def update(self, m) -> dict:
+        d = m.to_dict()
+        if m.edge_px is not None:
+            # EMA tames frame-to-frame noise; best is taken on the smoothed
+            # value so one lucky frame can't set an unreachable target.
+            self.smoothed = m.edge_px if self.smoothed is None else 0.5 * self.smoothed + 0.5 * m.edge_px
+            self.samples += 1
+            if self.samples >= 3 and (self.best is None or self.smoothed < self.best):
+                self.best = self.smoothed
+        d["smoothed_px"] = None if self.smoothed is None else round(self.smoothed, 3)
+        d["best_px"] = None if self.best is None else round(self.best, 3)
+        d["pct_of_best"] = (
+            round(min(1.0, self.best / self.smoothed) * 100, 1)
+            if self.best and self.smoothed else None
+        )
+        d["ts"] = time.time()
+        self.latest = d
+        return d
+
+
+_focus_sessions: dict[int, _FocusSession] = {}
+
+
+def _render_focus_check_frame(frame: "np.ndarray", session: _FocusSession, max_width: int) -> bytes:
+    """JPEG of the frame with each ChArUco corner coloured by sharpness."""
+    import cv2 as _cv2
+
+    m = session.tracker.measure(frame)
+    session.update(m)
+
+    h, w = frame.shape[:2]
+    scale = min(1.0, max_width / w)
+    img = frame if frame.ndim == 3 and frame.shape[2] == 3 else _cv2.cvtColor(
+        frame if frame.ndim == 2 else frame[:, :, 0], _cv2.COLOR_GRAY2BGR)
+    if scale < 1.0:
+        img = _cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=_cv2.INTER_AREA)
+    else:
+        img = img.copy()
+
+    if m.points is not None:
+        best = session.best or float(m.points[:, 2].min())
+        r = max(3, int(m.square_px * scale * 0.18))
+        for x, y, ew in m.points:
+            ratio = best / max(float(ew), 1e-3)
+            color = (60, 200, 60) if ratio >= 0.85 else (40, 170, 240) if ratio >= 0.6 else (60, 60, 230)
+            _cv2.circle(img, (int(x * scale), int(y * scale)), r, color, -1)
+
+    ok, buf = _cv2.imencode(".jpg", img, [_cv2.IMWRITE_JPEG_QUALITY, 80])
+    return buf.tobytes()
+
+
 def _make_mjpeg_stream(cam, cam_id: int, fps: float, render_fn, timeout_fn=None):
     """Return a generator function that streams MJPEG frames.
 
@@ -1100,6 +1164,65 @@ def create_blueprint(
             _make_mjpeg_stream(cam, cam_id, fps, _render_cal)(),
             mimetype="multipart/x-mixed-replace; boundary=frame",
         )
+
+    # ── ChArUco focus check ──────────────────────────────────────────────────
+
+    @bp.route("/focus-check/stream")
+    def focus_check_stream():
+        """MJPEG preview for the focus-check page; also feeds /focus-check/metrics.
+
+        Measures ChArUco edge sharpness on every frame (see camera/focus_check.py).
+        Each new connection starts a fresh session (best value is reset).
+
+        Query params:
+          camera_id  int    Camera index (default 0)
+          fps        float  Frames per second (default 4, max 10)
+          max_width  int    Preview downscale width (default 960)
+        """
+        cam, cam_id = _resolve_camera()
+        if cam is None:
+            return jsonify({"error": f"Camera {cam_id} not found"}), 404
+        if isinstance(cam, MindVisionCamera) and cam.mode == CameraMode.HARDWARE_TRIGGER:
+            return Response("Camera is in hardware trigger mode", status=409, mimetype="text/plain")
+
+        fps = max(0.5, min(request.args.get("fps", 4.0, type=float), 10.0))
+        max_width = request.args.get("max_width", 960, type=int)
+
+        session = _FocusSession()
+        _focus_sessions[cam_id] = session
+
+        def _render(frame):
+            return _render_focus_check_frame(frame, session, max_width)
+
+        return Response(
+            _make_mjpeg_stream(cam, cam_id, fps, _render)(),
+            mimetype="multipart/x-mixed-replace; boundary=frame",
+        )
+
+    @bp.route("/focus-check/metrics")
+    def focus_check_metrics():
+        """Latest focus-check measurement for a camera (poll while the stream is open)."""
+        cam, cam_id = _resolve_camera()
+        if cam is None:
+            return jsonify({"error": f"Camera {cam_id} not found"}), 404
+        session = _focus_sessions.get(cam_id)
+        if session is None:
+            return jsonify({"error": "No focus-check stream running"}), 404
+        return jsonify({"camera_id": cam_id, **session.latest})
+
+    @bp.route("/focus-check/reset", methods=["POST"])
+    def focus_check_reset():
+        """Forget the session best so the next reading becomes the new reference."""
+        cam, cam_id = _resolve_camera()
+        if cam is None:
+            return jsonify({"error": f"Camera {cam_id} not found"}), 404
+        session = _focus_sessions.get(cam_id)
+        if session is not None:
+            session.best = None
+            session.smoothed = None
+            session.samples = 0
+            session.tracker.reset()
+        return jsonify({"ok": True})
 
     # ── Lens placement stream (lean, no focus peaking) ───────────────────────
 

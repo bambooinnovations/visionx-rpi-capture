@@ -40,6 +40,22 @@ Open it in a browser or any MJPEG viewer. The overlay shows:
 
 Adjust the lens focus ring until the score peaks and the trend shows "at or near peak", then lock the focus ring.
 
+### Focus Check page (ChArUco target)
+
+For small screens or precise work, open **`/focus-check`** (or the 🎯 button on the calibration page). It measures the
+sharpness of every ChArUco corner and shows a large readout instead of relying on the preview:
+
+- **% of best** — current sharpness vs. the best reading this session (≥ 95 % = FOCUSED). Use **Reset best** after moving the board.
+- **Edge width (px)** — blur width of the checker edges; lower is sharper, independent of lighting.
+- **Field map** — 3×3 edge width across the frame; large differences point to a non-flat board or lens/sensor tilt.
+- **Sound** — optional tone whose pitch rises with sharpness, so you can watch the lens instead of the screen.
+
+Print `targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png` at 100 % scale, mount it flat and square to
+the camera, and fill as much of the view as possible (≥ 8 px per square is required, ≥ 20 px recommended). If the board
+becomes too blurry to detect, the last known position is used — don't move the board while focusing.
+
+API: `GET /api/cameras/focus-check/stream`, `GET /api/cameras/focus-check/metrics`, `POST /api/cameras/focus-check/reset`.
+
 Supported query parameters: `fps`, `peak_threshold`, `max_width`, `charuco`, `clip_highlight`, `show_overlay` — see [api.md](api.md#get-apicamerascalibrationstream).
 
 ---

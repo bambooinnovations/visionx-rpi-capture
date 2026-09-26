@@ -45,14 +45,23 @@ function renderCameras(cameras) {
     const isMindVision = c.type === 'mindvision';
 
     const calibrateBtn = _hwTriggerActive
-      ? `<button class="btn btn-primary" style="flex:1;justify-content:center" disabled
+      ? `<button class="btn btn-primary cam-action cam-action-wide" disabled
              title="Switch decoder to Calibration mode before calibrating">Calibrate</button>`
-      : `<a href="/calibrate?camera=${c.camera_id}" class="btn btn-primary" style="flex:1;justify-content:center">Calibrate</a>`;
+      : `<a href="/calibrate?camera=${c.camera_id}" class="btn btn-primary cam-action cam-action-wide">Calibrate</a>`;
+
+    const _iconFocus = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg>`;
+    const _iconSettings = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>`;
+
+    const focusBtn = isMindVision
+      ? (_hwTriggerActive
+        ? `<button class="btn btn-secondary cam-action" disabled
+               title="Switch decoder to Calibration mode to check focus">${_iconFocus}Focus Check</button>`
+        : `<a href="/focus-check?camera=${c.camera_id}" class="btn btn-secondary cam-action"
+               title="Check focus using the ChArUco target">${_iconFocus}Focus Check</a>`)
+      : '';
 
     const settingsBtn = isMindVision
-      ? `<a href="/mindvision/${c.camera_id}/settings" class="btn btn-secondary" style="flex:1;justify-content:center">
-          Settings
-        </a>`
+      ? `<a href="/mindvision/${c.camera_id}/settings" class="btn btn-secondary cam-action">${_iconSettings}Settings</a>`
       : '';
 
     const configIcon = isMindVision
@@ -85,6 +94,7 @@ function renderCameras(cameras) {
       </div>
       <div class="camera-card-footer">
         ${calibrateBtn}
+        ${focusBtn}
         ${settingsBtn}
       </div>
     </div>`;

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionX — Focus Check</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/focus_check/focus_check.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link active" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+  <a class="nav-link" href="/pxcm">Pixel/cm</a>
+  <a class="nav-link" href="/monitor">Monitor</a>
+  <a class="nav-link" href="/debug-capture">Debug Capture</a>
+  <a class="nav-link" href="/exposure-sync">Exposure Sync</a>
+</nav>
+
+<div id="error-banner" class="error-banner hidden">
+  <span id="error-text"></span>
+  <button onclick="clearError()">✕</button>
+</div>
+
+<div class="fc-layout">
+
+  <div class="fc-header">
+    <a href="/calibrate" id="back-link" class="btn-back">← Calibration</a>
+    <h1 id="fc-title">Focus Check</h1>
+    <div id="camera-control" class="fc-cams hidden"></div>
+    <div class="fc-spacer"></div>
+    <button class="fc-btn" id="btn-sound" onclick="toggleSound()" title="Pitch rises as focus improves — lets you watch the lens instead of the screen">🔇 Sound off</button>
+    <button class="fc-btn" onclick="resetBest()" title="Forget the best reading and start over (e.g. after moving the board)">↺ Reset best</button>
+    <button class="fc-btn" onclick="toggleFullscreen()">⛶ Full screen</button>
+  </div>
+
+  <div class="fc-main">
+
+    <section class="fc-readout" id="readout" data-state="wait">
+      <div class="fc-verdict" id="verdict">Waiting for board…</div>
+      <div class="fc-pct"><span id="pct">--</span><small>% of best</small></div>
+      <div class="fc-trend" id="trend">&nbsp;</div>
+      <div class="fc-meter"><div class="fc-meter-fill" id="meter-fill"></div><div class="fc-meter-mark"></div></div>
+
+      <canvas id="spark" class="fc-spark" width="600" height="120"></canvas>
+
+      <div class="fc-stats">
+        <div><span class="k">Edge width</span><span class="v" id="st-edge">--</span></div>
+        <div><span class="k">Best so far</span><span class="v" id="st-best">--</span></div>
+        <div><span class="k">Board</span><span class="v" id="st-board">--</span></div>
+      </div>
+      <div class="fc-note" id="note">&nbsp;</div>
+    </section>
+
+    <section class="fc-side">
+      <div class="fc-stream" id="stream-wrap">
+        <img id="fc-img" alt="Focus check preview">
+        <div id="stream-placeholder" class="fc-placeholder">Starting stream…</div>
+      </div>
+
+      <div class="fc-zones-wrap">
+        <div class="fc-zones-title">Sharpness across the field</div>
+        <div class="fc-zones" id="zones"></div>
+        <div class="fc-zones-hint" id="zones-hint">&nbsp;</div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="fc-help">
+    <strong>Setup:</strong> print <code>targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png</code>
+    at 100% (10&nbsp;mm squares), mount it <em>flat</em> and square to the camera, and fill as much of the view as you can.
+    Turn the focus ring slowly — the reading is <strong>edge width</strong> (lower&nbsp;=&nbsp;sharper).
+    Overshoot the peak, then come back until you're at <strong>≥&nbsp;95&nbsp;% of best</strong>, then lock the ring.
+    Preview dots: <span class="dot g"></span> sharp <span class="dot a"></span> soft <span class="dot r"></span> blurry.
+  </div>
+
+</div>
+
+<script src="/static/focus_check/focus_check.js"></script>
+</body>
+</html>

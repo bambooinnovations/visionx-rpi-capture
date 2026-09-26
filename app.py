@@ -304,6 +304,11 @@ def focus_ui():
     return render_template("focus.html")
 
 
+@app.route("/focus-check")
+def focus_check_ui():
+    return render_template("focus_check.html")
+
+
 @app.route("/pxcm")
 def pxcm_ui():
     return render_template("pxcm.html")
