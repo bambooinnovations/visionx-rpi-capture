@@ -196,6 +196,14 @@ body {
   margin: -6px 0 12px;
 }
 
+/* Live raw-value readout under the Analog Gain slider — sits right under the
+   row it describes instead of a section title, so it needs its own spacing. */
+.gain-readout {
+  margin: -6px 0 14px;
+  padding-left: 14px;
+  font-family: var(--font-mono, monospace);
+}
+
 .setting-row {
   display: flex;
   align-items: center;

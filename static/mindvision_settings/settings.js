@@ -176,6 +176,21 @@ function gainXToRaw(x) {
   return Math.round(x / gainStep);
 }
 
+// Spells out exactly what will be sent to the camera as the slider/box move,
+// so tuning by × never leaves you guessing what raw SDK value that rounds to.
+function updateGainReadout(raw) {
+  const el = document.getElementById('analog-gain-readout');
+  if (!el) return;
+  raw = Math.round(parseFloat(raw));
+  const autoGain = document.getElementById('auto-gain').checked;
+  if (isNaN(raw) || autoGain) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.textContent = `raw ${raw} · step ${gainStep}× · = ${gainRawToX(raw)}×`;
+  el.classList.remove('hidden');
+}
+
 // ── Capture-profile scope messaging ───────────────────────────────────
 
 let _captureOnly = true; // server: manual exposure applies to stills only
@@ -185,6 +200,7 @@ function updateAutoRows() {
   const autoGain = document.getElementById('auto-gain').checked;
   document.getElementById('manual-exposure-row').classList.toggle('hidden', ae);
   document.getElementById('manual-gain-row').classList.toggle('hidden', autoGain);
+  document.getElementById('analog-gain-readout').classList.toggle('hidden', autoGain);
   updateExposureScope(ae);
 }
 
@@ -226,6 +242,7 @@ function populateUI(s) {
   gainBox.min = gainRawToX(s.analog_gain_min || 16);
   gainBox.max = gainRawToX(s.analog_gain_max || 128);
   gainBox.step = gainStep;
+  updateGainReadout(s.analog_gain);
 
   setSlider('r-gain', s.r_gain,
     s.r_gain_min ?? 0, s.r_gain_max ?? 400, 'r-gain-value');
@@ -615,7 +632,8 @@ function renderSnapshotInfo(st) {
 
   row('Exposure', st.exposure_us == null ? '—' : `${fmt(st.exposure_us / 1000, 3)} ms`,
       st.ae_enabled ? 'auto' : 'manual');
-  row('Analog gain', st.analog_gain_x == null ? '—' : `${fmt(st.analog_gain_x, 3)}×`,
+  row('Analog gain', st.analog_gain_x == null ? '—' :
+      `${fmt(st.analog_gain_x, 3)}× (raw ${st.analog_gain_raw ?? '—'})`,
       st.auto_gain ? 'auto' : 'manual');
   if (st.ae_enabled || st.auto_gain) row('AE target', fmt(st.ae_target, 0));
   row('Gamma', fmt(st.gamma, 0));
@@ -639,6 +657,7 @@ async function useSnapshotAsManual() {
   const gain = document.getElementById('analog-gain');
   gain.value = st.analog_gain_raw;
   document.getElementById('analog-gain-value').value = gainRawToX(gain.value);
+  updateGainReadout(gain.value);
   updateAutoRows();
   markDirty();
   await applyChanges();
@@ -767,6 +786,7 @@ function wireControls() {
   ].forEach(([id, valueId, fmt]) => {
     document.getElementById(id).addEventListener('input', function () {
       document.getElementById(valueId).value = fmt(this.value);
+      if (id === 'analog-gain') updateGainReadout(this.value);
       onSettingChange();
     });
   });
