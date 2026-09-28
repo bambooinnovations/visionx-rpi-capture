@@ -1,3 +1,4 @@
+# DEPRECATED / ARCHIVED — the stitch feature is no longer used or wired into the app (no route, blueprint registration or nav link). Kept for reference only; see archive/stitch/README.md.
 """ChArUco-based multi-camera stitching calibration and composite view.
 
 Calibration workflow
@@ -51,27 +52,18 @@ from blueprints.lens import get_camera_intrinsics
 
 logger = structlog.get_logger()
 
-# ── Defaults ───────────────────────────────────────────────────────────────────
-_DEFAULT_BOARD_COLS = 20
-_DEFAULT_BOARD_ROWS = 14
-_DEFAULT_SQUARE_MM = 10.0
-_DEFAULT_MARKER_MM = 8.0
-_DEFAULT_ARUCO_DICT = "DICT_4X4_250"
-
-_ARUCO_DICT_MAP: dict[str, int] = {
-    "DICT_4X4_50": cv2.aruco.DICT_4X4_50,
-    "DICT_4X4_100": cv2.aruco.DICT_4X4_100,
-    "DICT_4X4_250": cv2.aruco.DICT_4X4_250,
-    "DICT_4X4_1000": cv2.aruco.DICT_4X4_1000,
-    "DICT_5X5_50": cv2.aruco.DICT_5X5_50,
-    "DICT_5X5_100": cv2.aruco.DICT_5X5_100,
-    "DICT_5X5_250": cv2.aruco.DICT_5X5_250,
-    "DICT_5X5_1000": cv2.aruco.DICT_5X5_1000,
-    "DICT_6X6_50": cv2.aruco.DICT_6X6_50,
-    "DICT_6X6_100": cv2.aruco.DICT_6X6_100,
-    "DICT_6X6_250": cv2.aruco.DICT_6X6_250,
-    "DICT_6X6_1000": cv2.aruco.DICT_6X6_1000,
-}
+from camera.charuco import (  # shared helpers, re-exported under the old private names
+    ARUCO_DICT_MAP as _ARUCO_DICT_MAP,
+    DEFAULT_ARUCO_DICT as _DEFAULT_ARUCO_DICT,
+    DEFAULT_BOARD_COLS as _DEFAULT_BOARD_COLS,
+    DEFAULT_BOARD_ROWS as _DEFAULT_BOARD_ROWS,
+    DEFAULT_MARKER_MM as _DEFAULT_MARKER_MM,
+    DEFAULT_SQUARE_MM as _DEFAULT_SQUARE_MM,
+    detect_charuco as _detect_charuco,
+    make_board as _make_board,
+    to_bgr as _to_bgr,
+    to_gray as _to_gray,
+)
 
 _CALIBRATION_PATH = Path("data/stitch_calibration.json")
 _CONFIG_PATH = Path("data/stitch_config.json")
@@ -100,21 +92,6 @@ def _save_config(data: dict) -> None:
 
 
 # ── Board ──────────────────────────────────────────────────────────────────────
-
-def _make_board(
-    cols: int,
-    rows: int,
-    square_mm: float,
-    marker_mm: float,
-    aruco_dict_name: str,
-) -> tuple[cv2.aruco.CharucoBoard, cv2.aruco.Dictionary]:
-    dict_id = _ARUCO_DICT_MAP.get(aruco_dict_name)
-    if dict_id is None:
-        raise ValueError(f"Unknown aruco dict '{aruco_dict_name}'. Valid: {sorted(_ARUCO_DICT_MAP)}")
-    aruco_dict = cv2.aruco.getPredefinedDictionary(dict_id)
-    board = cv2.aruco.CharucoBoard((cols, rows), square_mm, marker_mm, aruco_dict)
-    return board, aruco_dict
-
 
 def _board_spec_from_body(body: dict, existing: dict | None) -> dict | tuple[None, str]:
     """Resolve board spec from request body, falling back to existing calibration then defaults.
@@ -150,45 +127,6 @@ def _board_spec_from_body(body: dict, existing: dict | None) -> dict | tuple[Non
         "marker_mm": float(body.get("marker_mm", _DEFAULT_MARKER_MM)),
         "aruco_dict": body.get("aruco_dict", _DEFAULT_ARUCO_DICT),
     }
-
-
-# ── Frame helpers ──────────────────────────────────────────────────────────────
-
-def _to_gray(frame: np.ndarray) -> np.ndarray:
-    if frame.ndim == 3 and frame.shape[2] == 3:
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return frame[:, :, 0] if frame.ndim == 3 else frame
-
-
-def _to_bgr(frame: np.ndarray) -> np.ndarray:
-    if frame.ndim == 2:
-        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    if frame.ndim == 3 and frame.shape[2] == 1:
-        return cv2.cvtColor(frame[:, :, 0], cv2.COLOR_GRAY2BGR)
-    return frame
-
-
-# ── Detection & homography ─────────────────────────────────────────────────────
-
-def _detect_charuco(
-    gray: np.ndarray,
-    board: cv2.aruco.CharucoBoard,
-    aruco_dict: cv2.aruco.Dictionary,
-) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
-    detector = cv2.aruco.ArucoDetector(aruco_dict)
-    marker_corners, marker_ids, _ = detector.detectMarkers(gray)
-
-    if marker_ids is None or len(marker_ids) < 4:
-        return None, None
-
-    _, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
-        marker_corners, marker_ids, gray, board
-    )
-
-    if charuco_corners is None or charuco_ids is None or len(charuco_corners) < 6:
-        return None, None
-
-    return charuco_corners, charuco_ids
 
 
 def _compute_homography(

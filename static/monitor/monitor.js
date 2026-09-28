@@ -106,7 +106,7 @@ function renderQueueDepths(d) {
     chips.push([`Cam ${id} capture`, depth]);
   }
   chips.push(['Collector pending', d.collector_pending]);
-  chips.push(['Stitch upload', d.stitch_pending]);
+  chips.push(['Upload queue', d.stitch_pending]);
   chips.push(['Raw upload', d.raw_pending]);
   chips.push(['Disk retry', d.disk_retry]);
   chips.push(['Disk spill', d.disk_spill]);

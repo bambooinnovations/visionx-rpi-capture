@@ -1,46 +1,4 @@
 /* ── Layout ──────────────────────────────────────────────────────────── */
-.view {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.card-header h2 { font-size: 16px; font-weight: 600; }
-.card-desc { color: var(--text-muted); font-size: 14px; }
-.card-desc a { color: var(--primary); }
-
-/* ── Info box ────────────────────────────────────────────────────────── */
-.info-box {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  font-size: 13px;
-}
-.info-box-warning {
-  background: var(--pill-yellow-bg);
-  border-color: #fde68a;
-  color: var(--pill-yellow-text);
-}
-.info-box code {
-  background: rgba(0,0,0,0.06);
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 12px;
-}
 
 .live-actions { display: flex; gap: 8px; }
 

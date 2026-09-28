@@ -13,7 +13,6 @@
   <a class="nav-brand" href="/">VisionX</a>
   <a class="nav-link" href="/">Home</a>
   <a class="nav-link" href="/calibrate">Calibration</a>
-  <a class="nav-link" href="/stitch">Stitch</a>
   <a class="nav-link" href="/pxcm">Pixel/cm</a>
   <a class="nav-link" href="/monitor">Monitor</a>
   <a class="nav-link" href="/debug-capture">Debug Capture</a>
@@ -188,10 +187,6 @@
         <input type="range" class="slider slider-blue" id="b-gain" min="0" max="400" step="1" value="100">
       </div>
 
-      <div id="wb-stitch-warning" class="wb-stitch-warning hidden">
-        White balance is calibrated as a stitch group — changing individual WB will break colour matching.
-        <a href="/stitch">Recalibrate on the Stitch page.</a>
-      </div>
       <div class="setting-row wb-row">
         <div class="wb-hint">Point at a white or grey surface.</div>
         <button id="btn-wb" class="btn btn-secondary" onclick="autoTuneWB()">Auto Tune WB</button>

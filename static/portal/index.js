@@ -649,7 +649,7 @@ function renderQueueDepths(d) {
   }
   const items = [
     ['Collector pending', d.collector_pending],
-    ['Stitch upload',     d.stitch_pending],
+    ['Upload queue',     d.stitch_pending],
     ['Raw upload',        d.raw_pending],
     ['Disk retry',        d.disk_retry],
   ];

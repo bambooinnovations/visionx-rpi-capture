@@ -1,5 +1,7 @@
 # rpi-capture-api
 
+> **Deprecated:** the stitch feature (`/stitch` page, `/api/stitch/*`, hardware-trigger stitched upload) has been disconnected from the app. Its code is archived in [`archive/stitch/`](archive/stitch/README.md) for reference only; the stitch sections in `docs/` are historical.
+
 Flask API that captures images from a camera and serves them over HTTP on port **8080**. Supports the Arducam 64MP Hawkeye, standard Pi Cameras (v2, v3, HQ), and MindVision USB/GigE cameras.
 
 ## Requirements
@@ -210,7 +212,7 @@ rpi-capture-api/
 │   └── mindvision_trigger.py  # SerialTriggerListener — reads Arduino JSON over serial, captures on each trigger
 ├── blueprints/
 │   ├── mindvision.py       # MindVision-specific routes (/api/cameras/*); registered only for MindVision cameras
-│   └── stitch.py           # Multi-camera stitch calibration and composite view (/api/stitch/*)
+│   └── pxcm.py             # Pixel/cm measurement (ChArUco helpers live in camera/charuco.py)
 ├── docs/
 │   ├── api.md              # Full API reference
 │   ├── calibration.md      # General calibration procedures (WB, focus, orientation, stitch)

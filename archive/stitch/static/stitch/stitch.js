@@ -1,3 +1,4 @@
+// DEPRECATED / ARCHIVED — the stitch feature is no longer used or wired into the app (no route, blueprint registration or nav link). Kept for reference only; see archive/stitch/README.md.
 'use strict';
 
 const state = {

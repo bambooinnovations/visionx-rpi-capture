@@ -1,12 +1,4 @@
-
-.stitch-layout {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 20px 20px 60px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
+/* DEPRECATED / ARCHIVED — the stitch feature is no longer used or wired into the app (no route, blueprint registration or nav link). Kept for reference only; see archive/stitch/README.md. */
 
 /* ── Streams ─────────────────────────────────────────────────────────── */
 .streams-section {

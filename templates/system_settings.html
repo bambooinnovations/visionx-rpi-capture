@@ -13,7 +13,6 @@
   <a class="nav-brand" href="/">VisionX</a>
   <a class="nav-link" href="/">Home</a>
   <a class="nav-link" href="/calibrate">Calibration</a>
-  <a class="nav-link" href="/stitch">Stitch</a>
   <a class="nav-link" href="/pxcm">Pixel/cm</a>
   <a class="nav-link" href="/monitor">Monitor</a>
   <a class="nav-link" href="/debug-capture">Debug Capture</a>
@@ -31,12 +30,14 @@
 </div>
 <div id="success-toast" class="toast toast-success hidden">Saved</div>
 
-<div class="sys-page">
-
-  <div class="sys-header">
+<div class="page-header">
+  <div>
     <h1>System Settings</h1>
-    <p class="sys-subtitle">Runtime-editable values persist across restarts. Read-only values are set in <code>configuration.toml</code>.</p>
+    <p class="page-subtitle">Runtime-editable values persist across restarts. Read-only values are set in <code>configuration.toml</code>.</p>
   </div>
+</div>
+
+<div class="page page-narrow page-stack">
 
   <!-- ── Upload ─────────────────────────────────────────────────────── -->
   <section class="sys-card">
@@ -70,20 +71,6 @@
       </div>
     </div>
 
-    <div class="sys-divider"></div>
-
-    <div class="sys-field">
-      <div class="sys-field-label">
-        <span class="sys-label">Use stitch</span>
-        <span class="sys-desc">On: upload one stitched composite. Off (default): upload each camera's raw image separately, tagged with its camera_id.</span>
-      </div>
-      <div class="sys-field-control sys-field-control--toggle">
-        <label class="toggle">
-          <input type="checkbox" id="use_stitch">
-          <span class="toggle-track"></span>
-        </label>
-      </div>
-    </div>
 
     <div class="sys-divider"></div>
 

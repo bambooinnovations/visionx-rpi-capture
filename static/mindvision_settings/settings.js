@@ -290,12 +290,11 @@ function populateUI(s) {
   updateMonoWbGate(s.mono_enabled);
 }
 
-let _stitchWbLocked = false;
 
 function updateMonoWbGate(monoEnabled) {
   document.getElementById('mono-wb-warning').classList.toggle('hidden', !monoEnabled);
   const btn = document.getElementById('btn-wb');
-  if (btn) btn.disabled = !!monoEnabled || _stitchWbLocked;
+  if (btn) btn.disabled = !!monoEnabled;
 }
 
 // ── Collect current control values ───────────────────────────────────
@@ -937,30 +936,10 @@ function wireControls() {
   initZoomPan();
 }
 
-// ── Stitch WB lock ────────────────────────────────────────────────────
-
-async function checkStitchWbLock() {
-  try {
-    const [stitchCal, wbCal] = await Promise.all([
-      fetch('/api/stitch/calibrate').then(r => r.json()).catch(() => null),
-      fetch('/api/stitch/calibrate-color').then(r => r.json()).catch(() => null),
-    ]);
-    const inStitch = stitchCal && Array.isArray(stitchCal.cameras_calibrated) &&
-                     stitchCal.cameras_calibrated.includes(CAMERA_ID);
-    const hasWbCal = wbCal && wbCal.calibrated;
-    if (inStitch && hasWbCal) {
-      _stitchWbLocked = true;
-      document.getElementById('btn-wb').disabled = true;
-      document.getElementById('wb-stitch-warning').classList.remove('hidden');
-    }
-  } catch (_) {}
-}
-
 // ── Init ──────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
   wireControls();
   await loadSettings();
   await loadStreamExposureLock();
-  checkStitchWbLock();
 });

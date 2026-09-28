@@ -30,6 +30,9 @@
   --radius: 8px;
   --radius-sm: 4px;
   --nav-h: 52px;
+  --content-w: 960px;
+  --content-w-wide: 1200px;
+  --content-w-narrow: 680px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -158,14 +161,45 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 8px;
 }
-.card-header h2 { font-size: 15px; font-weight: 600; }
+.card-header h2 { font-size: 16px; font-weight: 600; }
+.card-desc { font-size: 13px; color: var(--text-muted); }
+.card-desc a { color: var(--primary); }
+
+.info-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: 14px;
+}
+.info-box code { background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+.info-box-warning {
+  background: var(--pill-yellow-bg);
+  border-color: #fde68a;
+  color: var(--pill-yellow-text);
+}
+
+/* ── Page container ──────────────────────────────────────────────────── */
+/* .page centres the content; add .page-wide / .page-narrow for other widths
+   and .page-stack to lay direct children out as a vertical stack. */
+.page {
+  max-width: var(--content-w);
+  margin: 0 auto;
+  padding: 28px 24px 60px;
+}
+.page-wide   { max-width: var(--content-w-wide); }
+.page-narrow { max-width: var(--content-w-narrow); }
+.page-stack  { display: flex; flex-direction: column; gap: 20px; }
 
 /* ── Page header ─────────────────────────────────────────────────────── */
 .page-header {
@@ -183,6 +217,7 @@ body {
 .page-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .page-header h1 { font-size: 16px; font-weight: 600; margin-bottom: 1px; }
 .page-subtitle { font-size: 12px; color: var(--text-muted); }
+.page-subtitle code { font-family: monospace; background: var(--bg); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); }
 
 /* ── Toggle switch ───────────────────────────────────────────────────── */
 /* <label class="toggle"><input type="checkbox"><span class="toggle-track"></span></label> */

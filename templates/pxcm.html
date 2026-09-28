@@ -14,7 +14,6 @@
   <a class="nav-brand" href="/">VisionX</a>
   <a class="nav-link" href="/">Home</a>
   <a class="nav-link" href="/calibrate">Calibration</a>
-  <a class="nav-link" href="/stitch">Stitch</a>
   <a class="nav-link active" href="/pxcm">Pixel/cm</a>
   <a class="nav-link" href="/monitor">Monitor</a>
   <a class="nav-link" href="/debug-capture">Debug Capture</a>
@@ -28,9 +27,16 @@
   <button onclick="clearError()">✕</button>
 </div>
 
-<div id="no-camera-message" class="info-box hidden">No camera detected.</div>
+<div class="page-header">
+  <div>
+    <h1>Pixel / cm</h1>
+    <p class="page-subtitle">Measure the pixel-to-centimetre scale with a calibration board</p>
+  </div>
+</div>
 
-<div id="pxcm-main" class="pxcm-main">
+<div id="no-camera-message" class="info-box page-message hidden">No camera detected.</div>
+
+<div id="pxcm-main" class="page page-stack">
 
   <!-- ── Setup card ──────────────────────────────────────────────────── -->
   <div class="card">

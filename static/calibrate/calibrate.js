@@ -7,7 +7,7 @@ const state = {
   currentWizard: null,
   currentStep: 0,
   activeCameraId: 0,
-  activeTab: 'camera',   // 'camera' | 'stitch'
+  activeTab: 'camera',
   isLoading: false,
 
   // Lens wizard
@@ -160,7 +160,6 @@ function _switchCamera(camId) {
   showView('view-dashboard');
 
   document.getElementById('camera-cards-section').classList.remove('hidden');
-  document.getElementById('stitch-section')?.classList.add('hidden');
 
   refreshDashboard();
 

@@ -13,7 +13,6 @@
   <a class="nav-brand" href="/">VisionX</a>
   <a class="nav-link active" href="/">Home</a>
   <a class="nav-link" href="/calibrate">Calibration</a>
-  <a class="nav-link" href="/stitch">Stitch</a>
   <a class="nav-link" href="/pxcm">Pixel/cm</a>
   <a class="nav-link" href="/monitor">Monitor</a>
   <a class="nav-link" href="/debug-capture">Debug Capture</a>
@@ -28,7 +27,14 @@
   <button onclick="clearError()">✕</button>
 </div>
 
-<main class="page-content">
+<div class="page-header">
+  <div>
+    <h1>VisionX Portal</h1>
+    <p class="page-subtitle">Connected cameras, decoder and station status</p>
+  </div>
+</div>
+
+<main class="page page-stack">
 
   <!-- ── Cameras ──────────────────────────────────────────────────────── -->
   <section class="section">
@@ -137,13 +143,6 @@
       <div>
         <div class="quick-title">Focus Check</div>
         <div class="quick-desc">Live sharpness readout from the ChArUco target — with a sound cue for tight spaces</div>
-      </div>
-    </a>
-    <a href="/stitch" class="quick-card">
-      <div class="quick-icon">⊞</div>
-      <div>
-        <div class="quick-title">Stitch Setup</div>
-        <div class="quick-desc">Side-by-side streams with overlap overlay for camera placement</div>
       </div>
     </a>
   </section>

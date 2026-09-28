@@ -106,21 +106,14 @@ if not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
 
 if mindvision_cameras:
     from camera.mindvision_trigger import SerialTriggerListener, seed_default_speed_presets
-    from blueprints.stitch import _load_calibration as _stitch_load_cal, _stitch_frames
-    _serial_listener = SerialTriggerListener(
-        mindvision_cameras,
-        load_calibration=_stitch_load_cal,
-        stitch_frames=_stitch_frames,
-    )
+    _serial_listener = SerialTriggerListener(mindvision_cameras)
     seed_default_speed_presets()
 
     from blueprints.mindvision import create_blueprint
-    from blueprints.stitch import create_blueprint as create_stitch_blueprint
     from blueprints.lens import create_blueprint as create_lens_blueprint
     from blueprints.arduino import create_blueprint as create_arduino_blueprint
     from blueprints.debug_capture import create_blueprint as create_debug_capture_blueprint
     app.register_blueprint(create_blueprint(mindvision_cameras, _serial_listener))
-    app.register_blueprint(create_stitch_blueprint(mindvision_cameras))
     app.register_blueprint(create_lens_blueprint(mindvision_cameras))
     app.register_blueprint(create_arduino_blueprint(_serial_listener, mindvision_cameras))
     app.register_blueprint(create_debug_capture_blueprint(mindvision_cameras))
@@ -174,13 +167,13 @@ else:
     # clear, parseable reason instead.
     _MV_UNAVAILABLE_MSG = (
         "No MindVision camera detected on this device — hardware trigger, "
-        "stitching, and lens control are unavailable until one is connected."
+        "and lens control are unavailable until one is connected."
     )
 
     def _mindvision_unavailable(**_kwargs):
         return jsonify({"error": _MV_UNAVAILABLE_MSG, "mindvision_available": False}), 503
 
-    for _prefix in ("/api/decoder", "/api/cameras", "/api/stitch", "/api/lens"):
+    for _prefix in ("/api/decoder", "/api/cameras", "/api/lens"):
         _endpoint = _prefix.strip("/").replace("/", "_")
         app.add_url_rule(
             _prefix, endpoint=f"{_endpoint}_unavailable", view_func=_mindvision_unavailable,
@@ -287,11 +280,6 @@ def calibrate_ui():
     return render_template("calibrate.html")
 
 
-@app.route("/stitch")
-def stitch_ui():
-    return render_template("stitch.html")
-
-
 @app.route("/focus")
 def focus_ui():
     return render_template("focus.html")
@@ -394,19 +382,6 @@ def _build_system_status() -> tuple[bool, dict]:
             "destination_url": destination_url or "",
         }
 
-    # --- stitching (multi-camera MindVision only) ---
-    stitching_subsystem = None
-    if len(mindvision_cameras) > 1:
-        from blueprints.stitch import _load_calibration
-        cal = _load_calibration()
-        cal_camera_keys = list(cal.get("cameras", {}).keys()) if cal else []
-        active_ids = [str(i) for i in sorted(mindvision_cameras.keys())]
-        stitching_subsystem = {
-            "ready": cal is not None and all(k in cal_camera_keys for k in active_ids),
-            "calibrated_cameras": [int(k) for k in cal_camera_keys],
-        }
-
-    # stitching not required — falls back to single camera when uncalibrated
     ready = cameras_ready and config_subsystem["ready"]
     if decoder_subsystem is not None:
         ready = ready and decoder_subsystem["ready"]
@@ -414,8 +389,6 @@ def _build_system_status() -> tuple[bool, dict]:
     subsystems = {"cameras": cameras_subsystem, "config": config_subsystem}
     if decoder_subsystem is not None:
         subsystems["decoder"] = decoder_subsystem
-    if stitching_subsystem is not None:
-        subsystems["stitching"] = stitching_subsystem
 
     return ready, subsystems
 

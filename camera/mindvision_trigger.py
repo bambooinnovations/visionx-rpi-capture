@@ -193,7 +193,9 @@ def _get_send_raw_images() -> bool:
 
 
 def _get_use_stitch() -> bool:
-    return bool(runtime_config.get("hw_trigger.use_stitch", config.HW_TRIGGER_USE_STITCH))
+    # DEPRECATED: stitching is archived (see archive/stitch/) and no longer wired up.
+    # The stitched-upload branch below is kept for reference only and never runs.
+    return False
 
 
 def _get_raw_destination_url() -> str:

@@ -4,13 +4,12 @@ Workflow
 --------
 POST /api/pxcm/measure captures one full-resolution frame from the requested
 camera (any camera type — MindVision or Pi), detects the ChArUco board via
-the same detector used by lens/stitch calibration, and estimates the
+the same ChArUco detector used by lens calibration, and estimates the
 pixel/mm scale by averaging pixel distances between grid-adjacent ChArUco
 corners (each pair is exactly `square_mm` apart on the physical board, so the
 average is a local, perspective-robust scale estimate).
 
-Board detection code is shared with blueprints/stitch.py rather than
-duplicated a third time.
+Board helpers live in camera/charuco.py.
 """
 from __future__ import annotations
 
@@ -25,16 +24,16 @@ import numpy as np
 import structlog
 from flask import Blueprint, jsonify, request
 
-from blueprints.stitch import (
-    _DEFAULT_ARUCO_DICT,
-    _DEFAULT_BOARD_COLS,
-    _DEFAULT_BOARD_ROWS,
-    _DEFAULT_MARKER_MM,
-    _DEFAULT_SQUARE_MM,
-    _detect_charuco,
-    _make_board,
-    _to_bgr,
-    _to_gray,
+from camera.charuco import (
+    DEFAULT_ARUCO_DICT as _DEFAULT_ARUCO_DICT,
+    DEFAULT_BOARD_COLS as _DEFAULT_BOARD_COLS,
+    DEFAULT_BOARD_ROWS as _DEFAULT_BOARD_ROWS,
+    DEFAULT_MARKER_MM as _DEFAULT_MARKER_MM,
+    DEFAULT_SQUARE_MM as _DEFAULT_SQUARE_MM,
+    detect_charuco as _detect_charuco,
+    make_board as _make_board,
+    to_bgr as _to_bgr,
+    to_gray as _to_gray,
 )
 from camera.mindvision import CameraMode, MindVisionCamera
 from tasks import CAPTURE_TMP_DIR
