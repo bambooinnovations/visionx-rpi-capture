@@ -63,7 +63,7 @@
 
 /* ── Live stream ─────────────────────────────────────────────────────── */
 .live-stream-wrap {
-  background: #0f172a;
+  background: var(--surface-dark);
   border-radius: var(--radius);
   overflow: hidden;
   min-height: 50vh;

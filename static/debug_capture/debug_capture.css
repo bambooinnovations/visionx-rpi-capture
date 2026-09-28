@@ -107,7 +107,7 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--warning);
-  background: #fffbeb;
+  background: var(--warn-bg);
   border: 1px solid #fde68a;
   border-radius: var(--radius-sm);
   padding: 8px 12px;

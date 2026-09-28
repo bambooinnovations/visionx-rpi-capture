@@ -208,16 +208,16 @@ body {
   line-height: 1.4;
 }
 .wb-stitch-warning {
-  background: #fffbeb;
-  border: 1px solid #fcd34d;
+  background: var(--warn-bg);
+  border: 1px solid var(--border-warning);
   border-radius: var(--radius-sm);
   padding: 8px 12px;
   font-size: 13px;
-  color: #92400e;
+  color: var(--warn-text);
   line-height: 1.5;
   margin-bottom: 8px;
 }
-.wb-stitch-warning a { color: #92400e; font-weight: 600; }
+.wb-stitch-warning a { color: var(--warn-text); font-weight: 600; }
 
 /* ── Range slider ────────────────────────────────────────────────────── */
 .slider {
@@ -260,9 +260,9 @@ body {
 }
 .slider-nudge:hover { border-color: var(--primary); color: var(--primary); }
 .slider-nudge:active { background: var(--pill-blue-bg); }
-.slider-red::-webkit-slider-thumb  { background: #dc2626; }
-.slider-green::-webkit-slider-thumb{ background: #16a34a; }
-.slider-blue::-webkit-slider-thumb { background: #2563eb; }
+.slider-red::-webkit-slider-thumb  { background: var(--danger); }
+.slider-green::-webkit-slider-thumb{ background: var(--success); }
+.slider-blue::-webkit-slider-thumb { background: var(--primary); }
 
 /* ── Advanced (collapsible) group ────────────────────────────────────── */
 .advanced-group {
@@ -358,7 +358,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #0f172a;
+  background: var(--surface-dark);
   border-radius: var(--radius);
   overflow: hidden;
   min-height: 0;

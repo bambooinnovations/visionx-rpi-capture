@@ -13,6 +13,13 @@
   --danger-hover: #b91c1c;
   --warning: #d97706;
   --border-error: #fca5a5;
+  --border-success: #86efac;
+  --border-warning: #fcd34d;
+  --border-subtle: #f4f6f9;
+  --success-bg: #f0fdf4;
+  --error-bg: #fff1f2;
+  --warn-bg: #fffbeb;
+  --warn-text: #92400e;
   --surface-dark: #0f172a;
   --surface-subtle: #f8fafc;
   --pill-green-bg: #dcfce7;   --pill-green-text: #166534;
@@ -38,7 +45,7 @@ body {
 
 /* ── Site Nav ────────────────────────────────────────────────────────── */
 .site-nav {
-  background: #0f172a;
+  background: var(--surface-dark);
   height: var(--nav-h);
   display: flex;
   align-items: center;
@@ -250,7 +257,24 @@ body {
   transition: opacity 0.4s ease;
 }
 .toast.fading { opacity: 0; }
-.toast-success { background: var(--pill-green-bg); color: var(--pill-green-text); border: 1px solid #86efac; }
+.toast-success { background: var(--pill-green-bg); color: var(--pill-green-text); border: 1px solid var(--border-success); }
+
+/* ── Result block (calibration / stitch results) ─────────────────────── */
+.result-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.result-block.success { border-color: var(--border-success); background: var(--success-bg); }
+.result-block.warning { border-color: var(--border-warning); background: var(--warn-bg); }
+.result-block.error   { border-color: var(--border-error);   background: var(--error-bg); }
+.result-block h4 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.result-block table { width: 100%; font-size: 14px; border-collapse: collapse; }
+.result-block td { padding: 3px 0; }
+.result-block td:first-child { color: var(--text-muted); width: 55%; }
+.result-block td:last-child  { font-weight: 500; text-align: right; }
 
 /* ── Error banner ────────────────────────────────────────────────────── */
 .error-banner {
