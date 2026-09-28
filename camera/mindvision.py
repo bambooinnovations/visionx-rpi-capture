@@ -672,6 +672,12 @@ class MindVisionCamera(BaseCamera):
             self._write_capture_exposure(h)
         self._stream_ae_active = False
 
+        # Auto-reconnect after USB drops is on by default.
+        try:
+            mvsdk.CameraSetAutoConnect(h, True)
+        except mvsdk.CameraException as e:
+            logger.warning("mindvision_auto_connect_failed", error=e.message)
+
         # CameraPlay starts the SDK's internal grab thread; subsequent
         # CameraGetImageBuffer calls pull from its ring buffer.
         mvsdk.CameraPlay(h)
