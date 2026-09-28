@@ -671,6 +671,17 @@ def delete_config(key: str):
     return jsonify({"deleted": key, "config": _effective_config()})
 
 
+@app.errorhandler(404)
+def not_found(_error):
+    # API/script callers get JSON, same as every other error response in this
+    # app — an HTML page here would just be an opaque "HTTP 404" to curl or
+    # the dashboard's fetch() calls. Everything else (a mistyped page URL,
+    # a bookmarked route from a removed feature) gets the friendly page.
+    if request.path.startswith(("/api/", "/rpi/")):
+        return jsonify({"error": "Not found", "path": request.path}), 404
+    return render_template("404.html", path=request.path), 404
+
+
 if __name__ == "__main__":
     # threaded=True: Werkzeug's dev server is single-request by default, which
     # deadlocks the whole app against any long-lived connection — in particular

@@ -1,0 +1,80 @@
+/* ── 404 page ──────────────────────────────────────────────────────── */
+
+.notfound {
+  min-height: calc(100vh - var(--nav-h));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+}
+
+.notfound-card {
+  max-width: 480px;
+  width: 100%;
+  text-align: center;
+}
+
+.notfound-code {
+  font-size: 88px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -2px;
+  color: var(--primary);
+  opacity: 0.9;
+  margin-bottom: 8px;
+}
+
+.notfound-card h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+.notfound-path {
+  color: var(--text);
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+.notfound-path code {
+  background: var(--pill-gray-bg);
+  color: var(--pill-gray-text);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  font-size: 13px;
+}
+
+.notfound-hint {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 28px;
+}
+
+.notfound-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.notfound-links {
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  justify-content: center;
+  align-items: center;
+}
+.notfound-links-label {
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+.notfound-links a {
+  color: var(--primary);
+  text-decoration: none;
+}
+.notfound-links a:hover { text-decoration: underline; }

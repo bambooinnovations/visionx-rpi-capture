@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Page not found — VisionX</title>
+  <link rel="stylesheet" href="/static/portal/base.css">
+  <link rel="stylesheet" href="/static/portal/404.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="nav-brand" href="/">VisionX</a>
+  <a class="nav-link" href="/">Home</a>
+  <a class="nav-link" href="/calibrate">Calibration</a>
+  <a class="nav-link" href="/stitch">Stitch</a>
+  <a class="nav-link" href="/pxcm">Pixel/cm</a>
+  <a class="nav-link" href="/monitor">Monitor</a>
+  <a class="nav-link" href="/debug-capture">Debug Capture</a>
+  <span class="nav-spacer"></span>
+  <span class="nav-divider"></span>
+  <a class="nav-link nav-link-settings" href="/settings">Settings</a>
+</nav>
+
+<main class="notfound">
+  <div class="notfound-card">
+    <div class="notfound-code" aria-hidden="true">404</div>
+    <h1>This page doesn't exist</h1>
+    <p class="notfound-path">
+      <code>{{ path }}</code> isn't a route on this station.
+    </p>
+    <p class="notfound-hint">
+      If you followed a bookmark or an old link, the page may have moved or the feature may have
+      been removed. Otherwise, check the URL for a typo.
+    </p>
+
+    <div class="notfound-actions">
+      <a class="btn btn-primary" href="/">← Back to Home</a>
+      <a class="btn btn-secondary" href="/settings">System Settings</a>
+    </div>
+
+    <div class="notfound-links">
+      <span class="notfound-links-label">Or jump straight to:</span>
+      <a href="/calibrate">Calibration</a>
+      <a href="/stitch">Stitch</a>
+      <a href="/pxcm">Pixel/cm</a>
+      <a href="/monitor">Monitor</a>
+      <a href="/debug-capture">Debug Capture</a>
+    </div>
+  </div>
+</main>
+
+</body>
+</html>
