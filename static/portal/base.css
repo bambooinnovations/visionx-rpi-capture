@@ -8,8 +8,13 @@
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
   --success: #16a34a;
+  --success-hover: #15803d;
   --danger: #dc2626;
+  --danger-hover: #b91c1c;
   --warning: #d97706;
+  --border-error: #fca5a5;
+  --surface-dark: #0f172a;
+  --surface-subtle: #f8fafc;
   --pill-green-bg: #dcfce7;   --pill-green-text: #166534;
   --pill-red-bg: #fee2e2;     --pill-red-text: #991b1b;
   --pill-yellow-bg: #fef9c3;  --pill-yellow-text: #854d0e;
@@ -117,9 +122,29 @@ body {
 .btn-primary   { background: var(--primary); color: #fff; }
 .btn-primary:not(:disabled):hover  { background: var(--primary-hover); }
 .btn-success   { background: var(--success); color: #fff; }
+.btn-success:not(:disabled):hover  { background: var(--success-hover); }
 .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
 .btn-secondary:not(:disabled):hover{ background: var(--bg); }
 .btn-danger    { background: var(--danger);  color: #fff; }
+.btn-danger:not(:disabled):hover   { background: var(--danger-hover); }
+.btn-sm { padding: 5px 12px; font-size: 13px; }
+
+/* Outlined helper buttons (back links, header icon buttons) */
+.btn-back, .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.btn-back { padding: 5px 12px; font-size: 13px; }
+.btn-icon { padding: 5px 10px; font-size: 15px; line-height: 1; }
+.btn-back:hover, .btn-icon:hover { color: var(--primary); border-color: var(--primary); }
 
 .card {
   background: var(--surface);
@@ -134,5 +159,132 @@ body {
   margin-bottom: 8px;
 }
 .card-header h2 { font-size: 15px; font-weight: 600; }
+
+/* ── Page header ─────────────────────────────────────────────────────── */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.page-header-left  { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.page-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.page-header h1 { font-size: 16px; font-weight: 600; margin-bottom: 1px; }
+.page-subtitle { font-size: 12px; color: var(--text-muted); }
+
+/* ── Toggle switch ───────────────────────────────────────────────────── */
+/* <label class="toggle"><input type="checkbox"><span class="toggle-track"></span></label> */
+.toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.toggle-track {
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--border);
+  position: relative;
+  transition: background 0.2s;
+}
+.toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  transition: transform 0.2s;
+}
+.toggle input:checked + .toggle-track { background: var(--primary); }
+.toggle input:checked + .toggle-track::after { transform: translateX(18px); }
+
+/* ── Segmented button group ──────────────────────────────────────────── */
+/* Add .btn-group-block to stretch the segments across the full width */
+.btn-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.btn-group-block { display: flex; }
+.btn-seg {
+  padding: 6px 14px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.15s, color 0.15s;
+}
+.btn-group-block .btn-seg { flex: 1; padding: 9px 14px; }
+.btn-seg:last-child { border-right: none; }
+.btn-seg:hover { background: var(--bg); color: var(--text); }
+.btn-seg.active { background: var(--primary); color: #fff; font-weight: 600; }
+
+/* ── Toast ───────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  border-radius: var(--radius-sm);
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 300;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.4s ease;
+}
+.toast.fading { opacity: 0; }
+.toast-success { background: var(--pill-green-bg); color: var(--pill-green-text); border: 1px solid #86efac; }
+
+/* ── Error banner ────────────────────────────────────────────────────── */
+.error-banner {
+  background: var(--pill-red-bg);
+  color: var(--pill-red-text);
+  border-bottom: 1px solid var(--border-error);
+  padding: 10px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+/* :where() keeps specificity at zero so action buttons inside the banner can restyle themselves */
+.error-banner :where(button) {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--pill-red-text);
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+/* ── Spinner ─────────────────────────────────────────────────────────── */
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.spinner-sm { width: 28px; height: 28px; border-width: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .hidden { display: none !important; }

@@ -153,7 +153,7 @@ const pxcm = {
     card.classList.remove('hidden');
     body.innerHTML = `
       <div class="pxcm-spinner-box">
-        <div class="pxcm-spinner"></div>
+        <div class="spinner spinner-sm"></div>
         <span>Capturing full-resolution frame and detecting board…</span>
       </div>`;
   },

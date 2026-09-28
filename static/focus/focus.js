@@ -55,7 +55,7 @@ function stopStream() {
 // ── FPS ────────────────────────────────────────────────────────────────
 function setFps(fps) {
   state.fps = fps;
-  document.querySelectorAll('.fps-btn').forEach(b => {
+  document.querySelectorAll('.btn-seg').forEach(b => {
     b.classList.toggle('active', parseInt(b.dataset.fps, 10) === fps);
   });
   if (state.streaming) startStream();
@@ -86,7 +86,7 @@ function _buildCameraButtons() {
 
   control.classList.remove('hidden');
   container.innerHTML = state.cameras.map(c => `
-    <button class="fps-btn cam-btn${c.camera_id === state.activeCameraId ? ' active' : ''}"
+    <button class="btn-seg cam-btn${c.camera_id === state.activeCameraId ? ' active' : ''}"
             data-cam-id="${c.camera_id}"
             onclick="switchCamera(${c.camera_id})">
       ${c.camera_id}

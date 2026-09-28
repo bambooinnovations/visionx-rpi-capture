@@ -26,14 +26,17 @@
 
 <div class="fc-layout">
 
-  <div class="fc-header">
-    <a href="/calibrate" id="back-link" class="btn-back">← Calibration</a>
-    <h1 id="fc-title">Focus Check</h1>
-    <div id="camera-control" class="fc-cams hidden"></div>
-    <div class="fc-spacer"></div>
-    <button class="fc-btn" id="btn-sound" onclick="toggleSound()" title="Pitch rises as focus improves — lets you watch the lens instead of the screen">🔇 Sound off</button>
-    <button class="fc-btn" onclick="resetBest()" title="Forget the best reading and start over (e.g. after moving the board)">↺ Reset best</button>
-    <button class="fc-btn" onclick="toggleFullscreen()">⛶ Full screen</button>
+  <div class="page-header">
+    <div class="page-header-left">
+      <a href="/calibrate" id="back-link" class="btn-back">← Calibration</a>
+      <h1 id="fc-title">Focus Check</h1>
+      <div id="camera-control" class="btn-group hidden"></div>
+    </div>
+    <div class="page-header-right">
+      <button class="btn btn-secondary btn-sm" id="btn-sound" onclick="toggleSound()" title="Pitch rises as focus improves — lets you watch the lens instead of the screen">🔇 Sound off</button>
+      <button class="btn btn-secondary btn-sm" onclick="resetBest()" title="Forget the best reading and start over (e.g. after moving the board)">↺ Reset best</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleFullscreen()">⛶ Full screen</button>
+    </div>
   </div>
 
   <div class="fc-main">

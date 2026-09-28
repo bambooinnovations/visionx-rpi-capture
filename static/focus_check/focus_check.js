@@ -172,13 +172,13 @@ function drawSpark() {
   g.clearRect(0, 0, w, h);
   const y = p => h - 4 - (h - 8) * (p / 100);
 
-  g.strokeStyle = '#ffffff55'; g.setLineDash([6, 6]); g.lineWidth = 1;
+  g.strokeStyle = '#94a3b8'; g.setLineDash([6, 6]); g.lineWidth = 1;
   g.beginPath(); g.moveTo(0, y(GOOD_PCT)); g.lineTo(w, y(GOOD_PCT)); g.stroke();
   g.setLineDash([]);
 
   const hs = state.history;
   if (hs.length < 2) return;
-  g.strokeStyle = '#60a5fa'; g.lineWidth = 3; g.lineJoin = 'round';
+  g.strokeStyle = '#2563eb'; g.lineWidth = 3; g.lineJoin = 'round';
   g.beginPath();
   hs.forEach((p, i) => {
     const x = (i / (HISTORY - 1)) * w;
@@ -236,7 +236,7 @@ function buildCameraButtons() {
   if (state.cameras.length <= 1) { box.classList.add('hidden'); return; }
   box.classList.remove('hidden');
   box.innerHTML = state.cameras.map(c =>
-    `<button class="${c.camera_id === state.cameraId ? 'active' : ''}" onclick="switchCamera(${c.camera_id})">${c.camera_id}</button>`
+    `<button class="btn-seg${c.camera_id === state.cameraId ? ' active' : ''}" onclick="switchCamera(${c.camera_id})">${c.camera_id}</button>`
   ).join('');
 }
 

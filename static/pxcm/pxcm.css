@@ -14,18 +14,6 @@
   margin: 4px 0 14px;
 }
 
-/* ── Error banner ────────────────────────────────────────────────────── */
-.error-banner {
-  background: var(--pill-red-bg);
-  color: var(--pill-red-text);
-  padding: 10px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 14px;
-}
-.error-banner button { background: none; border: none; cursor: pointer; font-size: 16px; color: var(--pill-red-text); }
-
 /* ── Info box ────────────────────────────────────────────────────────── */
 .info-box {
   background: var(--surface);
@@ -151,15 +139,3 @@
   color: var(--text-muted);
 }
 
-.pxcm-spinner {
-  width: 28px;
-  height: 28px;
-  border: 3px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: pxcm-spin 0.8s linear infinite;
-}
-
-@keyframes pxcm-spin {
-  to { transform: rotate(360deg); }
-}

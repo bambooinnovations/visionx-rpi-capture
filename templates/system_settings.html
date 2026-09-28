@@ -29,7 +29,7 @@
     <button class="error-close" onclick="clearError()">✕</button>
   </div>
 </div>
-<div id="success-toast" class="success-toast hidden">Saved</div>
+<div id="success-toast" class="toast toast-success hidden">Saved</div>
 
 <div class="sys-page">
 
@@ -78,9 +78,9 @@
         <span class="sys-desc">On: upload one stitched composite. Off (default): upload each camera's raw image separately, tagged with its camera_id.</span>
       </div>
       <div class="sys-field-control sys-field-control--toggle">
-        <label class="sys-toggle">
+        <label class="toggle">
           <input type="checkbox" id="use_stitch">
-          <span class="sys-toggle-track"></span>
+          <span class="toggle-track"></span>
         </label>
       </div>
     </div>
@@ -93,9 +93,9 @@
         <span class="sys-desc">Upload per-camera raw images during debug / calibration sessions</span>
       </div>
       <div class="sys-field-control sys-field-control--toggle">
-        <label class="sys-toggle">
+        <label class="toggle">
           <input type="checkbox" id="send_raw_images" onchange="onRawToggle()">
-          <span class="sys-toggle-track"></span>
+          <span class="toggle-track"></span>
         </label>
       </div>
     </div>

@@ -26,9 +26,11 @@
 
 <div class="focus-layout">
 
-  <div class="focus-header">
-    <a href="/calibrate" id="back-link" class="btn-back">← Back to Calibration</a>
-    <h1 id="focus-title">Focus Stream</h1>
+  <div class="page-header">
+    <div class="page-header-left">
+      <a href="/calibrate" id="back-link" class="btn-back">← Back to Calibration</a>
+      <h1 id="focus-title">Focus Stream</h1>
+    </div>
   </div>
 
   <div class="stream-wrap" id="stream-wrap">
@@ -39,15 +41,15 @@
   <div class="focus-controls">
     <div class="control-group">
       <span class="control-label">FPS</span>
-      <div class="fps-btns">
-        <button class="fps-btn" data-fps="1" onclick="setFps(1)">1</button>
-        <button class="fps-btn active" data-fps="2" onclick="setFps(2)">2</button>
-        <button class="fps-btn" data-fps="4" onclick="setFps(4)">4</button>
+      <div class="btn-group">
+        <button class="btn-seg" data-fps="1" onclick="setFps(1)">1</button>
+        <button class="btn-seg active" data-fps="2" onclick="setFps(2)">2</button>
+        <button class="btn-seg" data-fps="4" onclick="setFps(4)">4</button>
       </div>
     </div>
     <div class="control-group hidden" id="camera-control">
       <span class="control-label">Camera</span>
-      <div id="cam-btns" class="fps-btns"></div>
+      <div id="cam-btns" class="btn-group"></div>
     </div>
   </div>
 

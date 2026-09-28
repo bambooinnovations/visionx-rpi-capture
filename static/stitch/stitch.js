@@ -198,7 +198,7 @@ function updateOverlap(val) {
 // ── FPS ────────────────────────────────────────────────────────────────
 function setFps(fps) {
   state.fps = fps;
-  document.querySelectorAll('.fps-btn').forEach(b => {
+  document.querySelectorAll('.btn-seg').forEach(b => {
     b.classList.toggle('active', parseInt(b.textContent, 10) === fps);
   });
   buildStreams();

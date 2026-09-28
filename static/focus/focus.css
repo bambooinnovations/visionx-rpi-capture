@@ -6,38 +6,6 @@ body { overflow: hidden; }
   height: calc(100vh - var(--nav-h, 52px));
 }
 
-/* ── Header ──────────────────────────────────────────────────────────── */
-.focus-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 24px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.focus-header h1 {
-  font-size: 16px;
-  font-weight: 600;
-  margin: 0;
-  color: var(--text);
-}
-
-.btn-back {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 4px);
-  padding: 5px 12px;
-  font-size: 13px;
-  cursor: pointer;
-  color: var(--text-muted);
-  text-decoration: none;
-  white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s;
-}
-.btn-back:hover { color: var(--primary); border-color: var(--primary); }
-
 /* ── Stream ───────────────────────────────────────────────────────────── */
 .stream-wrap {
   flex: 1;
@@ -88,28 +56,6 @@ body { overflow: hidden; }
   white-space: nowrap;
 }
 
-.fps-btns {
-  display: flex;
-  gap: 4px;
-}
-
-.fps-btn {
-  padding: 5px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 4px);
-  background: var(--surface);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.fps-btn:hover { background: var(--bg); }
-.fps-btn.active {
-  background: var(--primary);
-  color: #fff;
-  border-color: var(--primary);
-}
-
 /* ── Instructions ─────────────────────────────────────────────────────── */
 .focus-instructions {
   padding: 12px 24px;
@@ -127,4 +73,3 @@ body { overflow: hidden; }
 .focus-instructions li { margin-bottom: 2px; }
 .focus-instructions strong { color: var(--text); }
 
-.hidden { display: none !important; }

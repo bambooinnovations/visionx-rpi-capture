@@ -1,14 +1,3 @@
-.error-banner {
-  background: #fee2e2;
-  color: #991b1b;
-  border-bottom: 1px solid #fca5a5;
-  padding: 10px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 14px;
-  gap: 12px;
-}
 
 .error-banner-actions {
   display: flex;
@@ -31,23 +20,6 @@
 .btn-save-anyway:hover {
   background: #fef2f2;
   border-color: #f87171;
-}
-
-.error-close { background: none; border: none; cursor: pointer; font-size: 16px; color: #991b1b; }
-
-.success-toast {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  background: #166534;
-  color: #fff;
-  padding: 10px 20px;
-  border-radius: var(--radius);
-  font-size: 14px;
-  font-weight: 600;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
-  z-index: 300;
-  transition: opacity 0.2s;
 }
 
 /* ── Page layout ─────────────────────────────────────────────────────── */
@@ -178,37 +150,6 @@
   background: var(--border);
   margin: 0 20px;
 }
-
-/* ── Toggle ──────────────────────────────────────────────────────────── */
-.sys-toggle {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-}
-.sys-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
-.sys-toggle-track {
-  width: 40px;
-  height: 22px;
-  background: #d1d5db;
-  border-radius: 99px;
-  transition: background 0.2s;
-  position: relative;
-}
-.sys-toggle-track::after {
-  content: '';
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 16px;
-  height: 16px;
-  background: #fff;
-  border-radius: 50%;
-  transition: transform 0.2s;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-}
-.sys-toggle input:checked + .sys-toggle-track { background: var(--primary); }
-.sys-toggle input:checked + .sys-toggle-track::after { transform: translateX(18px); }
 
 /* ── Save button row ─────────────────────────────────────────────────── */
 .sys-card-actions {
