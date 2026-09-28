@@ -582,6 +582,7 @@ def _effective_config() -> dict:
         "station.type":                   config.STATION_TYPE,
         "stream.fps":                     config.STREAM_FPS,
         "stream.quality":                 config.STREAM_QUALITY,
+        "camera.manual_exposure_capture_only": config.MANUAL_EXPOSURE_CAPTURE_ONLY,
         "hw_trigger.serial_port":         config.HW_TRIGGER_SERIAL_PORT,
         "hw_trigger.serial_baud":         config.HW_TRIGGER_SERIAL_BAUD,
         "hw_trigger.destination_url":     config.HW_TRIGGER_DESTINATION_URL,

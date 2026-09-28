@@ -42,6 +42,7 @@ _sdk_initialized = False
 _dev_list_cache: list | None = None
 
 import config
+import runtime_config
 from camera.base import BaseCamera
 from metrics import CaptureMetrics
 
@@ -193,6 +194,73 @@ def read_hw_settings(h: int, cap) -> dict:
     return s
 
 
+def _validate_analog_gain(cam: "MindVisionCamera", value) -> tuple[int | None, str | None]:
+    """Check a requested raw analog_gain against this camera's real hardware range.
+
+    Returns (value, None) if valid, or (None, error message) if not — the
+    caller should drop the field entirely on error rather than let
+    set_capture_exposure() silently clamp it to the boundary, which is how a
+    typo or a value copied from a different camera model can end up applied
+    without anyone noticing.
+    """
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        return None, f"analog_gain must be an integer, got {value!r}"
+    lo, hi = cam._ae_gain_range
+    if lo <= requested <= hi:
+        return requested, None
+    step = cam._cap.sExposeDesc.fAnalogGainStep if cam._cap else None
+    if step:
+        range_desc = f"[{lo}, {hi}] (~{lo * step:.2f}x-{hi * step:.2f}x)"
+    else:
+        range_desc = f"[{lo}, {hi}]"
+    return None, f"analog_gain {requested} is outside this camera's valid range {range_desc} — not applied"
+
+
+def _validate_exposure_us(cam: "MindVisionCamera", value) -> tuple[float | None, str | None]:
+    """Check a requested exposure_us against this camera's real hardware range.
+
+    Always queries the sensor's absolute exposure-time range fresh rather than
+    reusing cam._ae_exposure_range, which can be collapsed to a single value
+    while a fixed-exposure capture profile is active and would wrongly reject
+    (or wrongly accept) values based on that stale state.
+    """
+    import mvsdk
+    try:
+        requested = float(value)
+    except (TypeError, ValueError):
+        return None, f"exposure_us must be a number, got {value!r}"
+    try:
+        exp_min, exp_max, _ = mvsdk.CameraGetExposureTimeRange(cam._h_camera)
+    except Exception:
+        exp_min, exp_max = 26.0, 1_000_000.0
+    if exp_min <= requested <= exp_max:
+        return requested, None
+    return None, (
+        f"exposure_us {requested:g} is outside this camera's valid range "
+        f"[{exp_min:g}, {exp_max:g}] — not applied"
+    )
+
+
+def _validate_int_range(value, lo: int, hi: int, field: str) -> tuple[int | None, str | None]:
+    """Generic bounds check for an integer setting against a known [lo, hi]."""
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        return None, f"{field} must be an integer, got {value!r}"
+    if lo <= requested <= hi:
+        return requested, None
+    return None, f"{field} {requested} is outside the valid range [{lo}, {hi}] — not applied"
+
+
+# Per-field (lo, hi) for settings whose range doesn't depend on live hardware
+# capability (ae_target and light_frequency aren't reported by
+# CameraGetCapability; these are fixed by the MindVision SDK convention).
+_AE_TARGET_RANGE = (0, 255)
+_LIGHT_FREQUENCY_RANGE = (0, 1)  # 0 = 50Hz, 1 = 60Hz
+
+
 def apply_settings(
     h: int, body: dict, cam: "MindVisionCamera | None" = None,
 ) -> tuple[list[str], dict[str, str]]:
@@ -209,6 +277,30 @@ def apply_settings(
         k for k in ("ae_enabled", "exposure_us", "ae_target", "auto_gain", "analog_gain")
         if k in body
     ]
+    if cam is not None and "analog_gain" in body and cam._h_camera is not None:
+        valid_gain, gain_error = _validate_analog_gain(cam, body["analog_gain"])
+        if gain_error:
+            errors["analog_gain"] = gain_error
+            body = {k: v for k, v in body.items() if k != "analog_gain"}
+            exposure_keys = [k for k in exposure_keys if k != "analog_gain"]
+        else:
+            body["analog_gain"] = valid_gain
+    if cam is not None and "exposure_us" in body and cam._h_camera is not None:
+        valid_exposure, exposure_error = _validate_exposure_us(cam, body["exposure_us"])
+        if exposure_error:
+            errors["exposure_us"] = exposure_error
+            body = {k: v for k, v in body.items() if k != "exposure_us"}
+            exposure_keys = [k for k in exposure_keys if k != "exposure_us"]
+        else:
+            body["exposure_us"] = valid_exposure
+    if cam is not None and "ae_target" in body:
+        valid_target, target_error = _validate_int_range(body["ae_target"], *_AE_TARGET_RANGE, "ae_target")
+        if target_error:
+            errors["ae_target"] = target_error
+            body = {k: v for k, v in body.items() if k != "ae_target"}
+            exposure_keys = [k for k in exposure_keys if k != "ae_target"]
+        else:
+            body["ae_target"] = valid_target
     if cam is not None and exposure_keys:
         try:
             cam.set_capture_exposure(
@@ -241,11 +333,15 @@ def apply_settings(
             errors["exposure_us"] = str(exc)
 
     if "ae_target" in body:
-        try:
-            mvsdk.CameraSetAeTarget(h, int(body["ae_target"]))
-            applied.append("ae_target")
-        except Exception as exc:
-            errors["ae_target"] = str(exc)
+        valid, err = _validate_int_range(body["ae_target"], *_AE_TARGET_RANGE, "ae_target")
+        if err:
+            errors["ae_target"] = err
+        else:
+            try:
+                mvsdk.CameraSetAeTarget(h, valid)
+                applied.append("ae_target")
+            except Exception as exc:
+                errors["ae_target"] = str(exc)
 
     if "analog_gain" in body:
         try:
@@ -254,33 +350,64 @@ def apply_settings(
         except Exception as exc:
             errors["analog_gain"] = str(exc)
 
+    cap = cam._cap if cam is not None else None
+
     rgb_keys = ("r_gain", "g_gain", "b_gain")
     if any(k in body for k in rgb_keys):
-        try:
-            r, g, b = mvsdk.CameraGetGain(h)
-            mvsdk.CameraSetGain(
-                h,
-                int(body.get("r_gain", r)),
-                int(body.get("g_gain", g)),
-                int(body.get("b_gain", b)),
-            )
-            applied.extend(k for k in rgb_keys if k in body)
-        except Exception as exc:
-            errors["rgb_gain"] = str(exc)
+        rgb_range = cap.sRgbGainRange if cap else None
+        rgb_bounds = {
+            "r_gain": (rgb_range.iRGainMin, rgb_range.iRGainMax) if rgb_range else (0, 400),
+            "g_gain": (rgb_range.iGGainMin, rgb_range.iGGainMax) if rgb_range else (0, 400),
+            "b_gain": (rgb_range.iBGainMin, rgb_range.iBGainMax) if rgb_range else (0, 400),
+        }
+        rgb_errors = {}
+        rgb_valid = {}
+        for k in rgb_keys:
+            if k not in body:
+                continue
+            valid, err = _validate_int_range(body[k], *rgb_bounds[k], k)
+            if err:
+                rgb_errors[k] = err
+            else:
+                rgb_valid[k] = valid
+        if rgb_errors:
+            errors.update(rgb_errors)
+        if rgb_valid:
+            try:
+                r, g, b = mvsdk.CameraGetGain(h)
+                mvsdk.CameraSetGain(
+                    h,
+                    rgb_valid.get("r_gain", r),
+                    rgb_valid.get("g_gain", g),
+                    rgb_valid.get("b_gain", b),
+                )
+                applied.extend(rgb_valid.keys())
+            except Exception as exc:
+                errors["rgb_gain"] = str(exc)
 
     if "sharpness" in body:
-        try:
-            mvsdk.CameraSetSharpness(h, int(body["sharpness"]))
-            applied.append("sharpness")
-        except Exception as exc:
-            errors["sharpness"] = str(exc)
+        lo, hi = (cap.sSharpnessRange.iMin, cap.sSharpnessRange.iMax) if cap else (0, 100)
+        valid, err = _validate_int_range(body["sharpness"], lo, hi, "sharpness")
+        if err:
+            errors["sharpness"] = err
+        else:
+            try:
+                mvsdk.CameraSetSharpness(h, valid)
+                applied.append("sharpness")
+            except Exception as exc:
+                errors["sharpness"] = str(exc)
 
     if "gamma" in body:
-        try:
-            mvsdk.CameraSetGamma(h, int(body["gamma"]))
-            applied.append("gamma")
-        except Exception as exc:
-            errors["gamma"] = str(exc)
+        lo, hi = (cap.sGammaRange.iMin, cap.sGammaRange.iMax) if cap else (0, 250)
+        valid, err = _validate_int_range(body["gamma"], lo, hi, "gamma")
+        if err:
+            errors["gamma"] = err
+        else:
+            try:
+                mvsdk.CameraSetGamma(h, valid)
+                applied.append("gamma")
+            except Exception as exc:
+                errors["gamma"] = str(exc)
 
     if "rotation" in body:
         try:
@@ -314,18 +441,28 @@ def apply_settings(
             errors["mono_enabled"] = str(exc)
 
     if "contrast" in body:
-        try:
-            mvsdk.CameraSetContrast(h, int(body["contrast"]))
-            applied.append("contrast")
-        except Exception as exc:
-            errors["contrast"] = str(exc)
+        lo, hi = (cap.sContrastRange.iMin, cap.sContrastRange.iMax) if cap else (0, 200)
+        valid, err = _validate_int_range(body["contrast"], lo, hi, "contrast")
+        if err:
+            errors["contrast"] = err
+        else:
+            try:
+                mvsdk.CameraSetContrast(h, valid)
+                applied.append("contrast")
+            except Exception as exc:
+                errors["contrast"] = str(exc)
 
     if "saturation" in body:
-        try:
-            mvsdk.CameraSetSaturation(h, int(body["saturation"]))
-            applied.append("saturation")
-        except Exception as exc:
-            errors["saturation"] = str(exc)
+        lo, hi = (cap.sSaturationRange.iMin, cap.sSaturationRange.iMax) if cap else (0, 200)
+        valid, err = _validate_int_range(body["saturation"], lo, hi, "saturation")
+        if err:
+            errors["saturation"] = err
+        else:
+            try:
+                mvsdk.CameraSetSaturation(h, valid)
+                applied.append("saturation")
+            except Exception as exc:
+                errors["saturation"] = str(exc)
 
     if "noise_filter" in body:
         try:
@@ -356,18 +493,27 @@ def apply_settings(
             errors["anti_flick"] = str(exc)
 
     if "light_frequency" in body:
-        try:
-            mvsdk.CameraSetLightFrequency(h, int(body["light_frequency"]))
-            applied.append("light_frequency")
-        except Exception as exc:
-            errors["light_frequency"] = str(exc)
+        valid, err = _validate_int_range(body["light_frequency"], *_LIGHT_FREQUENCY_RANGE, "light_frequency")
+        if err:
+            errors["light_frequency"] = err
+        else:
+            try:
+                mvsdk.CameraSetLightFrequency(h, valid)
+                applied.append("light_frequency")
+            except Exception as exc:
+                errors["light_frequency"] = str(exc)
 
     if "frame_speed" in body:
-        try:
-            mvsdk.CameraSetFrameSpeed(h, int(body["frame_speed"]))
-            applied.append("frame_speed")
-        except Exception as exc:
-            errors["frame_speed"] = str(exc)
+        hi = max(0, cap.iFrameSpeedDesc - 1) if cap else 2
+        valid, err = _validate_int_range(body["frame_speed"], 0, hi, "frame_speed")
+        if err:
+            errors["frame_speed"] = err
+        else:
+            try:
+                mvsdk.CameraSetFrameSpeed(h, valid)
+                applied.append("frame_speed")
+            except Exception as exc:
+                errors["frame_speed"] = str(exc)
 
     return applied, errors
 
@@ -701,8 +847,11 @@ class MindVisionCamera(BaseCamera):
         }
 
     def _stream_override_wanted(self) -> bool:
+        manual_capture_only = runtime_config.get(
+            "camera.manual_exposure_capture_only", config.MANUAL_EXPOSURE_CAPTURE_ONLY
+        )
         return (
-            config.MANUAL_EXPOSURE_CAPTURE_ONLY
+            manual_capture_only
             and not self._capture_exposure[0]
             and self._mode != CameraMode.HARDWARE_TRIGGER
         )
@@ -947,6 +1096,21 @@ class MindVisionCamera(BaseCamera):
         behaviour and do not need to be applied to the camera SDK. If a key ever
         needs to translate to a live SDK call, add it here.
         """
+        if key == "camera.manual_exposure_capture_only":
+            # Push the new value onto an already-running stream immediately,
+            # instead of waiting for the next stream_frames() session to pick
+            # it up. value=False means the capture profile should now stay on
+            # the hardware during streaming too; value=True restores the
+            # auto-exposure preview behaviour. No-op if nothing is streaming
+            # right now — the next stream_frames() session picks up the new
+            # value on its own via _stream_override_wanted().
+            if self._h_camera is None or not self._streaming:
+                return
+            if value:
+                self.begin_stream_exposure()
+            else:
+                self.end_stream_exposure()
+            return
         logger.debug("apply_config_noop", key=key, value=value)
 
     def get_orientation(self) -> dict:

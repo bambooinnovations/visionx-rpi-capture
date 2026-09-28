@@ -323,6 +323,35 @@ async function loadSettings() {
   }
 }
 
+// ── Stream-exposure-lock (station-wide runtime config) ─────────────────
+
+async function loadStreamExposureLock() {
+  try {
+    const res = await apiFetch('/api/system/config');
+    const manualCaptureOnly = res.config['camera.manual_exposure_capture_only'];
+    // Checkbox reads "locked to capture profile", which is the inverse of
+    // the manual_exposure_capture_only flag (true = stream uses AE instead).
+    document.getElementById('lock-stream-exposure').checked = manualCaptureOnly === false;
+  } catch (e) {
+    showError('Failed to load stream exposure setting: ' + e.message);
+  }
+}
+
+async function setStreamExposureLock(locked) {
+  try {
+    await apiFetch('/api/system/config', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({'camera.manual_exposure_capture_only': !locked}),
+    });
+    showSuccess(locked ? 'Live preview locked to capture profile' : 'Live preview back on auto-exposure');
+  } catch (e) {
+    showError('Failed to change stream exposure setting: ' + e.message);
+    // Revert the checkbox since the change didn't take.
+    document.getElementById('lock-stream-exposure').checked = !locked;
+  }
+}
+
 // ── Apply the controls as a draft ─────────────────────────────────────
 
 async function applyChanges() {
@@ -686,6 +715,13 @@ function applySettingsSearch(query) {
 // ── Wire all controls ─────────────────────────────────────────────────
 
 function wireControls() {
+  // Stream-exposure-lock toggle — a station-wide runtime setting, not part
+  // of this camera's draft/production profile, so it goes straight to
+  // /api/system/config instead of the /settings draft flow.
+  document.getElementById('lock-stream-exposure').addEventListener('change', function () {
+    setStreamExposureLock(this.checked);
+  });
+
   // AE toggle
   document.getElementById('ae-enabled').addEventListener('change', function () {
     updateAutoRows();
@@ -901,5 +937,6 @@ async function checkStitchWbLock() {
 document.addEventListener('DOMContentLoaded', async () => {
   wireControls();
   await loadSettings();
+  await loadStreamExposureLock();
   checkStitchWbLock();
 });

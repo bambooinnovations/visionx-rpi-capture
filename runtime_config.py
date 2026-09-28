@@ -15,6 +15,7 @@ PATH = Path(__file__).parent / "runtime_config.json"
 UPDATABLE: dict[str, type] = {
     "stream.fps":                     int,
     "stream.quality":                 int,
+    "camera.manual_exposure_capture_only": bool,
     "hw_trigger.destination_url":     str,
     "hw_trigger.destination_api_key": str,
     "hw_trigger.retry_attempts":      int,

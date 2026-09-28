@@ -68,6 +68,21 @@
       <h2 class="section-title">Exposure <span class="scope-badge scope-capture" id="exposure-scope-badge">Capture</span></h2>
 
       <div class="setting-row">
+        <label class="setting-label" for="lock-stream-exposure">Lock Live Preview to Capture Profile</label>
+        <label class="toggle">
+          <input type="checkbox" id="lock-stream-exposure">
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <p class="section-note">
+        Off (default): the live stream runs on auto-exposure/auto-gain, and the camera switches to
+        the manual capture profile only for the instant of each shot. On: the capture profile stays
+        on the camera the whole time, stream included &mdash; no exposure/gain switch happens right
+        before a capture. Applies to every camera on this station. Only turn this on if your lighting
+        is fixed and the manual profile also gives a usable live preview.
+      </p>
+
+      <div class="setting-row">
         <label class="setting-label" for="ae-enabled">Auto Exposure</label>
         <label class="toggle">
           <input type="checkbox" id="ae-enabled">
