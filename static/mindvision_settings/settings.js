@@ -475,6 +475,85 @@ function stopStream() {
 let _snapshotObjectUrl = null;
 let _snapshotState = null; // settings the last snapshot was taken with
 
+// ── Zoom / pan ───────────────────────────────────────────────────────────
+
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 5;
+let zoomScale = 1;
+let panX = 0;
+let panY = 0;
+let _dragState = null; // {pointerId, startX, startY, panX0, panY0}
+
+function activePreviewImg() {
+  const img = document.getElementById('snapshot-img');
+  return img.classList.contains('hidden') ? document.getElementById('preview-stream') : img;
+}
+
+function clampPan(img) {
+  const wrap = document.getElementById('stream-wrap');
+  const overflowX = Math.max(0, (img.offsetWidth * zoomScale - wrap.clientWidth) / 2);
+  const overflowY = Math.max(0, (img.offsetHeight * zoomScale - wrap.clientHeight) / 2);
+  panX = Math.max(-overflowX, Math.min(overflowX, panX));
+  panY = Math.max(-overflowY, Math.min(overflowY, panY));
+}
+
+function applyZoomTransform() {
+  const img = activePreviewImg();
+  clampPan(img);
+  const transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+  document.getElementById('preview-stream').style.transform = transform;
+  document.getElementById('snapshot-img').style.transform = transform;
+  document.getElementById('stream-wrap').classList.toggle('zoomed', zoomScale > 1);
+  document.getElementById('zoom-reset').textContent = `${Math.round(zoomScale * 100)}%`;
+}
+
+function resetZoom() {
+  zoomScale = 1;
+  panX = 0;
+  panY = 0;
+  applyZoomTransform();
+}
+
+function setZoom(newScale) {
+  zoomScale = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newScale));
+  if (zoomScale === ZOOM_MIN) { panX = 0; panY = 0; }
+  applyZoomTransform();
+}
+
+function initZoomPan() {
+  const wrap = document.getElementById('stream-wrap');
+
+  wrap.addEventListener('wheel', e => {
+    e.preventDefault();
+    setZoom(zoomScale * (1 - e.deltaY * 0.001));
+  }, { passive: false });
+
+  document.getElementById('zoom-in').addEventListener('click', () => setZoom(zoomScale * 1.25));
+  document.getElementById('zoom-out').addEventListener('click', () => setZoom(zoomScale / 1.25));
+  document.getElementById('zoom-reset').addEventListener('click', resetZoom);
+
+  wrap.addEventListener('pointerdown', e => {
+    if (zoomScale <= ZOOM_MIN) return;
+    const img = activePreviewImg();
+    _dragState = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, panX0: panX, panY0: panY };
+    img.classList.add('dragging');
+    wrap.setPointerCapture(e.pointerId);
+  });
+  wrap.addEventListener('pointermove', e => {
+    if (!_dragState || e.pointerId !== _dragState.pointerId) return;
+    panX = _dragState.panX0 + (e.clientX - _dragState.startX);
+    panY = _dragState.panY0 + (e.clientY - _dragState.startY);
+    applyZoomTransform();
+  });
+  const endDrag = e => {
+    if (!_dragState || e.pointerId !== _dragState.pointerId) return;
+    activePreviewImg().classList.remove('dragging');
+    _dragState = null;
+  };
+  wrap.addEventListener('pointerup', endDrag);
+  wrap.addEventListener('pointercancel', endDrag);
+}
+
 // ── Snapshot settings card ────────────────────────────────────────────
 
 function showSnapshotInfo(open) {
@@ -566,6 +645,7 @@ async function takeSnapshot() {
     img.src = _snapshotObjectUrl;
     img.classList.remove('hidden');
     placeholder.classList.add('hidden');
+    resetZoom();
     if (_snapshotState) {
       renderSnapshotInfo(_snapshotState);
       showSnapshotInfo(true);
@@ -790,8 +870,11 @@ function wireControls() {
         showSnapshotInfo(false);
         startStream();
       }
+      resetZoom();
     });
   });
+
+  initZoomPan();
 }
 
 // ── Stitch WB lock ────────────────────────────────────────────────────

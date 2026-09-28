@@ -488,7 +488,11 @@ body {
   max-height: 100%;
   object-fit: contain;
   display: block;
+  touch-action: none;
+  transform-origin: center center;
 }
+.stream-wrap.zoomed .stream-img { cursor: grab; }
+.stream-wrap.zoomed .stream-img.dragging { cursor: grabbing; }
 .stream-hint {
   font-size: 12px;
   color: var(--text-muted);
@@ -665,6 +669,32 @@ body {
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
+
+/* ── Zoom controls ────────────────────────────────────────────────────── */
+.zoom-controls {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.zoom-controls button {
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+  background: var(--surface);
+  border: none;
+  cursor: pointer;
+}
+.zoom-controls button:hover { background: var(--pill-gray-bg); }
+#zoom-reset { min-width: 48px; font-variant-numeric: tabular-nums; }
 
 /* ── Draft badge + change list ───────────────────────────────────────── */
 .page-header-right { position: relative; }
