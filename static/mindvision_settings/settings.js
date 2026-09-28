@@ -497,8 +497,12 @@ function startStream() {
 function stopStream() {
   // Clearing src closes the HTTP connection, which lets the server-side
   // MJPEG generator exit cleanly and revert trigger mode.
-  document.getElementById('preview-stream').src = '';
-  document.getElementById('preview-stream').classList.add('hidden');
+  // Detach onerror first: clearing src fires it, which would show a bogus
+  // "Stream unavailable" error on an intentional stop.
+  const img = document.getElementById('preview-stream');
+  img.onerror = null;
+  img.src = '';
+  img.classList.add('hidden');
 }
 
 let _snapshotObjectUrl = null;
