@@ -12,7 +12,11 @@ let _pending = false;  // a local change not yet acknowledged by the server
 async function apiFetch(path, opts = {}) {
   const res = await fetch(path, opts);
   const json = await res.json().catch(() => ({}));
-  if (!res.ok && res.status !== 207) throw new Error(json.error || `HTTP ${res.status}`);
+  if (!res.ok && res.status !== 207) {
+    const err = new Error(json.error || `HTTP ${res.status}`);
+    err.body = json;
+    throw err;
+  }
   return json;
 }
 
@@ -94,6 +98,7 @@ function renderDraft(changes) {
     body.append(tr);
   }
   updateDraftButtons();
+  refreshProfiles();
 }
 
 function toggleDraftList(open) {
@@ -434,6 +439,216 @@ window.addEventListener('pagehide', () => {
     navigator.sendBeacon(`${API}/settings/draft/discard?camera_id=${CAMERA_ID}`);
   }
 });
+
+// ── Capture profiles ──────────────────────────────────────────────────
+// A profile is a named copy of every setting on this page, stored on the RPi.
+// Applying one replaces the camera's production settings (any draft is dropped).
+
+let _profiles = [];        // from GET /profiles
+let _profileActiveId = null;
+let _profileModified = false;
+let _profileSelected = ''; // id picked in the dropdown
+let _profileSeq = 0;       // drops out-of-order refresh responses
+
+function selectedProfile() {
+  return _profiles.find(p => p.id === _profileSelected) || null;
+}
+
+async function refreshProfiles() {
+  const seq = ++_profileSeq;
+  try {
+    const res = await apiFetch(`${API}/profiles?camera_id=${CAMERA_ID}`);
+    if (seq !== _profileSeq) return;
+    _profiles = res.profiles || [];
+    _profileActiveId = res.active_id;
+    _profileModified = !!res.modified;
+    if (!_profiles.some(p => p.id === _profileSelected)) {
+      _profileSelected = _profileActiveId || (_profiles[0] && _profiles[0].id) || '';
+    }
+    renderProfiles();
+  } catch (e) {
+    if (seq === _profileSeq) {
+      document.getElementById('profile-status').textContent = 'Profiles unavailable: ' + e.message;
+    }
+  }
+}
+
+function renderProfiles() {
+  const select = document.getElementById('profile-select');
+  select.replaceChildren();
+  if (_profiles.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No profiles saved';
+    select.append(opt);
+  }
+  for (const p of _profiles) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.id === _profileActiveId ? `✓ ${p.name} (active)` : p.name;
+    select.append(opt);
+  }
+  select.value = _profileSelected;
+  select.disabled = _profiles.length === 0;
+
+  const sel = selectedProfile();
+  for (const id of ['btn-profile-apply', 'btn-profile-update', 'btn-profile-rename', 'btn-profile-delete']) {
+    document.getElementById(id).disabled = !sel;
+  }
+  const status = document.getElementById('profile-status');
+  const active = _profiles.find(p => p.id === _profileActiveId);
+  status.classList.toggle('is-modified', !!active && _profileModified);
+  if (!active) {
+    status.textContent = 'No profile applied. The camera is using its own saved settings.';
+  } else if (_profileModified) {
+    status.textContent = `Active: ${active.name} (rev ${active.revision}) — the camera no longer matches it.`;
+  } else {
+    status.textContent = `Active: ${active.name} (rev ${active.revision}) — the camera matches it.`;
+  }
+  document.getElementById('btn-profile-apply').textContent =
+    sel && sel.id === _profileActiveId && _profileModified ? 'Re-apply' : 'Apply';
+}
+
+// One reusable dialog. `mode` decides the fields and what OK does.
+let _profileDialogMode = null;
+
+function openProfileDialog(mode) {
+  const sel = selectedProfile();
+  const selName = sel ? sel.name : '';
+  const unsaved = _draftCount || 'unsaved';
+  const cfg = {
+    create: {
+      title: 'Save as new profile',
+      text: 'Copies every setting currently on this page (including unsaved changes) into a new profile.',
+      fields: true, ok: 'Save profile',
+    },
+    rename: {title: 'Rename profile', text: '', fields: true, ok: 'Save'},
+    update: {
+      title: `Update “${selName}”`,
+      text: 'Overwrites this profile with every setting currently on this page (including unsaved changes). The camera is not changed until you apply it.',
+      fields: false, ok: 'Update profile',
+    },
+    delete: {
+      title: `Delete “${selName}”`,
+      text: 'The profile is removed from this camera. Anything that refers to it will no longer find it. The camera keeps its current settings.',
+      fields: false, ok: 'Delete',
+    },
+    apply: {
+      title: `Apply “${selName}”`,
+      text: `This replaces the camera's settings and discards your ${unsaved} unsaved change${_draftCount === 1 ? '' : 's'}.`,
+      fields: false, ok: 'Apply profile',
+    },
+  }[mode];
+  _profileDialogMode = mode;
+  document.getElementById('profile-dialog-title').textContent = cfg.title;
+  document.getElementById('profile-dialog-text').textContent = cfg.text;
+  document.getElementById('profile-dialog-fields').classList.toggle('hidden', !cfg.fields);
+  const ok = document.getElementById('profile-dialog-ok');
+  ok.textContent = cfg.ok;
+  ok.className = mode === 'delete' ? 'btn btn-danger' : 'btn btn-primary';
+  const name = document.getElementById('profile-dialog-name');
+  const desc = document.getElementById('profile-dialog-desc');
+  name.value = mode === 'rename' && sel ? sel.name : '';
+  desc.value = mode === 'rename' && sel ? sel.description : '';
+  document.getElementById('profile-dialog').classList.remove('hidden');
+  if (cfg.fields) name.focus(); else ok.focus();
+}
+
+function closeProfileDialog() {
+  document.getElementById('profile-dialog').classList.add('hidden');
+  _profileDialogMode = null;
+}
+
+function profileRequest(path, method, body) {
+  return apiFetch(`${API}/profiles${path}?camera_id=${CAMERA_ID}`, {
+    method,
+    headers: {'Content-Type': 'application/json'},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+function describeApplyError(e) {
+  const errs = e.body && e.body.errors;
+  if (errs && Object.keys(errs).length) {
+    const list = Object.entries(errs).map(([k, v]) => `${DRAFT_LABELS[k] || k}: ${v}`).join('; ');
+    return `${e.message}. ${list}`;
+  }
+  return e.message;
+}
+
+async function confirmProfileDialog() {
+  const mode = _profileDialogMode;
+  const sel = selectedProfile();
+  const name = document.getElementById('profile-dialog-name').value.trim();
+  const description = document.getElementById('profile-dialog-desc').value.trim();
+  if ((mode === 'create' || mode === 'rename') && !name) {
+    document.getElementById('profile-dialog-name').focus();
+    return;
+  }
+  closeProfileDialog();
+  clearTimeout(liveTimer);
+  try {
+    if (mode === 'create') {
+      if (_pending) await applyChanges(); // make sure the camera holds what's on screen
+      const p = await profileRequest('', 'POST', {name, description, from_current: true});
+      _profileSelected = p.id;
+      showSuccess('Profile saved');
+    } else if (mode === 'rename') {
+      await profileRequest(`/${sel.id}`, 'PUT', {name, description});
+      showSuccess('Profile renamed');
+    } else if (mode === 'update') {
+      if (_pending) await applyChanges();
+      await profileRequest(`/${sel.id}`, 'PUT', {from_current: true});
+      showSuccess('Profile updated');
+    } else if (mode === 'delete') {
+      await profileRequest(`/${sel.id}`, 'DELETE');
+      _profileSelected = '';
+      showSuccess('Profile deleted');
+    } else if (mode === 'apply') {
+      await doApplyProfile(sel);
+      return;
+    }
+    clearError();
+    await refreshProfiles();
+  } catch (e) {
+    showError(`Profile ${mode} failed: ${e.message}`);
+  }
+}
+
+async function doApplyProfile(sel) {
+  try {
+    await profileRequest('/apply', 'POST', {profile_id: sel.id});
+    await loadSettings(); // controls show the applied values; refreshes the profile bar too
+    clearError();
+    showSuccess(`Applied “${sel.name}”`);
+  } catch (e) {
+    showError('Apply failed: ' + describeApplyError(e));
+  }
+}
+
+function applySelectedProfile() {
+  const sel = selectedProfile();
+  if (!sel) return;
+  clearTimeout(liveTimer);
+  if (_draftCount > 0 || _pending) openProfileDialog('apply');
+  else doApplyProfile(sel);
+}
+
+function wireProfileControls() {
+  const select = document.getElementById('profile-select');
+  select.addEventListener('change', () => { _profileSelected = select.value; renderProfiles(); });
+  document.getElementById('btn-profile-apply').addEventListener('click', applySelectedProfile);
+  document.getElementById('btn-profile-new').addEventListener('click', () => openProfileDialog('create'));
+  document.getElementById('btn-profile-update').addEventListener('click', () => openProfileDialog('update'));
+  document.getElementById('btn-profile-rename').addEventListener('click', () => openProfileDialog('rename'));
+  document.getElementById('btn-profile-delete').addEventListener('click', () => openProfileDialog('delete'));
+  document.getElementById('profile-dialog-cancel').addEventListener('click', closeProfileDialog);
+  document.getElementById('profile-dialog-ok').addEventListener('click', confirmProfileDialog);
+  document.getElementById('profile-dialog').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT') confirmProfileDialog();
+    if (e.key === 'Escape') closeProfileDialog();
+  });
+}
 
 // ── Auto white balance ────────────────────────────────────────────────
 
@@ -940,6 +1155,7 @@ function wireControls() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   wireControls();
+  wireProfileControls();
   await loadSettings();
   await loadStreamExposureLock();
 });

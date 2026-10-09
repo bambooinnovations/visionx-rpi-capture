@@ -578,6 +578,10 @@ class MindVisionCamera(BaseCamera):
         # A fixed value is expressed by collapsing the matching range to it.
         self._ae_exposure_range: tuple[float, float] = (100.0, 2_000_000.0)
         self._ae_gain_range: tuple[int, int] = (16, 128)
+        # Optional hook set by the app: serial -> settings dict of the camera's
+        # active capture profile (or None). open() applies it, so the profile
+        # survives restarts and USB reconnects.
+        self.active_profile_loader = None
 
     def open(self) -> None:
         global _sdk_initialized, _dev_list_cache
@@ -755,6 +759,18 @@ class MindVisionCamera(BaseCamera):
                 error_code=e.error_code, message=e.message,
                 frames_total=stat.iTotal, frames_lost=stat.iLost,
             )
+
+        if self.active_profile_loader is not None:
+            try:
+                profile_settings = self.active_profile_loader(sn)
+                if profile_settings:
+                    applied, errors = self.apply_production(dict(profile_settings))
+                    logger.info(
+                        "mindvision_active_profile_restored",
+                        sn=sn, applied=applied, errors=errors,
+                    )
+            except Exception:
+                logger.exception("mindvision_active_profile_restore_failed", sn=sn)
 
     @property
     def mode(self) -> CameraMode:
@@ -1053,6 +1069,48 @@ class MindVisionCamera(BaseCamera):
                 apply_settings(self._h_camera, {k: p for k, (p, _) in changes.items()}, self)
             self._draft_dirty = False
             return list(changes)
+
+    def apply_profile(
+        self, settings: dict, lock_timeout: float = 5.0,
+    ) -> dict[str, str]:
+        """Make `settings` the camera's production settings, all or nothing.
+
+        Applied in memory (not saved to flash). Drops any settings-page draft
+        first. Waits up to `lock_timeout` seconds for an in-flight capture to
+        finish (taking _lock before _exposure_lock, the documented order) and
+        raises RuntimeError if the camera stays busy.
+
+        Returns {} on success. If any setting is rejected, the settings the
+        camera held before are restored and the rejections are returned
+        ({key: message}), so the camera is never left half-applied.
+        """
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        if not self._lock.acquire(timeout=lock_timeout):
+            raise RuntimeError("Camera is busy; try again")
+        try:
+            with self._exposure_lock:
+                self.discard_draft()
+                before = self.current_settings()
+                _, errors = self.apply_production(dict(settings))
+                if errors:
+                    _, restore_errors = self.apply_production(before)
+                    if restore_errors:
+                        logger.error("mindvision_profile_rollback_incomplete", errors=restore_errors)
+                return errors
+        finally:
+            self._lock.release()
+
+    def profile_differences(self, settings: dict) -> dict[str, tuple]:
+        """{key: (profile value, current value)} for each profile setting the camera doesn't hold."""
+        if self._h_camera is None:
+            return {}
+        current = self.current_settings()
+        return {
+            k: (v, current[k])
+            for k, v in settings.items()
+            if k in current and not _same_setting(k, v, current[k])
+        }
 
     @contextmanager
     def production_applied(self):

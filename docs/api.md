@@ -504,6 +504,40 @@ Grab a single frame and return it as a JPEG. Works at any exposure time by compu
 
 ---
 
+## MindVision — capture profiles
+
+Named sets of camera settings stored on the RPi (SQLite, `[profiles] db_path`, default `data/capture_profiles.db`). Profiles are scoped to the camera's **serial number**; VisionX stores a profile's `id` (UUID) as its reference. The list, create, `active`, `export` and `import` endpoints take `?camera_id=` (default `0`) and answer `404` if that camera isn't open. The endpoints addressed by profile id (`GET`/`PUT`/`DELETE /profiles/<id>`) and `POST /profiles/apply` (id in the request body) need **only the id**: the RPi finds the camera from the profile's serial number, and `camera_id` is ignored. They answer `404` if the profile doesn't exist or its camera isn't connected.
+
+A profile's `settings` is a complete copy of what the camera settings page edits: every writable settings key (`ae_enabled`, `exposure_us`, `gamma`, `r_gain`, …), no more, no fewer. Normally create one with `from_current: true` rather than building the object by hand. Values are range-checked when the profile is **applied**, not when it is saved.
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| GET | `/api/cameras/profiles` | `{camera_id, camera_serial, active_id, modified, profiles[]}` |
+| POST | `/api/cameras/profiles` | Create. Body `{name, description?, from_current: true}` (snapshots every setting the camera holds now, including an unsaved draft) or `{name, description?, settings}` with the complete set. `201`; `409` if the name exists |
+| GET | `/api/cameras/profiles/<id>` | One profile: `{id, camera_serial, name, description, settings, revision, created_at, updated_at}` |
+| PUT | `/api/cameras/profiles/<id>` | Change `name` / `description` / `settings` (or `from_current: true`). Bumps `revision`. Does not touch the camera |
+| DELETE | `/api/cameras/profiles/<id>` | Delete. If it was active, the active pointer is cleared and the camera keeps its current settings |
+| POST | `/api/cameras/profiles/apply` | Apply a profile to its camera. Body `{"profile_id": "<id>"}` (see below) |
+| GET | `/api/cameras/profiles/active` | `{active_id, profile, applied_at, modified, differences}` |
+| GET | `/api/cameras/profiles/export` | All of the camera's profiles as JSON, for backup or copying to another station |
+| POST | `/api/cameras/profiles/import` | Body `{profiles: [...]}` (export format). Upserts by `id`; `207` with `errors` for skipped entries |
+
+### `POST /api/cameras/profiles/apply`
+
+Body: `{"profile_id": "<id>"}`. Needs only the profile id; the camera is the one the profile was saved for, wherever it sits in the camera list. Makes the profile the camera's production settings, all or nothing: discards any settings-page draft, applies the values in memory (not written to the camera's flash), and records the profile as active. The active profile is re-applied automatically when the service restarts or the camera reconnects. Idempotent.
+
+| Status | Meaning |
+| ------ | ------- |
+| `200` | Applied. Body: `{camera_id` (the camera it was applied to)`, active_id, profile, applied_at, modified, differences}` |
+| `422` | The camera rejected one or more settings (`errors: {key: message}`). **Nothing is changed**: the camera keeps its previous settings and the active profile is unchanged |
+| `400` | `profile_id` missing or not a string |
+| `404` | Unknown profile, or the camera it belongs to isn't connected |
+| `409` | A capture is in flight (camera busy) — retry |
+
+`modified` is `true` when the camera no longer holds the active profile's values (e.g. someone changed a setting by hand); `differences` maps each differing key to `{profile, current}`. VisionX should compare `profile.revision` from `GET /profiles/active` with the revision it expects before capturing.
+
+---
+
 ## MindVision — full camera config (read-only)
 
 ### `GET /api/cameras/config/full`

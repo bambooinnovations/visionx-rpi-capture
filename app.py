@@ -69,6 +69,15 @@ mindvision_cameras: dict[int, MindVisionCamera] = {
     cam_id: cam for cam_id, cam in cameras.items() if isinstance(cam, MindVisionCamera)
 }
 
+# Re-apply each camera's active capture profile whenever it opens (boot, USB reconnect).
+def _active_profile_settings(serial: str) -> dict | None:
+    from camera.profiles import get_store
+    active = get_store().get_active(serial)
+    return active["profile"]["settings"] if active else None
+
+for _mv_cam in mindvision_cameras.values():
+    _mv_cam.active_profile_loader = _active_profile_settings
+
 # Per-camera locks so concurrent single-camera captures don't block each other.
 capture_locks: dict[int, threading.Lock] = {
     cam_id: threading.Lock() for cam_id in cameras

@@ -216,4 +216,16 @@ Then open `http://<host>:8888/` in a browser — new captures appear instantly w
 | `GET` | `/api/decoder/status` | Detailed trigger stats and Arduino state |
 | `GET` | `/api/metrics/stats` | Capture performance statistics |
 
+### Capture profiles (MindVision)
+
+Camera settings are saved on the RPi as named **capture profiles**. A profile is a complete copy of the settings on the camera settings page, stored per camera serial number. A client keeps the profile's `id` (UUID) as its reference, lists the choices from the RPi, and tells the RPi which one to use before capturing. Apply takes only the profile id (no `camera_id`) and is all or nothing.
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| `GET` | `/api/cameras/profiles` | List profiles, the active one, and whether the camera has drifted from it |
+| `POST` | `/api/cameras/profiles/apply` | Apply a profile to its camera. Body `{"profile_id": "<id>"}` (`200`, `409` capture in flight, `422` rejected and nothing changed) |
+| `GET` | `/api/cameras/profiles/active` | Active profile, its `revision`, `modified` flag and `differences` |
+
+Create, edit, delete, export and import are also available; see [api.md](api.md#mindvision--capture-profiles). Before a capture session, check `GET /api/cameras/profiles/active`: if `active_id` or `profile.revision` is not what you expect, or `modified` is `true`, call apply again.
+
 See [api.md](api.md) for full parameter and response documentation.

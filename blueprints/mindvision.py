@@ -18,6 +18,7 @@ import config
 import structlog
 from camera.mindvision import CameraMode, MindVisionCamera, capture_many
 from camera.mindvision import read_hw_settings as _read_mv_settings_hw
+from camera.profiles import ProfileError, get_store as _profiles
 from flask import Blueprint, Response, after_this_request, jsonify, request, send_file
 
 logger = structlog.get_logger()
@@ -1352,6 +1353,192 @@ def create_blueprint(
             logger.info("camera_factory_reset", camera_id=cam_id)
         return jsonify({"camera_id": cam_id, "applied": applied, "errors": errors,
                         "saved": not bool(errors)}), (207 if errors else 200)
+
+    # ── Capture profiles (named setting sets, stored in SQLite) ─────────────
+    # Scoped to the camera's serial number; VisionX references a profile by id.
+
+    def _profile_context():
+        """(cam, serial, error_response) for profile routes."""
+        cam, cam_id = _resolve_camera()
+        if cam is None or cam._h_camera is None or cam.serial_number is None:
+            return None, None, (jsonify({"error": f"Camera {cam_id} not found or not open"}), 404)
+        return cam, cam.serial_number, None
+
+    def _profile_context_for(profile_id: str):
+        """(cam, serial, error_response) for routes addressed by profile id.
+
+        The camera is found from the profile itself (its serial number), so the
+        caller needs only the id: no camera_id, which can change when USB
+        re-enumerates.
+        """
+        try:
+            serial = _profiles().find(profile_id)["camera_serial"]
+        except ProfileError as exc:
+            return None, None, _profile_error(exc)
+        for cam in cameras.values():
+            if cam._h_camera is not None and cam.serial_number == serial:
+                return cam, serial, None
+        return None, None, (jsonify({
+            "error": f"Camera {serial} for profile {profile_id} is not connected",
+        }), 404)
+
+    def _profile_error(exc: ProfileError):
+        return jsonify({"error": str(exc)}), exc.status
+
+    def _active_state(cam: "MindVisionCamera", serial: str) -> dict:
+        """Active profile plus whether the camera has drifted from it."""
+        active = _profiles().get_active(serial)
+        if active is None:
+            return {"active_id": None, "profile": None, "applied_at": None,
+                    "modified": False, "differences": {}}
+        profile = active["profile"]
+        diffs = cam.profile_differences(profile["settings"])
+        return {
+            "active_id": profile["id"], "profile": profile, "applied_at": active["applied_at"],
+            "modified": bool(diffs),
+            "differences": {k: {"profile": p, "current": c} for k, (p, c) in diffs.items()},
+        }
+
+    @bp.route("/profiles", methods=["GET"])
+    def list_profiles():
+        """All profiles for the camera, with the active one and its drift state."""
+        cam, serial, err = _profile_context()
+        if err:
+            return err
+        state = _active_state(cam, serial)
+        return jsonify({
+            "camera_id": cam.camera_index, "camera_serial": serial,
+            "active_id": state["active_id"], "modified": state["modified"],
+            "profiles": _profiles().list(serial),
+        })
+
+    @bp.route("/profiles", methods=["POST"])
+    def create_profile():
+        """Create a profile. Body: {name, description?, from_current: true}
+        to snapshot every setting the camera holds now (including an unsaved
+        settings-page draft), or {name, description?, settings} with the full
+        set of settings."""
+        cam, serial, err = _profile_context()
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        settings = cam.current_settings() if body.get("from_current") else body.get("settings")
+        try:
+            profile = _profiles().create(serial, body.get("name"), settings, body.get("description"))
+        except ProfileError as exc:
+            return _profile_error(exc)
+        logger.info("capture_profile_created", camera_id=cam.camera_index, profile_id=profile["id"])
+        return jsonify(profile), 201
+
+    @bp.route("/profiles/active", methods=["GET"])
+    def get_active_profile():
+        """Which profile is applied, its revision, and whether the camera has drifted from it."""
+        cam, serial, err = _profile_context()
+        if err:
+            return err
+        return jsonify({"camera_id": cam.camera_index, **_active_state(cam, serial)})
+
+    @bp.route("/profiles/export", methods=["GET"])
+    def export_profiles():
+        """All of this camera's profiles as JSON, for backup or copying to another station."""
+        cam, serial, err = _profile_context()
+        if err:
+            return err
+        return jsonify({"camera_serial": serial, "profiles": _profiles().list(serial)})
+
+    @bp.route("/profiles/import", methods=["POST"])
+    def import_profiles():
+        """Import {"profiles": [...]} (the export format), upserting by id."""
+        cam, serial, err = _profile_context()
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        try:
+            result = _profiles().import_profiles(serial, body.get("profiles"))
+        except ProfileError as exc:
+            return _profile_error(exc)
+        return jsonify(result), (207 if result["errors"] else 200)
+
+    @bp.route("/profiles/<profile_id>", methods=["GET"])
+    def get_profile(profile_id):
+        cam, serial, err = _profile_context_for(profile_id)
+        if err:
+            return err
+        try:
+            return jsonify(_profiles().get(serial, profile_id))
+        except ProfileError as exc:
+            return _profile_error(exc)
+
+    @bp.route("/profiles/<profile_id>", methods=["PUT"])
+    def update_profile(profile_id):
+        """Change name, description and/or settings (or {from_current: true}).
+        Bumps revision. Does not touch the camera: re-apply to use the new values."""
+        cam, serial, err = _profile_context_for(profile_id)
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        settings = cam.current_settings() if body.get("from_current") else body.get("settings")
+        try:
+            profile = _profiles().update(
+                serial, profile_id,
+                name=body.get("name"), description=body.get("description"), settings=settings,
+            )
+        except ProfileError as exc:
+            return _profile_error(exc)
+        logger.info("capture_profile_updated", camera_id=cam.camera_index,
+                    profile_id=profile_id, revision=profile["revision"])
+        return jsonify(profile)
+
+    @bp.route("/profiles/<profile_id>", methods=["DELETE"])
+    def delete_profile(profile_id):
+        """Delete a profile. If it was active the camera keeps its current settings."""
+        cam, serial, err = _profile_context_for(profile_id)
+        if err:
+            return err
+        try:
+            _profiles().delete(serial, profile_id)
+        except ProfileError as exc:
+            return _profile_error(exc)
+        logger.info("capture_profile_deleted", camera_id=cam.camera_index, profile_id=profile_id)
+        return jsonify({"deleted": profile_id})
+
+    @bp.route("/profiles/apply", methods=["POST"])
+    def apply_profile():
+        """Make a profile the camera's production settings. Body: {"profile_id": "<id>"}.
+
+        The profile id is all that is needed: the camera is the one the profile
+        was saved for (found by serial number), so there is no camera_id.
+
+        All or nothing. Drops any settings-page draft, applies every setting in
+        memory (not written to the camera's flash) and records the profile as
+        active so it is restored after a restart. Idempotent. 409 if a capture
+        is in flight. 422 with `errors` if any setting is rejected; the camera
+        is then left exactly as it was and the active profile is unchanged.
+        """
+        profile_id = (request.get_json(silent=True) or {}).get("profile_id")
+        if not isinstance(profile_id, str) or not profile_id.strip():
+            return jsonify({"error": "profile_id is required"}), 400
+        profile_id = profile_id.strip()
+        cam, serial, err = _profile_context_for(profile_id)
+        if err:
+            return err
+        try:
+            profile = _profiles().get(serial, profile_id)
+        except ProfileError as exc:
+            return _profile_error(exc)
+        try:
+            errors = cam.apply_profile(profile["settings"])
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        if errors:
+            logger.warning("capture_profile_rejected", camera_id=cam.camera_index,
+                           profile_id=profile_id, errors=errors)
+            return jsonify({"error": "Profile rejected by the camera; nothing was changed",
+                            "errors": errors}), 422
+        _profiles().set_active(serial, profile_id)
+        logger.info("capture_profile_applied", camera_id=cam.camera_index,
+                    profile_id=profile_id, revision=profile["revision"])
+        return jsonify({"camera_id": cam.camera_index, **_active_state(cam, serial)})
 
     @bp.route("/settings/stream")
     def settings_stream():

@@ -58,6 +58,17 @@ tmp_dir = "/tmp/visionx_captures"
 [metrics]
 db_path = "/tmp/visionx_metrics.db"
 
+# SQLite database of named capture profiles (camera setting sets).
+# Holds operator-authored data, so keep it on persistent storage.
+# A relative path is resolved against the project root.
+[profiles]
+db_path = "data/capture_profiles.db"
+
+# SQLite database of named capture profiles (camera setting sets).
+# Holds operator-authored data, so keep it on persistent storage.
+[profiles]
+db_path = "./data/capture_profiles.db"
+
 # Hardware trigger mode (MindVision only).
 # Serial trigger: POST /rpi/mindvision/serial-trigger/start to begin listening.
 # The listener reads JSON lines from the Arduino decoder_trigger.ino sketch and

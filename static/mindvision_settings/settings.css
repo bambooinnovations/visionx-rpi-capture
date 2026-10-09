@@ -408,6 +408,37 @@ body {
 }
 .btn-danger-outline:hover { background: var(--pill-red-bg); }
 
+/* ── Capture-profile bar ─────────────────────────────────────────────── */
+.profile-bar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  margin-bottom: 14px;
+}
+.profile-bar-row { display: flex; align-items: center; gap: 8px; }
+.profile-bar-actions { flex-wrap: wrap; margin-top: 8px; }
+.profile-bar-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.profile-status { margin: 8px 0 0; font-size: 12px; line-height: 1.4; color: var(--text-muted); }
+.profile-status.is-modified { color: var(--text); font-weight: 600; }
+.text-input {
+  width: 100%;
+  padding: 8px 10px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+.text-input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
 /* ── Dialog ──────────────────────────────────────────────────────────── */
 .dialog-backdrop {
   position: fixed;

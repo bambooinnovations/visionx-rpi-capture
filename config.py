@@ -72,6 +72,11 @@ CAPTURE_TMP_DIR: Path = Path(_get("capture", "tmp_dir", "/tmp/visionx_captures")
 # Metrics
 METRICS_DB_PATH: Path = Path(_get("metrics", "db_path", "/tmp/visionx_metrics.db"))
 
+# Capture profiles (named camera-setting sets, MindVision only). Unlike the
+# metrics DB this holds operator-authored data, so the default is persistent.
+# A relative path resolves against the project root, not the working directory.
+PROFILES_DB_PATH: Path = Path(__file__).parent / _get("profiles", "db_path", "data/capture_profiles.db")
+
 # Cleanup
 CLEANUP_INTERVAL_SECONDS: int = _get("cleanup", "interval_seconds", 300)
 MAX_AGE_SECONDS: int = _get("cleanup", "max_age_seconds", 300)

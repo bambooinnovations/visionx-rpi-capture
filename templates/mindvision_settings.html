@@ -57,6 +57,24 @@
       <input type="text" id="settings-search" placeholder="Search settings…">
     </div>
 
+    <!-- Capture profiles: named copies of every setting on this page -->
+    <section class="profile-bar" id="profile-bar" aria-label="Capture profiles">
+      <div class="profile-bar-row">
+        <label for="profile-select" class="profile-bar-label">Profile</label>
+        <select id="profile-select" class="select-input" disabled>
+          <option value="">No profiles saved</option>
+        </select>
+        <button id="btn-profile-apply" class="btn btn-primary btn-sm" type="button" disabled>Apply</button>
+      </div>
+      <div class="profile-bar-row profile-bar-actions">
+        <button id="btn-profile-new" class="btn btn-secondary btn-sm" type="button">Save as new…</button>
+        <button id="btn-profile-update" class="btn btn-secondary btn-sm" type="button" disabled>Update from settings</button>
+        <button id="btn-profile-rename" class="btn btn-secondary btn-sm" type="button" disabled>Rename…</button>
+        <button id="btn-profile-delete" class="btn btn-danger-outline btn-sm" type="button" disabled>Delete</button>
+      </div>
+      <p id="profile-status" class="profile-status"></p>
+    </section>
+
     <div class="profile-banner">
       Changes are a draft until you <strong>Save to production</strong>.
     </div>
@@ -363,6 +381,22 @@
     <div class="dialog-actions">
       <button class="btn btn-secondary" onclick="closeDialog()">Cancel</button>
       <button class="btn btn-danger" onclick="doFactoryReset()">Reset to Factory Defaults</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Profile dialog (save / rename / update / delete / apply) ─────────── -->
+<div id="profile-dialog" class="dialog-backdrop hidden">
+  <div class="dialog" role="dialog" aria-labelledby="profile-dialog-title">
+    <h3 id="profile-dialog-title"></h3>
+    <p id="profile-dialog-text"></p>
+    <div id="profile-dialog-fields">
+      <input type="text" id="profile-dialog-name" class="text-input" maxlength="100" placeholder="Profile name">
+      <input type="text" id="profile-dialog-desc" class="text-input" maxlength="1000" placeholder="Description (optional)">
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" type="button" id="profile-dialog-cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="profile-dialog-ok">OK</button>
     </div>
   </div>
 </div>

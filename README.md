@@ -69,6 +69,24 @@ Full parameter and response details: **[docs/api.md](docs/api.md)**
 
 Overrides are persisted to `runtime_config.json` (gitignored) and survive restarts. See [docs/api.md](docs/api.md#system-configuration) for the full list of patchable keys.
 
+### Capture profiles (MindVision)
+
+Named, complete copies of the camera settings page, saved on the RPi in a SQLite database and scoped to the camera serial number. Create them on the camera settings page (**Save as new…**), then list and apply them over the API, so a client such as VisionX can pick one and tell the RPi to use it for capturing. Apply is all or nothing and the active profile is restored after a restart.
+
+| Method | Path                                | Description                                              |
+| ------ | ----------------------------------- | -------------------------------------------------------- |
+| GET    | `/api/cameras/profiles`             | List profiles, the active one, and drift state           |
+| POST   | `/api/cameras/profiles`             | Create (`from_current: true` snapshots the camera)       |
+| GET    | `/api/cameras/profiles/<id>`        | One profile                                              |
+| PUT    | `/api/cameras/profiles/<id>`        | Rename or change settings (bumps `revision`)             |
+| DELETE | `/api/cameras/profiles/<id>`        | Delete                                                   |
+| POST   | `/api/cameras/profiles/apply`       | Apply; body `{"profile_id": "<id>"}` (`409` busy, `422` rejected) |
+| GET    | `/api/cameras/profiles/active`      | Active profile, `revision`, `modified`, `differences`    |
+| GET    | `/api/cameras/profiles/export`      | All profiles as JSON (backup / copy to another station)  |
+| POST   | `/api/cameras/profiles/import`      | Import exported profiles, upserting by `id`              |
+
+Apply takes the profile id in the request body, and get, update and delete take it in the URL; none needs a `camera_id` because the RPi works out which camera the profile belongs to. Full reference: [docs/api.md](docs/api.md#mindvision--capture-profiles). The database path is set under `[profiles]` in `configuration.toml` (default `data/capture_profiles.db`, gitignored).
+
 ### MindVision endpoints
 
 Registered whenever at least one MindVision camera is present in the registry (i.e. `camera.type = "mindvision"`, or `"auto"` and a MindVision device was detected). See [docs/api.md](docs/api.md) for the full reference covering cameras, white balance, orientation, settings, calibration streams, lens calibration, stitch, and decoder endpoints.
@@ -126,6 +144,9 @@ tmp_dir = "/tmp/visionx_captures"
 
 [metrics]
 db_path = "/tmp/visionx_metrics.db"
+
+[profiles]
+db_path = "data/capture_profiles.db"   # capture profiles (MindVision); relative paths resolve against the project root
 
 # Hardware trigger (MindVision only — active when mode = "hardware_trigger")
 [hw_trigger]
