@@ -50,3 +50,6 @@ logs/
 
 # MindVision SDK runtime data (device-specific, not committed)
 MindVisionCamera/
+# built native ISP library (see camera/fastisp.c)
+camera/libfastisp.so
+data/raw_format_verification.json

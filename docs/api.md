@@ -37,7 +37,7 @@ The camera always captures at its native sensor resolution; `width`/`height` res
 
 ### `POST /rpi/capture`
 
-Capture one frame from a single camera and return a JPEG. Always captures camera hardware directly — never redirects to stitching, even on multi-camera rigs. For a stitched composite, use [`GET /api/stitch/capture`](#get-apistitchcapture) instead.
+Capture one frame from a single camera. The response is a **JPEG** (`image/jpeg`, EXIF embedded) when the camera's `bit_depth` is 8, and a **16-bit PNG** (`image/png`, EXIF in an `eXIf` chunk) when it is above 8 — check `Content-Type`, don't assume. See [Bit depth](#bit-depth). Always captures camera hardware directly — never redirects to stitching, even on multi-camera rigs. For a stitched composite, use [`GET /api/stitch/capture`](#get-apistitchcapture) instead.
 
 Returns `429` if a capture is already in progress, `503` if no camera is available, `409` if the camera is in `hardware_trigger` mode.
 
@@ -338,7 +338,7 @@ Set SDK mirror. Applied at the ISP level and persisted.
 
 Capture one frame from every camera simultaneously and return a ZIP archive. In `hardware_trigger` mode all grab threads block together; in other modes each thread grabs independently.
 
-**Response** — `application/zip` containing `camera_0.jpg`, `camera_1.jpg`, …
+**Response** — `application/zip` containing `camera_0.jpg`, `camera_1.jpg`, … (`.png` for a camera whose `bit_depth` is above 8, see [Bit depth](#bit-depth))
 
 ---
 
@@ -404,6 +404,18 @@ Lean MJPEG stream for ChArUco board placement during lens calibration. No sharpn
 
 ## MindVision — camera settings
 
+### Bit depth
+
+A MindVision camera lists the raw formats it can send (8-bit, and on some models 10/12-bit, packed or in 16-bit containers, Bayer or mono). The `bit_depth` setting picks one; the options offered are simply the depths of the formats this camera lists, so a model with only 8-bit output shows only 8.
+
+- **8-bit** (default): the SDK's ISP develops the frame; `/rpi/capture` returns a JPEG.
+- **Above 8-bit**: captures are developed by `camera/rawisp.py` at full precision and returned as a **16-bit PNG** with the same EXIF as the JPEG. The live stream, snapshots and calibration views stay 8-bit. Sharpness, noise filter, mirror, rotation, invert and colour-to-grey are reproduced to match the SDK; gain, white balance, gamma, contrast and saturation are already applied to the raw frame by the camera.
+- **Verification.** The first time a format above 8 bits is selected for a camera, one live frame is decoded two ways, by the SDK's own ISP and by `rawisp`, and compared. A pass confirms the frame size, media type, container, Bayer pattern (a wrong one declared by the SDK is detected and corrected) and the top 8 bits of every pixel. A failure keeps the camera on its previous format and the `POST` returns the reason in `errors.bit_depth`. The point must show some detail: a blank or blown-out scene is reported as inconclusive. Passing results are remembered per camera serial in `data/raw_format_verification.json`.
+- **What verification cannot prove.** The placement of the bits below the top 8 cannot be checked without a trusted reference. `bit_depth_status[depth].low_bits_hardware_verified` says whether that layout was ever confirmed on real hardware; today only the 12-bit packed layout was (MV-SUS507GC). Other layouts follow the published format layout.
+- **Fallbacks to the 8-bit JPEG path** (logged, never an error): hardware-trigger mode (the trigger collector, uploads and stitching assume JPEG), a format that failed verification, a frame that stops matching what was verified, and a mono sensor with sharpness or the noise filter on (not reproduced for mono).
+- Switching restarts the camera's stream briefly and is refused with an error in `hardware_trigger` mode.
+- To see what a new camera model offers, run `scripts/isp12/verify_live.py` on the Pi (see `scripts/isp12/README.md`).
+
 ### `GET /api/cameras/settings`
 
 Return all tunable SDK settings and their valid ranges for a camera.
@@ -425,7 +437,9 @@ Return all tunable SDK settings and their valid ranges for a camera.
 
 `analog_gain` is in raw SDK units; the multiplier is `analog_gain * analog_gain_step` (from `sExposeDesc.fAnalogGainStep`). Captured JPEGs record the gain in the EXIF `UserComment` JSON (`analog_gain_raw`, `analog_gain_x`); `ISOSpeedRatings` is not written because the camera has no calibrated ISO. Extra response fields: `manual_exposure_capture_only`, `stream_auto_exposure` (a stream currently holds AE).
 
-**Response** includes: `ae_enabled`, `exposure_us`, `exposure_min_us`, `exposure_max_us`, `ae_target`, `auto_gain`, `analog_gain`, `analog_gain_min`, `analog_gain_max`, `analog_gain_step`, `r_gain`, `g_gain`, `b_gain`, `r/g/b_gain_min/max`, `sharpness`, `sharpness_min/max`, `gamma`, `gamma_min/max`, `rotation`, `h_mirror`, `v_mirror`, and `draft_changes` (`{key: {"production": …, "draft": …}}` for each unsaved draft edit; empty when there is no draft).
+**Bit depth.** `bit_depth` (8, 10, 12, …) selects the camera's raw output format; `bit_depth_options` lists what this camera offers and `bit_depth_status` says, per depth above 8, which format would be used and whether it has been checked (see [Bit depth](#bit-depth)).
+
+**Response** includes: `bit_depth`, `bit_depth_options`, `bit_depth_status`, `ae_enabled`, `exposure_us`, `exposure_min_us`, `exposure_max_us`, `ae_target`, `auto_gain`, `analog_gain`, `analog_gain_min`, `analog_gain_max`, `analog_gain_step`, `r_gain`, `g_gain`, `b_gain`, `r/g/b_gain_min/max`, `sharpness`, `sharpness_min/max`, `gamma`, `gamma_min/max`, `rotation`, `h_mirror`, `v_mirror`, and `draft_changes` (`{key: {"production": …, "draft": …}}` for each unsaved draft edit; empty when there is no draft).
 
 ---
 
