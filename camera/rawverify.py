@@ -71,9 +71,9 @@ def _mae(a8: np.ndarray, b8: np.ndarray) -> float:
     return float(np.abs(a8.astype(np.int16) - b8.astype(np.int16)).mean())
 
 
-def _decode_mae(grab: Grab, fmt: rf.RawFormat, pattern: str | None, options: dict, native: bool | None) -> float:
-    pl = RawPipeline(grab.width, grab.height, fmt, pattern=pattern, native=native)
-    pl.set_options(**options)
+def _decode_mae(pl: RawPipeline, grab: Grab, pattern: str | None) -> float:
+    if pattern is not None:
+        pl.set_pattern(pattern)
     return _mae(to8(pl.process(grab.raw)), grab.ref8)
 
 
@@ -105,17 +105,20 @@ def verify_decode(grab: Callable[[], Grab], fmt: rf.RawFormat, options: dict | N
                                   "point the camera at something with detail and retry", inconclusive=True)
             continue
 
+        # One pipeline per frame: its buffers are 40-120 MB at 20 MP, so don't build one per pattern tried.
+        pl = RawPipeline(g.width, g.height, fmt, pattern=fmt.pattern, native=native)
+        pl.set_options(**options)
         if fmt.mono:
-            mae = _decode_mae(g, fmt, None, options, native)
+            mae = _decode_mae(pl, g, None)
             ok = mae <= THRESHOLD_MAE
             return Verdict(ok, f"matches the SDK (mean error {mae:.2f} levels)" if ok else
                            f"decoded image differs from the SDK's by {mae:.1f} levels on average", None, mae,
                            tried={None: mae})
-        tried = {fmt.pattern: _decode_mae(g, fmt, fmt.pattern, options, native)}
+        tried = {fmt.pattern: _decode_mae(pl, g, fmt.pattern)}
         if tried[fmt.pattern] > THRESHOLD_MAE:           # the declared pattern is wrong, or the layout is
             for p in rf.PHASES:
                 if p != fmt.pattern:
-                    tried[p] = _decode_mae(g, fmt, p, options, native)
+                    tried[p] = _decode_mae(pl, g, p)
         best = min(tried, key=tried.get)
         if tried[best] <= THRESHOLD_MAE:
             note = "" if best == fmt.pattern else f" (the pattern is {best}, not the declared {fmt.pattern})"

@@ -31,7 +31,12 @@ def _get_api_key() -> str:
     return runtime_config.get("debug.destination_api_key", config.DEBUG_DESTINATION_API_KEY)
 
 
-def _post_debug_image(jpeg_bytes: bytes, filename: str, camera_id: int, captured_at: str) -> tuple[bool, str | None]:
+_MIME_BY_EXT = {"jpg": "image/jpeg", "png": "image/png"}
+
+
+def _post_debug_image(
+    jpeg_bytes: bytes, filename: str, camera_id: int, captured_at: str, mime: str = "image/jpeg",
+) -> tuple[bool, str | None]:
     """Single-attempt POST to the debug destination. No retry — this is an
     interactive action, the operator can just click Upload again on failure.
     """
@@ -50,7 +55,7 @@ def _post_debug_image(jpeg_bytes: bytes, filename: str, camera_id: int, captured
     try:
         resp = requests.post(
             url,
-            files={"image": (filename, io.BytesIO(jpeg_bytes), "image/jpeg")},
+            files={"image": (filename, io.BytesIO(jpeg_bytes), mime)},
             data={"camera_id": str(camera_id), "captured_at": captured_at, "source": "debug"},
             headers=headers,
             timeout=15,
@@ -84,7 +89,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
     @bp.route("/capture", methods=["POST"])
     def capture():
         """Software-trigger a still from each requested camera and return it as
-        base64 JPEG (EXIF already embedded, via the same cam.capture_image()
+        base64 JPEG, or PNG for a camera set to 12-bit (see "formats"; EXIF already embedded, via the same cam.capture_image()
         production uses). Never contacts the external destination — this is
         purely "take the photo and show me"; /upload is a separate step.
         """
@@ -115,9 +120,11 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         results, errors, timed_out = capture_many(cameras, requested, tmp_dir)
 
         images: dict[int, str] = {}
+        formats: dict[int, str] = {}
         captured_ats: dict[int, str] = {}
         for cam_id, (path, metrics) in results.items():
             images[cam_id] = base64.b64encode(path.read_bytes()).decode("ascii")
+            formats[cam_id] = path.suffix.lstrip(".").lower()   # "png" for cameras set to 12-bit
             captured_ats[cam_id] = metrics.captured_at
 
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -132,6 +139,7 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         status = 207 if errors else 200
         return jsonify({
             "images": {str(k): v for k, v in images.items()},
+            "formats": {str(k): v for k, v in formats.items()},
             "captured_at": {str(k): v for k, v in captured_ats.items()},
             "errors": {str(k): v for k, v in errors.items()},
         }), status
@@ -148,6 +156,9 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
         cam_id = body.get("camera_id")
         image_b64 = body.get("image_base64")
         captured_at = body.get("captured_at")
+        ext = body.get("format", "jpg")
+        if ext not in _MIME_BY_EXT:
+            return jsonify({"error": f"format must be one of {sorted(_MIME_BY_EXT)}"}), 400
         if not isinstance(cam_id, int) or isinstance(cam_id, bool) or cam_id not in cameras:
             return jsonify({"error": f"camera_id must be one of {sorted(cameras.keys())}"}), 400
         if not image_b64:
@@ -163,11 +174,11 @@ def create_blueprint(cameras: dict[int, MindVisionCamera]) -> Blueprint:
 
         serial = cameras[cam_id].serial_number or f"cam{cam_id}"
         ts_ms = int(time.time() * 1000)
-        filename = f"{ts_ms}_{serial}_debug.jpg"
+        filename = f"{ts_ms}_{serial}_debug.{ext}"
         if not isinstance(captured_at, str) or not captured_at:
             captured_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-        ok, error = _post_debug_image(jpeg_bytes, filename, cam_id, captured_at)
+        ok, error = _post_debug_image(jpeg_bytes, filename, cam_id, captured_at, _MIME_BY_EXT[ext])
         return jsonify({"uploaded": ok, "filename": filename, "error": error}), (200 if ok else 502)
 
     return bp

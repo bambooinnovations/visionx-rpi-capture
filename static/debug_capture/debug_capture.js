@@ -125,9 +125,10 @@ async function captureSelected() {
     grid.innerHTML = camIds.map(id => {
       const img = r.images ? r.images[id] : null;
       const err = r.errors ? r.errors[id] : null;
-      if (img) state.captures[id] = { image: img, capturedAt: (r.captured_at || {})[id] || null };
+      if (img) state.captures[id] = { image: img, format: (r.formats || {})[id] || 'jpg', capturedAt: (r.captured_at || {})[id] || null };
+      const mime = ((r.formats || {})[id] === 'png') ? 'image/png' : 'image/jpeg';
       const body = img
-        ? `<img src="data:image/jpeg;base64,${img}" alt="Camera ${id} capture">`
+        ? `<img src="data:${mime};base64,${img}" alt="Camera ${id} capture">`
         : `<div class="cam-tile-blocked">${err || 'Capture failed'}</div>`;
       return `
         <div class="cam-tile" id="review-tile-${id}">
@@ -166,6 +167,7 @@ async function uploadAll() {
       const r = await apiFetch('POST', '/api/debug/upload', {
         camera_id: parseInt(camId, 10),
         image_base64: capture.image,
+        format: capture.format,
         captured_at: capture.capturedAt,
       });
       return [camId, r.uploaded, r.error];

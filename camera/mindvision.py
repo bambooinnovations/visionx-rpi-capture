@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import Enum
+from functools import partial
 from pathlib import Path
 
 import structlog
@@ -97,14 +99,48 @@ def read_bit_depth(h: int, cap) -> int:
     return fmt.bits if fmt is not None else 8
 
 
-def _load_verdict(serial: str | None, fmt_name: str):
-    """A previously passed verification for this camera and format, or None."""
+def _read_verdict_file(quarantine: bool = False) -> dict:
+    """The stored verdicts, {serial: {format name: record}}. Caller holds _verdicts_lock.
+
+    A file that cannot be parsed reads as empty. With `quarantine` (before a rewrite) it is first moved aside, so the
+    other cameras' records are kept for inspection instead of being overwritten without trace."""
+    try:
+        text = _VERDICTS_PATH.read_text()
+    except OSError:                      # missing or unreadable
+        return {}
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except ValueError:
+        pass
+    if quarantine:
+        try:
+            os.replace(_VERDICTS_PATH, _VERDICTS_PATH.with_suffix(".corrupt"))
+            logger.warning("raw_format_verdicts_unreadable", moved_to=str(_VERDICTS_PATH.with_suffix(".corrupt")))
+        except OSError:
+            pass
+    return {}
+
+
+def _write_verdict_file(data: dict) -> None:
+    """Replace the file in one step, so a crash mid-write cannot leave a truncated file. Caller holds the lock."""
+    _VERDICTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _VERDICTS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
+    os.replace(tmp, _VERDICTS_PATH)
+
+
+def _load_verdict(serial: str | None, fmt_name: str, data: dict | None = None):
+    """A previously passed verification for this camera and format, or None. Pass `data` (from
+    _read_verdict_file) to look up several formats with one read."""
     from camera import rawverify
     if not serial:
         return None
     try:
-        with _verdicts_lock:
-            data = json.loads(_VERDICTS_PATH.read_text())
+        if data is None:
+            with _verdicts_lock:
+                data = _read_verdict_file()
         rec = data.get(serial, {}).get(fmt_name)
         if rec and rec.get("ok"):
             return rawverify.Verdict(True, f"verified earlier ({rec.get('at', '?')}, mean error {rec.get('mae')} levels)",
@@ -119,16 +155,12 @@ def _save_verdict(serial: str | None, fmt_name: str, verdict) -> None:
         return
     try:
         with _verdicts_lock:
-            try:
-                data = json.loads(_VERDICTS_PATH.read_text())
-            except Exception:
-                data = {}
+            data = _read_verdict_file(quarantine=True)
             data.setdefault(serial, {})[fmt_name] = {
                 "ok": True, "pattern": verdict.pattern, "mae": verdict.mae,
                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
-            _VERDICTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _VERDICTS_PATH.write_text(json.dumps(data, indent=1, sort_keys=True))
+            _write_verdict_file(data)
     except Exception:
         logger.warning("raw_format_verdict_not_saved", serial=serial, fmt=fmt_name)
 
@@ -138,9 +170,9 @@ def _forget_verdict(serial: str | None, fmt_name: str) -> None:
         return
     try:
         with _verdicts_lock:
-            data = json.loads(_VERDICTS_PATH.read_text())
+            data = _read_verdict_file()
             if data.get(serial, {}).pop(fmt_name, None) is not None:
-                _VERDICTS_PATH.write_text(json.dumps(data, indent=1, sort_keys=True))
+                _write_verdict_file(data)
     except Exception:
         pass
 
@@ -1267,7 +1299,11 @@ class MindVisionCamera(BaseCamera):
             try:
                 yield True
             finally:
-                apply_settings(self._h_camera, {k: d for k, (_, d) in changes.items()}, self)
+                _, errors = apply_settings(self._h_camera, {k: d for k, (_, d) in changes.items()}, self)
+                if errors:
+                    # A draft that could not be put back (e.g. bit_depth failed its check) leaves the camera on the
+                    # production value; warn so it is visible, but don't fail the capture that already succeeded.
+                    logger.warning("mindvision_draft_restore_failed", camera_index=self._camera_index, errors=errors)
 
     def _persist_production(self) -> None:
         """Write the production settings to disk without committing a draft."""
@@ -1524,9 +1560,10 @@ class MindVisionCamera(BaseCamera):
                     ok=verdict.ok, reason=verdict.reason)
         return verdict
 
-    def _activate_raw_format(self, idx: int, fmt):
-        """Select a raw format and make sure it is trusted (cached verdict, or a live check)."""
-        self._set_media_type(idx)
+    def _trusted_verdict(self, fmt):
+        """The verdict for `fmt` on this camera: in memory, else from an earlier run, else a live check (saved when it
+        passes). Only a passing verdict is final; a failed or inconclusive one is checked again next time.
+        Caller holds self._lock and the format is already selected."""
         verdict = self._raw_verdicts.get(fmt.name)
         if verdict is None or not verdict.ok:
             verdict = _load_verdict(self.serial_number, fmt.name)
@@ -1534,6 +1571,12 @@ class MindVisionCamera(BaseCamera):
                 verdict = self._verify_format(fmt)
                 _save_verdict(self.serial_number, fmt.name, verdict)
         self._raw_verdicts[fmt.name] = verdict
+        return verdict
+
+    def _activate_raw_format(self, idx: int, fmt):
+        """Select a raw format and make sure it is trusted (cached verdict, or a live check)."""
+        self._set_media_type(idx)
+        verdict = self._trusted_verdict(fmt)
         if verdict.ok:
             self._raw_choice = (fmt, verdict.pattern)
         return verdict
@@ -1575,6 +1618,8 @@ class MindVisionCamera(BaseCamera):
         from camera import rawformat
         out = {}
         formats = _camera_formats(self._cap)
+        with _verdicts_lock:
+            stored = _read_verdict_file()
         for depth in rawformat.available_depths(formats):
             if depth <= 8:
                 continue
@@ -1582,9 +1627,10 @@ class MindVisionCamera(BaseCamera):
             shown = cands[0][1]
             state, reason = "unverified", "Not checked yet: selecting it runs a one-time check against the SDK."
             for _, f in cands:
-                v = self._raw_verdicts.get(f.name) or _load_verdict(self.serial_number, f.name)
+                v = self._raw_verdicts.get(f.name) or _load_verdict(self.serial_number, f.name, stored)
                 if v is not None:
-                    shown, state, reason = f, ("verified" if v.ok else "failed"), v.reason
+                    # "retry": the scene could not decide, which says nothing against the format itself
+                    shown, state, reason = f, ("verified" if v.ok else "retry" if v.inconclusive else "failed"), v.reason
                     if v.ok:
                         break
             out[str(depth)] = {
@@ -1603,13 +1649,7 @@ class MindVisionCamera(BaseCamera):
         if self._raw_choice and self._raw_choice[0].code == fmt.code:
             return self._raw_choice
         # The camera came up in this format (saved parameters) or it changed behind our back: check it now.
-        verdict = self._raw_verdicts.get(fmt.name)
-        if verdict is None or not verdict.ok:
-            verdict = _load_verdict(self.serial_number, fmt.name)
-            if verdict is None:
-                verdict = self._verify_format(fmt)
-                _save_verdict(self.serial_number, fmt.name, verdict)
-            self._raw_verdicts[fmt.name] = verdict
+        verdict = self._trusted_verdict(fmt)
         if verdict.ok:
             self._raw_choice = (fmt, verdict.pattern)
             return self._raw_choice
@@ -1617,7 +1657,11 @@ class MindVisionCamera(BaseCamera):
         return None
 
     def _use_raw_path(self) -> bool:
-        """True when this capture should be developed by camera.rawisp and saved as a 16-bit PNG.
+        return self._raw_path_options() is not None
+
+    def _raw_path_options(self) -> dict | None:
+        """The camera.rawisp options when this capture should be developed by camera.rawisp and saved as a 16-bit
+        PNG, else None. They are read from the camera once here and handed to _grab_frame_raw.
 
         Otherwise the SDK's 8-bit ISP path is used (and the capture is a JPEG): in hardware-trigger mode (the
         trigger collector, uploads and stitching assume JPEG), when the format is not trusted, or when an active
@@ -1625,29 +1669,30 @@ class MindVisionCamera(BaseCamera):
         """
         from camera import rawisp
         if self._h_camera is None:
-            return False
+            return None
         try:
             if read_bit_depth(self._h_camera, self._cap) <= 8:
-                return False
+                return None
             if self._mode == CameraMode.HARDWARE_TRIGGER:
                 if not self._raw_warned_trigger:
                     self._raw_warned_trigger = True
                     logger.warning("raw_capture_ignored_in_hardware_trigger_mode", camera_index=self._camera_index)
-                return False
+                return None
             choice = self._raw_choice_now()
             if choice is None:
-                return False
-            bad = rawisp.unsupported_controls(choice[0], self._raw_options())
+                return None
+            options = self._raw_options()
+            bad = rawisp.unsupported_controls(choice[0], options)
             if bad:
                 logger.warning("raw_capture_unsupported_controls", camera_index=self._camera_index,
                                fmt=choice[0].name, controls=bad)
-                return False
-            return True
+                return None
+            return options
         except Exception:
             logger.exception("raw_path_check_failed", camera_index=self._camera_index)
-            return False
+            return None
 
-    def _grab_frame_raw(self, timeout_ms: int = 1000) -> "tuple[np.ndarray, object] | tuple[None, None]":
+    def _grab_frame_raw(self, timeout_ms: int = 1000, options: dict | None = None) -> "tuple[np.ndarray, object] | tuple[None, None]":
         """Grab one raw frame and develop it to a 16-bit array (uint16, values at 16-bit scale).
 
         If the frame is not what the verified format promises (the camera was switched underneath us), the same
@@ -1684,7 +1729,7 @@ class MindVisionCamera(BaseCamera):
                 self._raw_pl = rawisp.RawPipeline(w, hh, fmt, pattern=pattern)
                 self._raw_pl_key = key
             pl = self._raw_pl
-            pl.set_options(**self._raw_options())
+            pl.set_options(**(options if options is not None else self._raw_options()))
             raw_u8 = np.frombuffer((mvsdk.c_ubyte * head.uBytes).from_address(raw), dtype=np.uint8)
             mosaic = pl.unpack(raw_u8)           # the SDK buffer is free as soon as this returns
         finally:
@@ -1955,7 +2000,9 @@ class MindVisionCamera(BaseCamera):
         # the last one won, and the zip shipped that single frame three times
         # under camera_0/1/2.jpg. The failure was silent and produced three
         # database rows, one per camera serial, all holding the same image.
-        output_image = output_folder / f"cam{self._camera_index}_{time.time_ns()}.jpg"
+        # The extension is chosen below, once the frame exists: .png for a 16-bit frame, .jpg otherwise. It can't be
+        # known earlier because the format in use may change while the capture settings are being applied.
+        stem = f"cam{self._camera_index}_{time.time_ns()}"
 
         # Holding _lock for the whole swap keeps the stream from serving (or
         # stealing) frames taken at the wrong settings. production_applied()
@@ -1964,7 +2011,8 @@ class MindVisionCamera(BaseCamera):
         with self._lock, self.production_applied() as draft_swapped, \
                 self.capture_exposure_applied() as swapped:
             # Decided before the trigger: the first use of a raw format may run its own check, which takes frames.
-            grab = self._grab_frame_raw if self._use_raw_path() else self._grab_frame
+            raw_options = self._raw_path_options()
+            grab = self._grab_frame if raw_options is None else partial(self._grab_frame_raw, options=raw_options)
             if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
                 mvsdk.CameraSoftTrigger(self._h_camera)
             t0 = time.perf_counter()
@@ -2003,9 +2051,10 @@ class MindVisionCamera(BaseCamera):
                     png_bytes = png_with_exif(png_bytes, exif_bytes)
                 except ValueError:
                     logger.warning("png_exif_embed_failed", camera_index=self._camera_index)
-            output_image = output_image.with_suffix(".png")
+            output_image = output_folder / f"{stem}.png"
             output_image.write_bytes(png_bytes)
         else:
+            output_image = output_folder / f"{stem}.jpg"
             jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes, resize=resize)
             output_image.write_bytes(jpeg_bytes)
 

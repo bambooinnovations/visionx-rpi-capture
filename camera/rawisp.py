@@ -144,6 +144,15 @@ class RawPipeline:
             b = self._bufs[name] = np.empty(shape, np.uint16)
         return b
 
+    def set_pattern(self, pattern: str) -> None:
+        """Decode with another Bayer pattern, keeping the buffers (rawverify tries each pattern on one frame)."""
+        if self.mono:
+            return
+        self.pattern = pattern
+        self._cv_code = getattr(cv2, f"COLOR_Bayer{rf.CV2_NAME[pattern]}2BGR")
+        r, g, b = self._wb
+        self._gq = self._phase_gains({"R": r, "G": g, "B": b})
+
     @property
     def channels(self) -> int:
         return 1 if self.mono else 3

@@ -30,7 +30,8 @@ class BaseCamera(ABC):
         resolution: tuple[int, int] | None = None,
         output_folder: Path = config.CAPTURE_TMP_DIR,
     ) -> tuple[Path, CaptureMetrics]:
-        """Capture a high-quality still and return (path, metrics)."""
+        """Capture a high-quality still and return (path, metrics). The file is a JPEG, except that a camera set to
+        a bit depth above 8 returns a 16-bit PNG: callers must use the returned path's suffix, not assume .jpg."""
 
     @abstractmethod
     def stream_frames(

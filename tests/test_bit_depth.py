@@ -427,4 +427,22 @@ def test_a_capture_decides_raw_vs_sdk_before_it_triggers(sdk, monkeypatch):
     """The first use of a raw format runs a check that takes frames; it must not steal the capture's own frame."""
     import inspect
     src = inspect.getsource(mv.MindVisionCamera.capture_image)
-    assert src.index("self._use_raw_path()") < src.index("CameraSoftTrigger")
+    assert src.index("self._raw_path_options()") < src.index("CameraSoftTrigger")
+
+
+# ── inconclusive checks, verdict file safety ─────────────────────────────────────────────────────────────────
+
+def test_an_inconclusive_check_is_reported_as_retry_not_failed(sdk, monkeypatch):
+    cam = make_cam(sdk, ["BAYGB8", "BAYGB12_PACKED"])
+    monkeypatch.setattr(cam, "_verify_format",
+                        lambda fmt: rawverify.Verdict(False, "scene too flat", inconclusive=True))
+    assert cam.set_bit_depth(12) is not None
+    assert cam.raw_format_status()["12"]["state"] == "retry"
+
+
+def test_a_corrupt_verdict_file_is_moved_aside_not_lost(sdk, tmp_path):
+    (tmp_path / "verdicts.json").write_text("{not json")
+    mv._save_verdict("S", "X", ok())
+    assert (tmp_path / "verdicts.corrupt").read_text() == "{not json"
+    assert mv._load_verdict("S", "X") is not None
+    assert not (tmp_path / "verdicts.tmp").exists()

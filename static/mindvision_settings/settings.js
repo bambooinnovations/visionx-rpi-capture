@@ -68,9 +68,9 @@ function formatDraftValue(key, v) {
 
 // Bit depth: the options are whatever raw formats this camera offers (8, 10, 12, ...); the note under the select
 // says which format is used above 8 bits and whether it has been checked against the SDK.
+let _bitDepthStatus = {};
 function renderBitDepth(s) {
   const sel = document.getElementById('bit-depth');
-  const note = document.getElementById('bit-depth-note');
   const depths = s.bit_depth_options || [8];
   const status = s.bit_depth_status || {};
   const current = String(s.bit_depth ?? 8);
@@ -82,9 +82,17 @@ function renderBitDepth(s) {
   }));
   sel.value = depths.includes(parseInt(current)) ? current : '8';
   sel.disabled = depths.length < 2;
-  const st = status[sel.value];
+  _bitDepthStatus = status;
+  renderBitDepthNote();
+}
+
+// The note describes the depth currently chosen in the select, so it is redrawn when the choice changes too.
+function renderBitDepthNote() {
+  const sel = document.getElementById('bit-depth');
+  const note = document.getElementById('bit-depth-note');
+  const st = _bitDepthStatus[sel.value];
   if (!st) {
-    note.textContent = depths.length < 2
+    note.textContent = sel.options.length < 2
       ? 'This camera only offers 8-bit output.'
       : 'Captures are 8-bit JPEG.';
   } else {
@@ -93,6 +101,7 @@ function renderBitDepth(s) {
       : ' The low-order bits follow the published layout and have not been confirmed on this hardware.';
     const check = st.state === 'verified' ? 'Checked against the SDK.'
       : st.state === 'failed' ? `Check failed: ${st.reason}`
+      : st.state === 'retry' ? `Could not be checked yet: ${st.reason}`
       : 'Selecting it runs a one-time check against the SDK.';
     note.textContent = `${st.format}. Captures are saved as 16-bit PNG, the stream stays 8-bit. ${check}${hw}`;
   }
@@ -1142,6 +1151,7 @@ function wireControls() {
   });
   document.getElementById('light-frequency').addEventListener('change', onSettingChange);
   document.getElementById('bit-depth').addEventListener('change', onSettingChange);
+  document.getElementById('bit-depth').addEventListener('change', renderBitDepthNote);
 
   // Settings search
   document.getElementById('settings-search').addEventListener('input', function () {

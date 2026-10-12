@@ -59,6 +59,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Keys added after profiles were first saved. A profile without one gets this value, so old profiles
+# (and clients that don't send it) keep working: bit_depth 8 is the plain 8-bit JPEG pipeline.
+SETTING_DEFAULTS: dict = {"bit_depth": 8}
+
+
+def _with_defaults(settings: dict) -> dict:
+    return {**{k: v for k, v in SETTING_DEFAULTS.items() if k in SETTING_KEYS}, **settings}
+
+
 def validate_settings(settings) -> dict:
     """Return a clean settings dict, or raise ProfileError.
 
@@ -69,6 +78,7 @@ def validate_settings(settings) -> dict:
     """
     if not isinstance(settings, dict):
         raise ProfileError("settings must be an object")
+    settings = _with_defaults(settings)
     unknown = sorted(k for k in settings if k not in SETTING_KEYS)
     if unknown:
         raise ProfileError(f"unknown setting(s): {', '.join(unknown)}")
@@ -104,7 +114,7 @@ def _row_to_profile(row: sqlite3.Row) -> dict:
         "camera_serial": row["camera_serial"],
         "name": row["name"],
         "description": row["description"],
-        "settings": json.loads(row["settings"]),
+        "settings": _with_defaults(json.loads(row["settings"])),
         "revision": row["revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
