@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import io
+import json
+import os
 import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import Enum
+from functools import partial
 from pathlib import Path
 
 import structlog
@@ -47,6 +50,149 @@ from camera.base import BaseCamera
 from metrics import CaptureMetrics
 
 logger = structlog.get_logger()
+
+
+# ── Bit depth (the SDK's "camera output image format" / media type) ───────────
+# A camera lists every raw format it can send (cap.pMediaTypeDesc). camera.rawformat describes each one from the
+# SDK's constant names: colour/mono, Bayer pattern, bit depth and packing, so nothing here is tied to one model. The
+# bit depths offered are the depths of the formats we can decode. Before a format above 8 bits is used for captures
+# it is checked once against the SDK's own ISP (camera.rawverify); if that fails the camera stays on 8-bit and the
+# reason is reported.
+
+_raw_registry_cache: dict | None = None
+_VERDICTS_PATH = Path(__file__).parent.parent / "data" / "raw_format_verification.json"
+_verdicts_lock = threading.Lock()
+
+
+def _raw_registry() -> dict:
+    global _raw_registry_cache
+    if _raw_registry_cache is None:
+        import mvsdk
+        from camera import rawformat
+        _raw_registry_cache = rawformat.build_registry(mvsdk)
+    return _raw_registry_cache
+
+
+def _camera_formats(cap) -> list:
+    """[(index into cap.pMediaTypeDesc, RawFormat)] for the formats this camera offers and we can decode."""
+    from camera import rawformat
+    return rawformat.camera_formats(cap, _raw_registry())
+
+
+def bit_depth_options(cap) -> list[int]:
+    """Bit depths this camera can be switched to (always at least [8])."""
+    from camera import rawformat
+    return rawformat.available_depths(_camera_formats(cap)) or [8]
+
+
+def _current_format(h: int, cap):
+    import mvsdk
+    idx = mvsdk.CameraGetMediaType(h)
+    for i, fmt in _camera_formats(cap):
+        if i == idx:
+            return fmt
+    return None
+
+
+def read_bit_depth(h: int, cap) -> int:
+    fmt = _current_format(h, cap)
+    return fmt.bits if fmt is not None else 8
+
+
+def _read_verdict_file(quarantine: bool = False) -> dict:
+    """The stored verdicts, {serial: {format name: record}}. Caller holds _verdicts_lock.
+
+    A file that cannot be parsed reads as empty. With `quarantine` (before a rewrite) it is first moved aside, so the
+    other cameras' records are kept for inspection instead of being overwritten without trace."""
+    try:
+        text = _VERDICTS_PATH.read_text()
+    except OSError:                      # missing or unreadable
+        return {}
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except ValueError:
+        pass
+    if quarantine:
+        try:
+            os.replace(_VERDICTS_PATH, _VERDICTS_PATH.with_suffix(".corrupt"))
+            logger.warning("raw_format_verdicts_unreadable", moved_to=str(_VERDICTS_PATH.with_suffix(".corrupt")))
+        except OSError:
+            pass
+    return {}
+
+
+def _write_verdict_file(data: dict) -> None:
+    """Replace the file in one step, so a crash mid-write cannot leave a truncated file. Caller holds the lock."""
+    _VERDICTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _VERDICTS_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
+    os.replace(tmp, _VERDICTS_PATH)
+
+
+def _load_verdict(serial: str | None, fmt_name: str, data: dict | None = None):
+    """A previously passed verification for this camera and format, or None. Pass `data` (from
+    _read_verdict_file) to look up several formats with one read."""
+    from camera import rawverify
+    if not serial:
+        return None
+    try:
+        if data is None:
+            with _verdicts_lock:
+                data = _read_verdict_file()
+        rec = data.get(serial, {}).get(fmt_name)
+        if rec and rec.get("ok"):
+            return rawverify.Verdict(True, f"verified earlier ({rec.get('at', '?')}, mean error {rec.get('mae')} levels)",
+                                     rec.get("pattern"), rec.get("mae"))
+    except Exception:
+        pass
+    return None
+
+
+def _save_verdict(serial: str | None, fmt_name: str, verdict) -> None:
+    if not serial or not verdict.ok:
+        return
+    try:
+        with _verdicts_lock:
+            data = _read_verdict_file(quarantine=True)
+            data.setdefault(serial, {})[fmt_name] = {
+                "ok": True, "pattern": verdict.pattern, "mae": verdict.mae,
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+            _write_verdict_file(data)
+    except Exception:
+        logger.warning("raw_format_verdict_not_saved", serial=serial, fmt=fmt_name)
+
+
+def _forget_verdict(serial: str | None, fmt_name: str) -> None:
+    if not serial:
+        return
+    try:
+        with _verdicts_lock:
+            data = _read_verdict_file()
+            if data.get(serial, {}).pop(fmt_name, None) is not None:
+                _write_verdict_file(data)
+    except Exception:
+        pass
+
+
+def _apply_bit_depth(h: int, cap, value, cam: "MindVisionCamera | None") -> str | None:
+    """Switch the camera's output format. Returns an error message, or None on success."""
+    options = bit_depth_options(cap)
+    try:
+        depth = int(value)
+    except (TypeError, ValueError):
+        return f"bit_depth must be one of {options}, got {value!r}"
+    if depth not in options:
+        return f"bit_depth {depth} is not supported by this camera (options: {options})"
+    if depth == read_bit_depth(h, cap):
+        return None
+    if cam is None:
+        return "bit_depth can only be changed through the camera object (it verifies the new format)"
+    if cam._mode == CameraMode.HARDWARE_TRIGGER:
+        return "bit_depth can't be changed in hardware-trigger mode"
+    return cam.set_bit_depth(depth)
 
 
 def _parse_exposure_config(config_file: Path) -> tuple[int, int, float]:
@@ -190,6 +336,12 @@ def read_hw_settings(h: int, cap) -> dict:
     s["mono_sensor"] = bool(cap.sIspCapacity.bMonoSensor) if cap else False
     try: s["mono_enabled"] = bool(mvsdk.CameraGetMonochrome(h))
     except Exception: s["mono_enabled"] = False
+
+    try:
+        s["bit_depth_options"] = bit_depth_options(cap)
+        s["bit_depth"] = read_bit_depth(h, cap)
+    except Exception:
+        s.update(bit_depth=8, bit_depth_options=[8])
 
     return s
 
@@ -515,6 +667,16 @@ def apply_settings(
             except Exception as exc:
                 errors["frame_speed"] = str(exc)
 
+    if "bit_depth" in body:
+        try:
+            err = _apply_bit_depth(h, cap, body["bit_depth"], cam)
+        except Exception as exc:
+            err = str(exc)
+        if err:
+            errors["bit_depth"] = err
+        else:
+            applied.append("bit_depth")
+
     return applied, errors
 
 
@@ -525,7 +687,7 @@ SETTING_KEYS: tuple[str, ...] = (
     "r_gain", "g_gain", "b_gain", "sharpness", "gamma", "contrast", "saturation",
     "noise_filter", "correct_dead_pixel", "inverse", "anti_flick",
     "light_frequency", "frame_speed", "rotation", "h_mirror", "v_mirror",
-    "mono_enabled",
+    "mono_enabled", "bit_depth",
 )
 
 
@@ -546,7 +708,16 @@ class MindVisionCamera(BaseCamera):
         self._dev_info = None
         # Held by stream_frames() per-frame and by capture_image() for the full
         # grab cycle, so they never pull from the SDK queue simultaneously.
-        self._lock = threading.Lock()
+        # Re-entrant: capture_image() holds it while production_applied() may
+        # apply a bit_depth change, which takes it again on the same thread.
+        self._lock = threading.RLock()
+        # Raw (above 8-bit) capture: the format/pattern in use once verified, per-format verdicts, and the lazily
+        # built camera.rawisp pipeline.
+        self._raw_choice = None
+        self._raw_verdicts: dict = {}
+        self._raw_pl = None
+        self._raw_pl_key = None
+        self._raw_warned_trigger = False
         self._stream_lock = threading.Lock()  # held for the lifetime of each active stream
         self._stream_cancel = threading.Event()  # set to signal the active stream to stop
         self._mode: CameraMode = CameraMode.STREAM
@@ -1043,7 +1214,9 @@ class MindVisionCamera(BaseCamera):
             # Hardware-triggered frames are exposed before capture_image() runs,
             # too late to swap production in, so no drafts in this mode.
             raise RuntimeError("Settings can't be tested while in hardware-trigger mode")
-        with self._exposure_lock:
+        # _lock first: a bit_depth change switches the camera's output format, which takes _lock (and must wait
+        # for any frame being grabbed). Ordering is _lock, then _exposure_lock.
+        with self._lock, self._exposure_lock:
             applied, errors = apply_settings(self._h_camera, body, self)
             if applied:
                 self._draft_dirty = True
@@ -1053,7 +1226,9 @@ class MindVisionCamera(BaseCamera):
         """Apply settings straight to production (in memory; not saved to disk)."""
         if self._h_camera is None:
             raise RuntimeError("Camera not open")
-        with self._exposure_lock:
+        # _lock first: a bit_depth change switches the camera's output format, which takes _lock (and must wait
+        # for any frame being grabbed). Ordering is _lock, then _exposure_lock.
+        with self._lock, self._exposure_lock:
             applied, errors = apply_settings(self._h_camera, body, self)
             current = self.current_settings()
             for key in applied:
@@ -1063,7 +1238,9 @@ class MindVisionCamera(BaseCamera):
 
     def discard_draft(self) -> list[str]:
         """Put the production settings back on the camera. Returns the keys reverted."""
-        with self._exposure_lock:
+        # _lock first: a bit_depth change switches the camera's output format, which takes _lock (and must wait
+        # for any frame being grabbed). Ordering is _lock, then _exposure_lock.
+        with self._lock, self._exposure_lock:
             changes = self.draft_changes()
             if changes:
                 apply_settings(self._h_camera, {k: p for k, (p, _) in changes.items()}, self)
@@ -1119,7 +1296,7 @@ class MindVisionCamera(BaseCamera):
         Yields True if a draft was swapped out (the caller should let queued
         frames settle), False if production was already in effect.
         """
-        with self._exposure_lock:
+        with self._lock, self._exposure_lock:
             changes = self.draft_changes() if self._h_camera is not None else {}
             if not changes:
                 yield False
@@ -1128,11 +1305,15 @@ class MindVisionCamera(BaseCamera):
             try:
                 yield True
             finally:
-                apply_settings(self._h_camera, {k: d for k, (_, d) in changes.items()}, self)
+                _, errors = apply_settings(self._h_camera, {k: d for k, (_, d) in changes.items()}, self)
+                if errors:
+                    # A draft that could not be put back (e.g. bit_depth failed its check) leaves the camera on the
+                    # production value; warn so it is visible, but don't fail the capture that already succeeded.
+                    logger.warning("mindvision_draft_restore_failed", camera_index=self._camera_index, errors=errors)
 
     def _persist_production(self) -> None:
         """Write the production settings to disk without committing a draft."""
-        with self._exposure_lock, self.production_applied(), self.capture_exposure_applied():
+        with self._lock, self._exposure_lock, self.production_applied(), self.capture_exposure_applied():
             mvsdk.CameraSaveParameter(self._h_camera, 0)
 
     def set_mode(self, mode: CameraMode) -> None:
@@ -1235,7 +1416,7 @@ class MindVisionCamera(BaseCamera):
 
         # Persist to Configs/<sn>-Group0.config. The new gains go to production;
         # any other draft edits stay a draft instead of being saved with them.
-        with self._exposure_lock:
+        with self._lock, self._exposure_lock:
             self._production.update(r_gain=r, g_gain=g, b_gain=b)
             self._persist_production()
         logger.info("white_balance_calibrated", r=r, g=g, b=b)
@@ -1300,6 +1481,285 @@ class MindVisionCamera(BaseCamera):
                 frames_lost=stat.iLost,
             )
             return None, None
+
+    # ── raw (above 8-bit) capture ────────────────────────────────────────────────────────────────────────────
+
+    def _set_media_type(self, idx: int) -> None:
+        """Switch the camera's output format. Must hold self._lock; the stream is stopped while it changes."""
+        h = self._h_camera
+        mvsdk.CameraStop(h)
+        try:
+            mvsdk.CameraSetMediaType(h, idx)
+        finally:
+            mvsdk.CameraPlay(h)
+
+    def _raw_options(self, filters: bool = True) -> dict:
+        """The SDK ISP controls that camera.rawisp must reproduce (the rest are baked into the raw frame)."""
+        h = self._h_camera
+        opts = {
+            "mono": bool(mvsdk.CameraGetMonochrome(h)),
+            "invert": bool(mvsdk.CameraGetInverse(h)),
+            "rotate": mvsdk.CameraGetRotate(h),
+            "mirror_h": bool(mvsdk.CameraGetMirror(h, 0)),
+            "mirror_v": bool(mvsdk.CameraGetMirror(h, 1)),
+        }
+        if filters:
+            opts["sharpness"] = mvsdk.CameraGetSharpness(h)
+            opts["noise_filter"] = bool(mvsdk.CameraGetNoiseFilterState(h))
+        return opts
+
+    def _trigger_if_needed(self) -> None:
+        """With no stream running the camera is in software-trigger mode and sends a frame only when asked."""
+        if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
+            mvsdk.CameraSoftTrigger(self._h_camera)
+
+    def _flush_frames(self, n: int = 3) -> None:
+        for _ in range(n):
+            try:
+                self._trigger_if_needed()
+                raw, _head = mvsdk.CameraGetImageBuffer(self._h_camera, 1500)
+                mvsdk.CameraReleaseImageBuffer(self._h_camera, raw)
+            except mvsdk.CameraException:
+                break
+
+    def _verification_grab(self):
+        """One frame decoded by the SDK's own ISP and kept raw, for camera.rawverify."""
+        from camera import rawverify
+        h = self._h_camera
+        self._trigger_if_needed()
+        raw, head = mvsdk.CameraGetImageBuffer(h, 3000)
+        try:
+            width, height, code, nbytes = head.iWidth, head.iHeight, head.uiMediaType, head.uBytes
+            raw_copy = np.frombuffer((mvsdk.c_ubyte * nbytes).from_address(raw), dtype=np.uint8).copy()
+            mvsdk.CameraImageProcess(h, raw, self._frame_buffer, head)   # rewrites head to the output frame
+            channels = 1 if head.uiMediaType == mvsdk.CAMERA_MEDIA_TYPE_MONO8 else 3
+            ref = np.frombuffer((mvsdk.c_ubyte * (head.iWidth * head.iHeight * channels)).from_address(self._frame_buffer),
+                                dtype=np.uint8).reshape(head.iHeight, head.iWidth, channels).copy()
+        finally:
+            mvsdk.CameraReleaseImageBuffer(h, raw)
+        return rawverify.Grab(raw_copy, ref, width, height, code, nbytes)
+
+    def _verify_format(self, fmt):
+        """Check `fmt` against the SDK's ISP on live frames. Sharpness and the noise filter are switched off while
+        checking so only the decode is being compared. Caller holds self._lock; the format is already selected."""
+        from camera import rawverify
+        h = self._h_camera
+        saved = []
+        for get, set_ in ((mvsdk.CameraGetSharpness, mvsdk.CameraSetSharpness),
+                          (mvsdk.CameraGetNoiseFilterState, mvsdk.CameraSetNoiseFilter)):
+            try:
+                saved.append((get(h), set_))
+                set_(h, 0)
+            except Exception:
+                pass
+        try:
+            self._flush_frames()
+            verdict = rawverify.verify_decode(self._verification_grab, fmt, self._raw_options(filters=False))
+        finally:
+            for value, set_ in saved:
+                try:
+                    set_(h, value)
+                except Exception:
+                    pass
+            self._flush_frames(1)
+        logger.info("raw_format_verified", camera_index=self._camera_index, fmt=fmt.name,
+                    ok=verdict.ok, reason=verdict.reason)
+        return verdict
+
+    def _trusted_verdict(self, fmt):
+        """The verdict for `fmt` on this camera: in memory, else from an earlier run, else a live check (saved when it
+        passes). Only a passing verdict is final; a failed or inconclusive one is checked again next time.
+        Caller holds self._lock and the format is already selected."""
+        verdict = self._raw_verdicts.get(fmt.name)
+        if verdict is None or not verdict.ok:
+            verdict = _load_verdict(self.serial_number, fmt.name)
+            if verdict is None:
+                verdict = self._verify_format(fmt)
+                _save_verdict(self.serial_number, fmt.name, verdict)
+        self._raw_verdicts[fmt.name] = verdict
+        return verdict
+
+    def _activate_raw_format(self, idx: int, fmt):
+        """Select a raw format and make sure it is trusted (cached verdict, or a live check)."""
+        self._set_media_type(idx)
+        verdict = self._trusted_verdict(fmt)
+        if verdict.ok:
+            self._raw_choice = (fmt, verdict.pattern)
+        return verdict
+
+    def set_bit_depth(self, depth: int) -> str | None:
+        """Switch to `depth` bits per pixel. Returns an error message, or None on success. On failure the camera
+        is put back on the format it had."""
+        from camera import rawformat
+        h = self._h_camera
+        formats = _camera_formats(self._cap)
+        with self._lock:
+            prev_idx = mvsdk.CameraGetMediaType(h)
+            if depth == 8:
+                eight = rawformat.candidates_for_depth(formats, 8)
+                if not eight:
+                    return "this camera has no 8-bit format"
+                self._set_media_type(eight[0][0])
+                self._raw_choice = None
+                return None
+            problems = []
+            for idx, fmt in rawformat.candidates_for_depth(formats, depth):
+                try:
+                    verdict = self._activate_raw_format(idx, fmt)
+                except Exception as exc:
+                    problems.append(f"{fmt.label}: {exc}")
+                    continue
+                if verdict.ok:
+                    return None
+                problems.append(f"{fmt.label}: {verdict.reason}")
+            try:
+                self._set_media_type(prev_idx)
+            except Exception:
+                logger.warning("bit_depth_restore_failed", camera_index=self._camera_index)
+            self._raw_choice = None
+            return "; ".join(problems) or f"no {depth}-bit format could be used"
+
+    def raw_format_status(self) -> dict:
+        """{"<depth>": {...}} for every depth above 8: which format would be used and whether it has been checked."""
+        from camera import rawformat
+        out = {}
+        formats = _camera_formats(self._cap)
+        with _verdicts_lock:
+            stored = _read_verdict_file()
+        for depth in rawformat.available_depths(formats):
+            if depth <= 8:
+                continue
+            cands = rawformat.candidates_for_depth(formats, depth)
+            shown = cands[0][1]
+            state, reason = "unverified", "Not checked yet: selecting it runs a one-time check against the SDK."
+            for _, f in cands:
+                v = self._raw_verdicts.get(f.name) or _load_verdict(self.serial_number, f.name, stored)
+                if v is not None:
+                    # "retry": the scene could not decide, which says nothing against the format itself
+                    shown, state, reason = f, ("verified" if v.ok else "retry" if v.inconclusive else "failed"), v.reason
+                    if v.ok:
+                        break
+            out[str(depth)] = {
+                "format": shown.label, "state": state, "reason": reason, "mono": shown.mono,
+                "low_bits_hardware_verified": shown.low_bits_hardware_verified,
+            }
+        return out
+
+    def _raw_choice_now(self):
+        """(format, pattern) for the format the camera is sending right now, or None when it is not a trusted raw one."""
+        h = self._h_camera
+        idx = mvsdk.CameraGetMediaType(h)
+        fmt = next((f for i, f in _camera_formats(self._cap) if i == idx), None)
+        if fmt is None or fmt.bits <= 8:
+            return None
+        if self._raw_choice and self._raw_choice[0].code == fmt.code:
+            return self._raw_choice
+        # The camera came up in this format (saved parameters) or it changed behind our back: check it now.
+        verdict = self._trusted_verdict(fmt)
+        if verdict.ok:
+            self._raw_choice = (fmt, verdict.pattern)
+            return self._raw_choice
+        logger.warning("raw_format_not_trusted", camera_index=self._camera_index, fmt=fmt.name, reason=verdict.reason)
+        return None
+
+    def _use_raw_path(self) -> bool:
+        return self._raw_path_options() is not None
+
+    def _raw_path_options(self) -> dict | None:
+        """The camera.rawisp options when this capture should be developed by camera.rawisp and saved as a 16-bit
+        PNG, else None. They are read from the camera once here and handed to _grab_frame_raw.
+
+        Otherwise the SDK's 8-bit ISP path is used (and the capture is a JPEG): in hardware-trigger mode (the
+        trigger collector, uploads and stitching assume JPEG), when the format is not trusted, or when an active
+        control cannot be reproduced for this sensor.
+        """
+        from camera import rawisp
+        if self._h_camera is None:
+            return None
+        try:
+            if read_bit_depth(self._h_camera, self._cap) <= 8:
+                return None
+            if self._mode == CameraMode.HARDWARE_TRIGGER:
+                if not self._raw_warned_trigger:
+                    self._raw_warned_trigger = True
+                    logger.warning("raw_capture_ignored_in_hardware_trigger_mode", camera_index=self._camera_index)
+                return None
+            choice = self._raw_choice_now()
+            if choice is None:
+                return None
+            options = self._raw_options()
+            bad = rawisp.unsupported_controls(choice[0], options)
+            if bad:
+                logger.warning("raw_capture_unsupported_controls", camera_index=self._camera_index,
+                               fmt=choice[0].name, controls=bad)
+                return None
+            return options
+        except Exception:
+            logger.exception("raw_path_check_failed", camera_index=self._camera_index)
+            return None
+
+    def _grab_frame_raw(self, timeout_ms: int = 1000, options: dict | None = None) -> "tuple[np.ndarray, object] | tuple[None, None]":
+        """Grab one raw frame and develop it to a 16-bit array (uint16, values at 16-bit scale).
+
+        If the frame is not what the verified format promises (the camera was switched underneath us), the same
+        frame goes through the SDK's ISP instead and comes back as an 8-bit array, like _grab_frame().
+        Caller must hold self._lock. Returns (array, head) or (None, None) on a grab failure.
+        """
+        from camera import rawisp
+        fmt, pattern = self._raw_choice
+        try:
+            raw, head = mvsdk.CameraGetImageBuffer(self._h_camera, timeout_ms)
+        except mvsdk.CameraException as e:
+            stat = mvsdk.CameraGetFrameStatistic(self._h_camera)
+            logger.warning(
+                "mindvision_grab_failed",
+                error_code=e.error_code, message=e.message,
+                timed_out=(e.error_code == mvsdk.CAMERA_STATUS_TIME_OUT),
+                frames_total=stat.iTotal, frames_lost=stat.iLost,
+            )
+            return None, None
+        try:
+            w, hh = head.iWidth, head.iHeight
+            if head.uiMediaType != fmt.code or head.uBytes != fmt.frame_bytes(w, hh) or not fmt.width_ok(w):
+                logger.warning("raw_frame_not_as_verified", camera_index=self._camera_index, fmt=fmt.name,
+                               media_type=hex(head.uiMediaType), nbytes=head.uBytes, width=w, height=hh)
+                _forget_verdict(self.serial_number, fmt.name)
+                self._raw_verdicts.pop(fmt.name, None)
+                self._raw_choice = None
+                mvsdk.CameraImageProcess(self._h_camera, raw, self._frame_buffer, head)
+                channels = 1 if head.uiMediaType == mvsdk.CAMERA_MEDIA_TYPE_MONO8 else 3
+                arr = np.frombuffer((mvsdk.c_ubyte * head.uBytes).from_address(self._frame_buffer), dtype=np.uint8)
+                return arr.reshape(head.iHeight, head.iWidth, channels).copy(), head
+            key = (w, hh, fmt.code, pattern)
+            if self._raw_pl is None or self._raw_pl_key != key:
+                self._raw_pl = rawisp.RawPipeline(w, hh, fmt, pattern=pattern)
+                self._raw_pl_key = key
+            pl = self._raw_pl
+            pl.set_options(**(options if options is not None else self._raw_options()))
+            raw_u8 = np.frombuffer((mvsdk.c_ubyte * head.uBytes).from_address(raw), dtype=np.uint8)
+            mosaic = pl.unpack(raw_u8)           # the SDK buffer is free as soon as this returns
+        finally:
+            mvsdk.CameraReleaseImageBuffer(self._h_camera, raw)
+        out = pl.finish(pl.color(pl.demosaic(mosaic)))
+        self._fill_isp_header_fields(head)
+        return out.copy(), head                  # the pipeline reuses its buffers on the next call
+
+    def _fill_isp_header_fields(self, head) -> None:
+        """Give a raw frame header the ISP fields the SDK normally fills in CameraImageProcess().
+
+        _snapshot_capture_state() (EXIF) reads gamma/contrast/saturation and the RGB gains from the
+        header; without this they would be recorded as zero for raw captures. The values are the
+        camera's current settings, held steady by self._lock for the duration of the capture.
+        """
+        h = self._h_camera
+        try:
+            head.iGamma = mvsdk.CameraGetGamma(h)
+            head.iContrast = mvsdk.CameraGetContrast(h)
+            head.iSaturation = mvsdk.CameraGetSaturation(h)
+            r, g, b = mvsdk.CameraGetGain(h)     # percent: 100 = 1.0x, same scale as head.f?gain * 100
+            head.fRgain, head.fGgain, head.fBgain = r / 100.0, g / 100.0, b / 100.0
+        except Exception:
+            logger.warning("isp_header_fields_unavailable", camera_index=self._camera_index)
 
     def _discard_until_exposure_settled(self, max_frames: int = 8) -> None:
         """Drop streamed frames still carrying the stream's auto-exposure.
@@ -1546,7 +2006,9 @@ class MindVisionCamera(BaseCamera):
         # the last one won, and the zip shipped that single frame three times
         # under camera_0/1/2.jpg. The failure was silent and produced three
         # database rows, one per camera serial, all holding the same image.
-        output_image = output_folder / f"cam{self._camera_index}_{time.time_ns()}.jpg"
+        # The extension is chosen below, once the frame exists: .png for a 16-bit frame, .jpg otherwise. It can't be
+        # known earlier because the format in use may change while the capture settings are being applied.
+        stem = f"cam{self._camera_index}_{time.time_ns()}"
 
         # Holding _lock for the whole swap keeps the stream from serving (or
         # stealing) frames taken at the wrong settings. production_applied()
@@ -1554,12 +2016,15 @@ class MindVisionCamera(BaseCamera):
         # out a stream's auto-exposure override.
         with self._lock, self.production_applied() as draft_swapped, \
                 self.capture_exposure_applied() as swapped:
+            # Decided before the trigger: the first use of a raw format may run its own check, which takes frames.
+            raw_options = self._raw_path_options()
+            grab = self._grab_frame if raw_options is None else partial(self._grab_frame_raw, options=raw_options)
             if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
                 mvsdk.CameraSoftTrigger(self._h_camera)
             t0 = time.perf_counter()
             if swapped or (draft_swapped and self._streaming):
                 self._discard_until_exposure_settled()
-            frame, head = self._grab_frame(timeout_ms=self.exposure_grab_timeout_ms())
+            frame, head = grab(timeout_ms=self.exposure_grab_timeout_ms())
             capture_duration_ms = (time.perf_counter() - t0) * 1000
             # Read the camera state while the capture profile is still applied
             # and the lock is held; after this block a running stream may swap
@@ -1577,8 +2042,27 @@ class MindVisionCamera(BaseCamera):
         )
 
         exif_bytes = self._build_exif(captured_at, exif_state)
-        jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes, resize=resize)
-        output_image.write_bytes(jpeg_bytes)
+        if frame.dtype == np.uint16:
+            # 16-bit PNG: lossless and openable everywhere. The same EXIF block the JPEG path
+            # uses goes in as an eXIf chunk (cv2 can't write one, so it is spliced in by hand).
+            from camera.rawisp import png_with_exif
+            if resize is not None:
+                frame = cv2.resize(frame, resize, interpolation=cv2.INTER_AREA)
+            ok, encoded = cv2.imencode(".png", frame)
+            if not ok:
+                raise RuntimeError("Failed to PNG-encode 16-bit frame")
+            png_bytes = encoded.tobytes()
+            if exif_bytes:
+                try:
+                    png_bytes = png_with_exif(png_bytes, exif_bytes)
+                except ValueError:
+                    logger.warning("png_exif_embed_failed", camera_index=self._camera_index)
+            output_image = output_folder / f"{stem}.png"
+            output_image.write_bytes(png_bytes)
+        else:
+            output_image = output_folder / f"{stem}.jpg"
+            jpeg_bytes = self._encode_jpeg(frame, quality=95, exif_bytes=exif_bytes, resize=resize)
+            output_image.write_bytes(jpeg_bytes)
 
         width, height = resize or (native_width, native_height)
         metrics = CaptureMetrics(

@@ -33,6 +33,16 @@ class StoreTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.store = ProfileStore(Path(self._tmp.name) / "p.db")
 
+    def test_profile_without_bit_depth_defaults_to_8(self):
+        legacy = {k: v for k, v in full().items() if k != "bit_depth"}
+        p = self.store.create(SERIAL, "Old client", legacy)
+        self.assertEqual(p["settings"]["bit_depth"], 8)
+        self.assertEqual(self.store.get(SERIAL, p["id"])["settings"]["bit_depth"], 8)
+
+    def test_explicit_bit_depth_is_kept(self):
+        p = self.store.create(SERIAL, "Deep", full(bit_depth=12))
+        self.assertEqual(p["settings"]["bit_depth"], 12)
+
     def test_create_get_list(self):
         p = self.store.create(SERIAL, "Bright", full(exposure_us=5000.0, gamma=90), "desc")
         self.assertEqual(self.store.get(SERIAL, p["id"])["settings"]["gamma"], 90)

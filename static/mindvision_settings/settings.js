@@ -53,7 +53,7 @@ const DRAFT_LABELS = {
   noise_filter: 'Noise filter', correct_dead_pixel: 'Dead pixel correction',
   inverse: 'Invert image', anti_flick: 'Anti-flicker', light_frequency: 'Light frequency',
   frame_speed: 'Frame speed', rotation: 'Rotation', h_mirror: 'Horizontal mirror',
-  v_mirror: 'Vertical mirror', mono_enabled: 'Monochrome',
+  v_mirror: 'Vertical mirror', mono_enabled: 'Monochrome', bit_depth: 'Bit depth',
 };
 
 function formatDraftValue(key, v) {
@@ -62,7 +62,49 @@ function formatDraftValue(key, v) {
   if (key === 'analog_gain') return `${gainRawToX(v)}×`;
   if (key === 'rotation') return `${v * 90}°`;
   if (key === 'light_frequency') return v ? '60 Hz' : '50 Hz';
+  if (key === 'bit_depth') return `${v}-bit`;
   return String(v);
+}
+
+// Bit depth: the options are whatever raw formats this camera offers (8, 10, 12, ...); the note under the select
+// says which format is used above 8 bits and whether it has been checked against the SDK.
+let _bitDepthStatus = {};
+function renderBitDepth(s) {
+  const sel = document.getElementById('bit-depth');
+  const depths = s.bit_depth_options || [8];
+  const status = s.bit_depth_status || {};
+  const current = String(s.bit_depth ?? 8);
+  sel.replaceChildren(...depths.map(d => {
+    const o = document.createElement('option');
+    o.value = String(d);
+    o.textContent = d === 8 ? '8-bit' : `${d}-bit`;
+    return o;
+  }));
+  sel.value = depths.includes(parseInt(current)) ? current : '8';
+  sel.disabled = depths.length < 2;
+  _bitDepthStatus = status;
+  renderBitDepthNote();
+}
+
+// The note describes the depth currently chosen in the select, so it is redrawn when the choice changes too.
+function renderBitDepthNote() {
+  const sel = document.getElementById('bit-depth');
+  const note = document.getElementById('bit-depth-note');
+  const st = _bitDepthStatus[sel.value];
+  if (!st) {
+    note.textContent = sel.options.length < 2
+      ? 'This camera only offers 8-bit output.'
+      : 'Captures are 8-bit JPEG.';
+  } else {
+    const hw = st.low_bits_hardware_verified
+      ? ''
+      : ' The low-order bits follow the published layout and have not been confirmed on this hardware.';
+    const check = st.state === 'verified' ? 'Checked against the SDK.'
+      : st.state === 'failed' ? `Check failed: ${st.reason}`
+      : st.state === 'retry' ? `Could not be checked yet: ${st.reason}`
+      : 'Selecting it runs a one-time check against the SDK.';
+    note.textContent = `${st.format}. Captures are saved as 16-bit PNG, the stream stays 8-bit. ${check}${hw}`;
+  }
 }
 
 function updateDraftButtons() {
@@ -279,6 +321,7 @@ function populateUI(s) {
   document.getElementById('anti-flick').checked = s.anti_flick;
   document.getElementById('light-frequency').value = String(s.light_frequency ?? 0);
   setSlider('frame-speed', s.frame_speed, 0, s.frame_speed_max ?? 2, 'frame-speed-value');
+  renderBitDepth(s);
 
   // Rotation
   document.querySelectorAll('#rotation-group .btn-seg').forEach(btn => {
@@ -325,6 +368,7 @@ function collectSettings() {
     anti_flick:      document.getElementById('anti-flick').checked,
     light_frequency: parseInt(document.getElementById('light-frequency').value),
     frame_speed:     parseInt(document.getElementById('frame-speed').value),
+    bit_depth:       parseInt(document.getElementById('bit-depth').value),
     rotation:    activeRot ? parseInt(activeRot.dataset.rotation) : 0,
     h_mirror:    document.getElementById('h-mirror').checked,
     v_mirror:    document.getElementById('v-mirror').checked,
@@ -1106,6 +1150,8 @@ function wireControls() {
     document.getElementById(id).addEventListener('change', onSettingChange);
   });
   document.getElementById('light-frequency').addEventListener('change', onSettingChange);
+  document.getElementById('bit-depth').addEventListener('change', onSettingChange);
+  document.getElementById('bit-depth').addEventListener('change', renderBitDepthNote);
 
   // Settings search
   document.getElementById('settings-search').addEventListener('input', function () {

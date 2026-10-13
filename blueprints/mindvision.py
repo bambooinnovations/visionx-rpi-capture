@@ -1094,7 +1094,8 @@ def create_blueprint(
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
                 for cam_id in sorted(results):
-                    zf.write(results[cam_id][0], f"camera_{cam_id}.jpg")
+                    # .png for cameras set to 12-bit (see MindVisionCamera.capture_image)
+                    zf.write(results[cam_id][0], f"camera_{cam_id}{results[cam_id][0].suffix}")
             buf.seek(0)
 
             @after_this_request
@@ -1268,6 +1269,10 @@ def create_blueprint(
         s = _read_mv_settings(cam._h_camera, cam._cap, cam)
         s["camera_id"] = cam_id
         s["draft_changes"] = _draft_changes_json(cam)
+        try:
+            s["bit_depth_status"] = cam.raw_format_status()
+        except Exception:
+            s["bit_depth_status"] = {}
         return jsonify(s)
 
     @bp.route("/settings", methods=["POST"])
