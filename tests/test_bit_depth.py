@@ -446,3 +446,34 @@ def test_a_corrupt_verdict_file_is_moved_aside_not_lost(sdk, tmp_path):
     assert (tmp_path / "verdicts.corrupt").read_text() == "{not json"
     assert mv._load_verdict("S", "X") is not None
     assert not (tmp_path / "verdicts.tmp").exists()
+
+
+# ── lock order: _lock, then _exposure_lock ─────────────────────────────────────────────────────────────────
+
+def test_changing_bit_depth_does_not_deadlock_against_a_capture(sdk, monkeypatch):
+    """capture_image holds _lock and then wants _exposure_lock; a settings change that switches the format takes
+    both. If the settings side took them in the other order the two threads would wait on each other forever."""
+    import threading
+    cam = make_cam(sdk, ["BAYGB8", "BAYGB12_PACKED"])
+    monkeypatch.setattr(cam, "_verify_format", lambda fmt: ok())
+    stop = threading.Event()
+
+    def capture_like():
+        while not stop.is_set():
+            with cam._lock:
+                with cam._exposure_lock:
+                    pass
+
+    t = threading.Thread(target=capture_like, daemon=True)
+    t.start()
+
+    def switch():
+        for depth in (12, 8) * 40:
+            cam.apply_production({"bit_depth": depth})
+
+    s = threading.Thread(target=switch, daemon=True)
+    s.start()
+    s.join(timeout=20)
+    stop.set()
+    t.join(timeout=5)
+    assert not s.is_alive(), "apply_production deadlocked against a capture"

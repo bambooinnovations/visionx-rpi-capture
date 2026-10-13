@@ -1214,7 +1214,9 @@ class MindVisionCamera(BaseCamera):
             # Hardware-triggered frames are exposed before capture_image() runs,
             # too late to swap production in, so no drafts in this mode.
             raise RuntimeError("Settings can't be tested while in hardware-trigger mode")
-        with self._exposure_lock:
+        # _lock first: a bit_depth change switches the camera's output format, which takes _lock (and must wait
+        # for any frame being grabbed). Ordering is _lock, then _exposure_lock.
+        with self._lock, self._exposure_lock:
             applied, errors = apply_settings(self._h_camera, body, self)
             if applied:
                 self._draft_dirty = True
@@ -1224,7 +1226,9 @@ class MindVisionCamera(BaseCamera):
         """Apply settings straight to production (in memory; not saved to disk)."""
         if self._h_camera is None:
             raise RuntimeError("Camera not open")
-        with self._exposure_lock:
+        # _lock first: a bit_depth change switches the camera's output format, which takes _lock (and must wait
+        # for any frame being grabbed). Ordering is _lock, then _exposure_lock.
+        with self._lock, self._exposure_lock:
             applied, errors = apply_settings(self._h_camera, body, self)
             current = self.current_settings()
             for key in applied:
@@ -1234,7 +1238,9 @@ class MindVisionCamera(BaseCamera):
 
     def discard_draft(self) -> list[str]:
         """Put the production settings back on the camera. Returns the keys reverted."""
-        with self._exposure_lock:
+        # _lock first: a bit_depth change switches the camera's output format, which takes _lock (and must wait
+        # for any frame being grabbed). Ordering is _lock, then _exposure_lock.
+        with self._lock, self._exposure_lock:
             changes = self.draft_changes()
             if changes:
                 apply_settings(self._h_camera, {k: p for k, (p, _) in changes.items()}, self)
@@ -1290,7 +1296,7 @@ class MindVisionCamera(BaseCamera):
         Yields True if a draft was swapped out (the caller should let queued
         frames settle), False if production was already in effect.
         """
-        with self._exposure_lock:
+        with self._lock, self._exposure_lock:
             changes = self.draft_changes() if self._h_camera is not None else {}
             if not changes:
                 yield False
@@ -1307,7 +1313,7 @@ class MindVisionCamera(BaseCamera):
 
     def _persist_production(self) -> None:
         """Write the production settings to disk without committing a draft."""
-        with self._exposure_lock, self.production_applied(), self.capture_exposure_applied():
+        with self._lock, self._exposure_lock, self.production_applied(), self.capture_exposure_applied():
             mvsdk.CameraSaveParameter(self._h_camera, 0)
 
     def set_mode(self, mode: CameraMode) -> None:
@@ -1410,7 +1416,7 @@ class MindVisionCamera(BaseCamera):
 
         # Persist to Configs/<sn>-Group0.config. The new gains go to production;
         # any other draft edits stay a draft instead of being saved with them.
-        with self._exposure_lock:
+        with self._lock, self._exposure_lock:
             self._production.update(r_gain=r, g_gain=g, b_gain=b)
             self._persist_production()
         logger.info("white_balance_calibrated", r=r, g=g, b=b)
