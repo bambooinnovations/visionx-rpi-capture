@@ -1619,6 +1619,43 @@ def create_blueprint(
             "X-Capture-State": json.dumps(state, sort_keys=True),
         })
 
+    @bp.route("/settings/capture")
+    def settings_capture():
+        """Full-resolution capture with the draft settings, EXIF embedded.
+
+        Same file a production capture writes (JPEG, or 16-bit PNG at 12-bit),
+        taken with the draft the settings page is previewing. Returned inline
+        for the preview; ?download=1 adds an attachment filename.
+
+        Query params:
+          camera_id  int   Camera index (default 0)
+          download   0|1   Send as an attachment (default 0)
+        """
+        cam, cam_id = _resolve_camera()
+        if cam is None or cam._h_camera is None:
+            return jsonify({"error": f"Camera {cam_id} not found or not open"}), 404
+
+        config.CAPTURE_TMP_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_dir = Path(tempfile.mkdtemp(dir=config.CAPTURE_TMP_DIR))
+        try:
+            path, metrics = cam.capture_image(output_folder=tmp_dir, use_draft=True)
+            data = path.read_bytes()
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 503
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        ext = path.suffix.lstrip(".").lower()
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        serial = cam.serial_number or f"cam{cam_id}"
+        return send_file(
+            io.BytesIO(data),
+            mimetype="image/png" if ext == "png" else "image/jpeg",
+            as_attachment=request.args.get("download", 0, type=int) == 1,
+            download_name=f"{serial}_{stamp}.{ext}",
+            max_age=0,
+        )
+
     @bp.route("/calibration/score")
     def calibration_score():
         """Return the current sharpness score and trend as JSON (single frame).

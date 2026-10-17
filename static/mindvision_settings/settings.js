@@ -922,12 +922,17 @@ async function useSnapshotAsManual() {
   showSuccess(`Manual: ${ms} ms, ${gainRawToX(gain.value)}×`);
 }
 
-async function takeSnapshot() {
+// save=true (or the "Save file" box ticked) takes a full-resolution capture
+// with EXIF instead of the downscaled preview JPEG, and downloads it.
+async function takeSnapshot(save = false) {
+  save = save === true || document.getElementById('auto-save').checked;
   const btn = document.getElementById('btn-action');
+  const saveBtn = document.getElementById('btn-save-image');
   const img = document.getElementById('snapshot-img');
   const placeholder = document.getElementById('snapshot-placeholder');
 
   btn.disabled = true;
+  saveBtn.disabled = true;
   btn.textContent = 'Capturing…';
   placeholder.querySelector('p').textContent = 'Capturing…';
   placeholder.classList.remove('hidden');
@@ -939,7 +944,9 @@ async function takeSnapshot() {
     // Photo mode doesn't live-apply, so push the current controls first;
     // otherwise the snapshot would use whatever was last applied.
     await applyChanges();
-    const res = await fetch(`${API}/settings/snapshot?camera_id=${CAMERA_ID}`);
+    const res = await fetch(save
+      ? `${API}/settings/capture?camera_id=${CAMERA_ID}`
+      : `${API}/settings/snapshot?camera_id=${CAMERA_ID}`);
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       throw new Error(j.error || `HTTP ${res.status}`);
@@ -953,6 +960,15 @@ async function takeSnapshot() {
     if (_snapshotObjectUrl) URL.revokeObjectURL(_snapshotObjectUrl);
     _snapshotObjectUrl = URL.createObjectURL(blob);
     img.src = _snapshotObjectUrl;
+    if (save) {
+      const a = document.createElement('a');
+      a.href = _snapshotObjectUrl;
+      a.download = (res.headers.get('Content-Disposition') || '').match(/filename="?([^";]+)/)?.[1]
+        || `capture.${blob.type === 'image/png' ? 'png' : 'jpg'}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
     img.classList.remove('hidden');
     placeholder.classList.add('hidden');
     resetZoom();
@@ -966,6 +982,7 @@ async function takeSnapshot() {
     placeholder.querySelector('p').textContent = 'Take a snapshot to preview';
   } finally {
     btn.disabled = false;
+    saveBtn.disabled = false;
     btn.textContent = 'Take Snapshot';
   }
 }
@@ -1178,7 +1195,11 @@ function wireControls() {
       const prev = previewMode;
       previewMode = this.value;
 
-      document.getElementById('btn-action').style.visibility =
+      for (const id of ['btn-action', 'btn-save-image']) {
+        document.getElementById(id).style.visibility =
+          previewMode === 'photo' ? 'visible' : 'hidden';
+      }
+      document.getElementById('auto-save').closest('label').style.visibility =
         previewMode === 'photo' ? 'visible' : 'hidden';
 
       if (previewMode === 'photo') {

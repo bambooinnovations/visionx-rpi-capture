@@ -5,7 +5,7 @@ import json
 import os
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from enum import Enum
 from functools import partial
@@ -1993,7 +1993,13 @@ class MindVisionCamera(BaseCamera):
         self,
         resolution: tuple[int, int] | None = None,
         output_folder: Path = config.CAPTURE_TMP_DIR,
+        use_draft: bool = False,
     ) -> tuple[Path, CaptureMetrics]:
+        """Capture one full-resolution still with EXIF embedded.
+
+        use_draft=True keeps a settings-page draft in effect instead of swapping
+        production in, so the file matches what the settings page is previewing.
+        """
         if self._h_camera is None:
             self.open()
 
@@ -2014,7 +2020,8 @@ class MindVisionCamera(BaseCamera):
         # stealing) frames taken at the wrong settings. production_applied()
         # swaps out a settings-page draft; capture_exposure_applied() swaps
         # out a stream's auto-exposure override.
-        with self._lock, self.production_applied() as draft_swapped, \
+        production = nullcontext(False) if use_draft else self.production_applied()
+        with self._lock, production as draft_swapped, \
                 self.capture_exposure_applied() as swapped:
             # Decided before the trigger: the first use of a raw format may run its own check, which takes frames.
             raw_options = self._raw_path_options()

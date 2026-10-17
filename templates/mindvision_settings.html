@@ -327,7 +327,13 @@
           Live
         </label>
       </div>
+      <label class="mode-option" title="Every snapshot is a full-resolution capture with EXIF, downloaded as a file">
+        <input type="checkbox" id="auto-save">
+        Save file
+      </label>
       <button id="btn-action" class="btn btn-secondary" onclick="takeSnapshot()">Take Snapshot</button>
+      <button id="btn-save-image" class="btn btn-secondary" onclick="takeSnapshot(true)"
+              title="Capture at full resolution with the draft settings and download it with its EXIF">Capture &amp; Save</button>
     </div>
 
     <div id="stream-wrap" class="stream-wrap">
