@@ -2029,9 +2029,19 @@ class MindVisionCamera(BaseCamera):
             if not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
                 mvsdk.CameraSoftTrigger(self._h_camera)
             t0 = time.perf_counter()
-            if swapped or (draft_swapped and self._streaming):
+            # Flush stale-exposure frames only while STREAMING, where frames
+            # keep flowing. In single-trigger mode (kiosk pauses the stream
+            # before capture) exactly ONE frame exists, already shot at the
+            # capture settings applied above; discarding it starves the grab
+            # into SDK timeout -12 ("No camera detected" on the kiosk).
+            if self._streaming and (swapped or draft_swapped):
                 self._discard_until_exposure_settled()
             frame, head = grab(timeout_ms=self.exposure_grab_timeout_ms())
+            if frame is None and not self._streaming and self._mode != CameraMode.HARDWARE_TRIGGER:
+                # The single triggered frame can be lost to a stream-teardown
+                # race; one fresh trigger costs ~an exposure, not a 503.
+                mvsdk.CameraSoftTrigger(self._h_camera)
+                frame, head = grab(timeout_ms=self.exposure_grab_timeout_ms())
             capture_duration_ms = (time.perf_counter() - t0) * 1000
             # Read the camera state while the capture profile is still applied
             # and the lock is held; after this block a running stream may swap
