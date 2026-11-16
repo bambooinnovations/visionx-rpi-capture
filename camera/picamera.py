@@ -261,6 +261,7 @@ class PiCamera(BaseCamera):
         self,
         resolution: tuple[int, int] | None = None,
         output_folder: Path = config.CAPTURE_TMP_DIR,
+        extra_exif: dict | None = None,
     ) -> tuple[Path, CaptureMetrics]:
         if self._cam is None:
             self.open()

@@ -1824,19 +1824,23 @@ class MindVisionCamera(BaseCamera):
                 state["analog_gain_raw"] = None
         return state
 
-    def _build_exif(self, captured_at: str, state: dict | None = None) -> bytes | None:
+    def _build_exif(self, captured_at: str, state: dict | None = None, extra: dict | None = None) -> bytes | None:
         """Build a piexif EXIF blob from the settings captured with the frame.
 
         ExposureTime holds the headline value; the full snapshot (including
         analog gain) is written as JSON in UserComment. ISOSpeedRatings is left
         out on purpose: the camera has analog gain, not a calibrated ISO.
+
+        `extra` carries per-capture context from the caller (e.g. the hardware trigger's travelled
+        distance_mm / encoder_count / trigger number). It is merged into the UserComment JSON and, when
+        distance_mm is present, mirrored in ImageDescription so any viewer shows where the frame was taken.
         """
         try:
             import json
 
             import piexif
 
-            state = state or {}
+            state = {**(state or {}), **(extra or {})}
             exp_us = int(state.get("exposure_us") or 0)
 
             model = ""
@@ -1864,6 +1868,10 @@ class MindVisionCamera(BaseCamera):
                     piexif.ImageIFD.Model: model.encode(),
                     piexif.ImageIFD.DateTime: exif_dt,
                     piexif.ImageIFD.CameraSerialNumber: serial.encode(),
+                    **(
+                        {piexif.ImageIFD.ImageDescription: f"distance_mm={state['distance_mm']}".encode("ascii")}
+                        if state.get("distance_mm") is not None else {}
+                    ),
                 },
                 "Exif": {
                     piexif.ExifIFD.DateTimeOriginal: exif_dt,
@@ -1994,8 +2002,11 @@ class MindVisionCamera(BaseCamera):
         resolution: tuple[int, int] | None = None,
         output_folder: Path = config.CAPTURE_TMP_DIR,
         use_draft: bool = False,
+        extra_exif: dict | None = None,
     ) -> tuple[Path, CaptureMetrics]:
         """Capture one full-resolution still with EXIF embedded.
+
+        extra_exif: JSON-serialisable per-capture fields (e.g. distance_mm) merged into the EXIF UserComment.
 
         use_draft=True keeps a settings-page draft in effect instead of swapping
         production in, so the file matches what the settings page is previewing.
@@ -2048,7 +2059,7 @@ class MindVisionCamera(BaseCamera):
             else None
         )
 
-        exif_bytes = self._build_exif(captured_at, exif_state)
+        exif_bytes = self._build_exif(captured_at, exif_state, extra_exif)
         if frame.dtype == np.uint16:
             # 16-bit PNG: lossless and openable everywhere. The same EXIF block the JPEG path
             # uses goes in as an eXIf chunk (cv2 can't write one, so it is spliced in by hand).

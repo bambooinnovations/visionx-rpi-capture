@@ -6,10 +6,12 @@ of calling os.environ.get() directly.
 """
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
-_CONFIG_PATH = Path(__file__).parent / "configuration.toml"
+# VISIONX_CONFIG lets a test harness (see mocks/) point the app at its own config without touching configuration.toml.
+_CONFIG_PATH = Path(os.environ.get("VISIONX_CONFIG") or Path(__file__).parent / "configuration.toml")
 
 try:
     with open(_CONFIG_PATH, "rb") as _f:
@@ -51,6 +53,8 @@ def is_capture_station() -> bool:
 # "mock"       — no real hardware; uses the local machine's webcam if present,
 #                else a generated test-pattern frame. For local development.
 CAMERA_TYPE: str = _get("camera", "type", "auto")
+# "mock_mindvision" only: how many fake MindVision cameras to register (see mocks/).
+CAMERA_MOCK_COUNT: int = int(_get("camera", "mock_count", 2))
 CAMERA_SHARPNESS: float = _get("camera", "sharpness", 1.0)
 LOCK_EXPOSURE: bool = _get("camera", "lock_exposure", False)
 # MindVision: when the saved exposure is manual, apply it only while capturing a

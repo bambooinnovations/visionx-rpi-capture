@@ -27,8 +27,10 @@ from camera.mindvision_trigger import (
     compute_arduino_params,
     delete_speed_preset,
     get_speed_preset,
+    is_serial_url,
     list_speed_presets,
     save_speed_preset,
+    url_ports_allowed,
 )
 
 logger = structlog.get_logger()
@@ -59,6 +61,11 @@ def create_blueprint(
         body = request.get_json(silent=True) or {}
         port = body.get("port", config.HW_TRIGGER_SERIAL_PORT)
         baud = body.get("baud", config.HW_TRIGGER_SERIAL_BAUD)
+
+        # A caller-supplied pyserial URL (socket://host:port ...) would make the Pi open an arbitrary network
+        # connection. Only the mock hardware setup may use one.
+        if is_serial_url(port) and not url_ports_allowed():
+            return jsonify({"error": "Serial URLs are only allowed with the mock hardware setup"}), 400
 
         mode_errors = {}
         for cam_id, cam in cameras.items():
@@ -220,6 +227,7 @@ def create_blueprint(
             listener.send_command({"cmd": "reset_count"})
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
+        listener.note_count_reset()
         return jsonify({"reset": True})
 
     # ── Arduino parameter config ───────────────────────────────────────────────

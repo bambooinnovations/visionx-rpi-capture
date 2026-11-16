@@ -340,6 +340,23 @@ def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | 
         return None
 
 
+def is_serial_url(port: str) -> bool:
+    """True for a pyserial URL (socket://, rfc2217://, ...) rather than a device path."""
+    return "://" in str(port)
+
+
+def url_ports_allowed() -> bool:
+    """Serial URLs may only be used with the mock hardware (camera type mock_mindvision)."""
+    return config.CAMERA_TYPE == "mock_mindvision"
+
+
+def distance_mm_from_count(count: int | float, counts_per_cm: float) -> float | None:
+    """Travelled distance in mm for an Arduino running encoder count; None if the scale is unusable."""
+    if not counts_per_cm or counts_per_cm <= 0:
+        return None
+    return round(count / counts_per_cm * 10.0, 1)
+
+
 class _TriggerCollector:
     """Gathers per-camera frames for each trigger and fires a callback when all arrive.
 
@@ -622,6 +639,12 @@ class SerialTriggerListener:
         with self._state_lock:
             self._arduino_state["trigger_enabled"] = enabled
 
+    def note_count_reset(self) -> None:
+        """Mirror a reset_count command locally so the UI shows 0 now, not after the next heartbeat."""
+        with self._state_lock:
+            self._arduino_state["encoder_count"] = 0
+            self._arduino_state["speed_cms"] = 0.0
+
     def file_config(self) -> dict:
         """Return the full saved config (physical + raw params) from disk."""
         return self._load_file_config()
@@ -642,6 +665,7 @@ class SerialTriggerListener:
             "active_style": self._load_file_config().get("active_style"),
             **stats_snapshot,
             **state,
+            "distance_mm": distance_mm_from_count(state.get("encoder_count", 0), self._counts_per_cm()),
         }
 
     def queue_depths(self) -> dict:
@@ -785,7 +809,14 @@ class SerialTriggerListener:
         while not self._stop_event.is_set():
             try:
                 if ser is None:
-                    ser = serial.Serial(port, baud, timeout=0.1)
+                    if is_serial_url(port):
+                        # pyserial URL handlers (socket://...) are only honoured in mock mode, where
+                        # mocks/fake_arduino.py stands in for the board. On real deployments a URL is never opened.
+                        if not url_ports_allowed():
+                            raise serial.serialutil.SerialException(f"serial URL {port!r} refused: not in mock mode")
+                        ser = serial.serial_for_url(port, baudrate=baud, timeout=0.1)
+                    else:
+                        ser = serial.Serial(port, baud, timeout=0.1)
                     with self._state_lock:
                         self._arduino_state["serial_connected"] = True
                     logger.info("serial_port_opened", port=port, baud=baud)
@@ -819,7 +850,9 @@ class SerialTriggerListener:
                         pass
                     ser = None
                 with self._state_lock:
+                    # Don't leave the last belt speed on screen as if it were still live.
                     self._arduino_state["serial_connected"] = False
+                    self._arduino_state["speed_cms"] = 0.0
                 if not self._stop_event.is_set():
                     time.sleep(2.0)
 
@@ -891,6 +924,34 @@ class SerialTriggerListener:
         elif msg_type == "startup":
             logger.info("arduino_startup", msg=event.get("msg"))
 
+    def _counts_per_cm(self) -> float | None:
+        """Encoder scale: live Arduino config first, then the saved file config, then derived from the wheel."""
+        with self._state_lock:
+            live = self._arduino_state.get("arduino_config", {}).get("counts_per_cm")
+        if live:
+            return float(live)
+        cfg = self._load_file_config()
+        if cfg.get("counts_per_cm"):
+            return float(cfg["counts_per_cm"])
+        return compute_arduino_params(
+            float(cfg.get("wheel_diameter_mm", PHYSICAL_DEFAULTS["wheel_diameter_mm"])),
+            int(cfg.get("encoder_ppr", PHYSICAL_DEFAULTS["encoder_ppr"])),
+            float(cfg.get("capture_interval_mm", PHYSICAL_DEFAULTS["capture_interval_mm"])),
+        )["counts_per_cm"]
+
+    def _exif_extra(self, event: dict) -> dict:
+        """Per-trigger fields written into the image EXIF so reports can tell where along the roll a frame is."""
+        extra: dict = {}
+        if event.get("trigger") is not None:
+            extra["trigger_number"] = event["trigger"]
+        count = event.get("count")
+        if count is not None:
+            extra["encoder_count"] = count
+            distance = distance_mm_from_count(count, self._counts_per_cm())
+            if distance is not None:
+                extra["distance_mm"] = distance
+        return extra
+
     def _camera_worker(self, cam_id: int, cam: "MindVisionCamera") -> None:
         """Dedicated capture thread for one camera.
 
@@ -927,7 +988,7 @@ class SerialTriggerListener:
             try:
                 tmp_dir.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(dir=tmp_dir) as td:
-                    image_path, capture_metrics = cam.capture_image(output_folder=Path(td))
+                    image_path, capture_metrics = cam.capture_image(output_folder=Path(td), extra_exif=self._exif_extra(event))
                     jpeg_bytes = image_path.read_bytes()
                 serial = cam.serial_number or str(cam_id)
                 with self._stats_lock:

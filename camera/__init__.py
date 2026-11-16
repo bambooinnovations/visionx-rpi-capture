@@ -51,6 +51,12 @@ def build_camera_registry() -> dict[int, BaseCamera]:
     if t == "mock":
         return {0: MockCamera()}
 
+    if t == "mock_mindvision":
+        # Fake MindVision cameras (no SDK, no hardware) so the whole hardware-trigger pipeline can run; see mocks/.
+        from mocks.fake_mindvision import FakeMindVisionCamera
+
+        return {i: FakeMindVisionCamera(i) for i in range(config.CAMERA_MOCK_COUNT)}
+
     if t != "auto":
         raise ValueError(f"Unknown camera type: {t!r}. Expected 'auto', 'picamera2', 'mindvision', or 'mock'.")
 

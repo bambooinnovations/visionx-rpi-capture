@@ -2,70 +2,73 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>VisionX — Line Monitor</title>
   <link rel="stylesheet" href="/static/monitor/monitor.css">
 </head>
 <body>
 
-<div class="mon-topbar">
-  <div class="mon-brand">
-    <a class="mon-brand-name" href="/">VisionX</a>
-    <span class="mon-title">Line Monitor</span>
-  </div>
-  <div class="mon-topbar-right">
-    <span class="mon-clock" id="mon-clock">—</span>
-    <a class="mon-dash-link" href="/">Dashboard</a>
-  </div>
-</div>
-
-<main class="mon-main" id="mon-main">
-
+<header class="mon-topbar">
+  <a class="mon-brand" href="/">VisionX</a>
   <div class="mon-health" id="mon-health">
     <span class="mon-health-dot unknown" id="mon-health-dot"></span>
     <span class="mon-health-text" id="mon-health-text">Checking…</span>
     <span class="mon-health-sub" id="mon-health-sub"></span>
   </div>
+  <span class="mon-clock" id="mon-clock">—</span>
+  <a class="mon-dash-link" href="/">Dashboard</a>
+</header>
 
-  <div class="mon-tiles">
+<div class="mon-unavailable" id="mon-unavailable" hidden></div>
+
+<main class="mon-main" id="mon-main">
+
+  <!-- Hero: where along the roll we are, and the one control an operator needs. -->
+  <section class="mon-hero">
+    <span class="mon-label">Roll distance</span>
+    <span class="mon-hero-value" id="mon-distance">—</span>
+    <span class="mon-hero-sub" id="mon-encoder-count">encoder: —</span>
+    <button class="mon-btn-primary" id="mon-new-roll" type="button">Start new roll</button>
+  </section>
+
+  <section class="mon-side">
     <div class="mon-tile">
-      <span class="mon-tile-label">Belt speed</span>
-      <span class="mon-tile-value" id="mon-speed">—<span class="mon-tile-unit">cm/s</span></span>
-    </div>
-    <div class="mon-tile">
-      <span class="mon-tile-label">Triggers received</span>
-      <span class="mon-tile-value" id="mon-triggers">—</span>
-      <span class="mon-tile-sub" id="mon-encoder-count">encoder: —</span>
+      <span class="mon-label">Belt speed</span>
+      <span class="mon-tile-value" id="mon-speed">—</span>
     </div>
     <div class="mon-tile" id="mon-captures-tile">
-      <span class="mon-tile-label">Captures</span>
+      <span class="mon-label">Captures</span>
       <span class="mon-tile-value" id="mon-captures">—</span>
       <span class="mon-tile-sub" id="mon-captures-sub">ok / failed</span>
     </div>
     <div class="mon-tile" id="mon-uploads-tile">
-      <span class="mon-tile-label">Uploads</span>
+      <span class="mon-label">Uploads</span>
       <span class="mon-tile-value" id="mon-uploads">—</span>
       <span class="mon-tile-sub" id="mon-uploads-sub">ok / failed</span>
     </div>
-    <div class="mon-tile">
-      <span class="mon-tile-label">Uptime</span>
-      <span class="mon-tile-value" id="mon-uptime">—</span>
-    </div>
-    <div class="mon-tile">
-      <span class="mon-tile-label">Active style</span>
-      <span class="mon-tile-value mon-tile-value-text" id="mon-active-style">—</span>
-      <a class="mon-manage-link" href="/">Manage on dashboard →</a>
-    </div>
-  </div>
+  </section>
 
-  <div class="mon-section">
-    <div class="mon-section-title">Pipeline queues</div>
-    <div class="mon-queues" id="mon-queues">
-      <span class="mon-queue-chip"><span class="mon-queue-chip-label">—</span><span class="mon-queue-chip-val">—</span></span>
-    </div>
-  </div>
+  <footer class="mon-strip">
+    <span class="mon-strip-item"><span class="mon-label">Triggers</span><b id="mon-triggers">—</b></span>
+    <span class="mon-strip-item"><span class="mon-label">Uptime</span><b id="mon-uptime">—</b></span>
+    <span class="mon-strip-item"><span class="mon-label">Style</span><b class="mon-accent" id="mon-active-style">—</b></span>
+    <span class="mon-queues" id="mon-queues"></span>
+  </footer>
 
 </main>
+
+<!-- Touch-friendly confirm (native confirm() is tiny and awkward on a touchscreen). -->
+<div class="mon-modal" id="mon-modal" hidden>
+  <div class="mon-modal-card">
+    <h2>Start a new roll?</h2>
+    <p>The distance counter goes back to 0. Photos taken from now on are measured from this point.</p>
+    <div class="mon-modal-actions">
+      <button class="mon-btn-secondary" id="mon-modal-cancel" type="button">Cancel</button>
+      <button class="mon-btn-primary" id="mon-modal-ok" type="button">Yes, start new roll</button>
+    </div>
+    <p class="mon-modal-error" id="mon-modal-error" hidden></p>
+  </div>
+</div>
 
 <script src="/static/monitor/monitor.js"></script>
 </body>

@@ -35,13 +35,52 @@ tickClock();
 
 // ── Status polling ───────────────────────────────────────────────────────
 
-let _decoderUnavailable = false;
-
+// A banner, not a page wipe: one failed poll must not freeze the page, and the next good poll clears it.
 function showUnavailable(message) {
-  if (_decoderUnavailable) return;
-  _decoderUnavailable = true;
-  const main = document.getElementById('mon-main');
-  main.innerHTML = `<div class="mon-unavailable"><strong>Decoder unavailable</strong>${escapeHtml(message)}</div>`;
+  const el = document.getElementById('mon-unavailable');
+  el.innerHTML = `<strong>Decoder unavailable</strong>${escapeHtml(message)}`;
+  el.hidden = false;
+  // The numbers below are the last ones received: say so instead of leaving a green "Connected" up.
+  document.getElementById('mon-main').classList.add('mon-stale');
+  document.getElementById('mon-health-dot').className = 'mon-health-dot down';
+  document.getElementById('mon-health-text').textContent = 'No connection to the Pi';
+  document.getElementById('mon-health-sub').textContent = 'values below are stale';
+}
+
+function hideUnavailable() {
+  document.getElementById('mon-unavailable').hidden = true;
+  document.getElementById('mon-main').classList.remove('mon-stale');
+}
+
+function fmtDistance(mm) {
+  if (typeof mm !== 'number') return '—';
+  return `${(mm / 1000).toFixed(2)}<span class="mon-unit">m</span>`;
+}
+
+// Touch-friendly two-step reset: the big button opens a modal, the modal confirms.
+function openRollModal() {
+  document.getElementById('mon-modal-error').hidden = true;
+  document.getElementById('mon-modal').hidden = false;
+}
+
+function closeRollModal() {
+  document.getElementById('mon-modal').hidden = true;
+}
+
+async function startNewRoll() {
+  const ok = document.getElementById('mon-modal-ok');
+  ok.disabled = true;
+  try {
+    await apiFetch('/api/decoder/reset-count', { method: 'POST' });
+    closeRollModal();
+    await pollStatus();
+  } catch (err) {
+    const el = document.getElementById('mon-modal-error');
+    el.textContent = `Could not reset: ${err.message}`;
+    el.hidden = false;
+  } finally {
+    ok.disabled = false;
+  }
 }
 
 function healthState(status) {
@@ -62,7 +101,8 @@ function renderStatus(s) {
   sub.textContent = s.last_message_at ? `last message ${Math.max(0, Math.round(Date.now() / 1000 - s.last_message_at))}s ago` : '';
 
   document.getElementById('mon-speed').innerHTML =
-    `${typeof s.speed_cms === 'number' ? s.speed_cms.toFixed(1) : '—'}<span class="mon-tile-unit">cm/s</span>`;
+    `${typeof s.speed_cms === 'number' ? s.speed_cms.toFixed(1) : '—'}<span class="mon-unit">cm/s</span>`;
+  document.getElementById('mon-distance').innerHTML = fmtDistance(s.distance_mm);
   document.getElementById('mon-triggers').textContent = s.triggers_received ?? '—';
   document.getElementById('mon-encoder-count').textContent = `encoder: ${s.encoder_count ?? '—'}`;
 
@@ -89,6 +129,7 @@ async function pollStatus() {
   try {
     const s = await apiFetch('/api/decoder/status');
     renderStatus(s);
+    hideUnavailable();
   } catch (err) {
     showUnavailable(err.message);
   }
@@ -132,6 +173,9 @@ function startQueueStream() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('mon-new-roll').addEventListener('click', openRollModal);
+  document.getElementById('mon-modal-cancel').addEventListener('click', closeRollModal);
+  document.getElementById('mon-modal-ok').addEventListener('click', startNewRoll);
   pollStatus();
   startQueueStream();
 

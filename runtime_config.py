@@ -6,9 +6,11 @@ restarts via runtime_config.json (gitignored).  Updated via PATCH /rpi/config.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-PATH = Path(__file__).parent / "runtime_config.json"
+# VISIONX_RUNTIME_CONFIG lets the mock harness (mocks/) keep overrides out of the real runtime_config.json.
+PATH = Path(os.environ.get("VISIONX_RUNTIME_CONFIG") or Path(__file__).parent / "runtime_config.json")
 
 # Keys that can be changed at runtime without restarting the service.
 # Maps dotted "section.key" → expected Python type.
