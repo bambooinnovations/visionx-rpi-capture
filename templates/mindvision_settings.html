@@ -213,8 +213,8 @@
       </div>
 
       <div class="setting-row wb-row">
-        <div class="wb-hint">Point at a white or grey surface.</div>
-        <button id="btn-wb" class="btn btn-secondary" onclick="autoTuneWB()">Auto Tune WB</button>
+        <div class="wb-hint">Step-by-step white balance on a white patch (white paper or a colour chart's white square), then saturation.</div>
+        <button id="btn-wb" class="btn btn-secondary" onclick="openWbWizard()">Guided White Balance…</button>
       </div>
     </section>
 
@@ -414,9 +414,77 @@
   </div>
 </div>
 
+<!-- ── Guided white balance wizard ─────────────────────────────────────── -->
+<div id="wb-wizard" class="dialog-backdrop hidden">
+  <div class="dialog wb-dialog" role="dialog" aria-labelledby="wb-title">
+    <h3 id="wb-title">Guided white balance</h3>
+    <ol class="wb-steps">
+      <li id="wb-step-tab-1">1 · Box &amp; exposure</li>
+      <li id="wb-step-tab-2">2 · White balance</li>
+      <li id="wb-step-tab-3">3 · Saturation</li>
+    </ol>
+
+    <div class="wb-body">
+      <div id="wb-view" class="wb-view">
+        <img id="wb-img" alt="Camera view" draggable="false">
+        <div id="wb-box" class="wb-box"><span id="wb-handle" class="wb-handle"></span></div>
+      </div>
+
+      <div class="wb-side">
+        <section id="wb-panel-1">
+          <p>Drag on the image to draw a box inside the <strong>white patch</strong> (white paper, or the white
+             square of the colour chart). Then set the exposure so the patch's <strong>G</strong> is about 200.</p>
+          <div class="wb-g">
+            <span id="wb-g-value" class="wb-g-value">–</span><span class="wb-g-target">/ 200</span>
+          </div>
+          <div class="wb-rgb" id="wb-rgb">R – · G – · B –</div>
+          <div id="wb-hint" class="wb-status">Waiting for the camera…</div>
+          <div class="setting-row">
+            <label class="setting-label">
+              Exposure Time
+              <input type="number" class="setting-value" id="wb-exposure-value" step="any"><span class="setting-unit">ms</span>
+            </label>
+            <input type="range" class="slider" id="wb-exposure" min="0" max="1000" step="1" value="0">
+          </div>
+          <button id="wb-auto-exposure" class="btn btn-secondary btn-sm" type="button">Auto-set to G ≈ 200</button>
+        </section>
+
+        <section id="wb-panel-2" class="hidden">
+          <p>Runs one-push white balance on the box at colour temperature <strong>D65</strong>. Keep the box on the
+             white patch and the exposure as it is.</p>
+          <button id="wb-run" class="btn btn-primary" type="button">Run white balance</button>
+          <div id="wb-result" class="wb-result hidden"></div>
+        </section>
+
+        <section id="wb-panel-3" class="hidden">
+          <p>If the colours still look off after white balance, adjust the saturation (default 100).</p>
+          <div class="setting-row">
+            <label class="setting-label">
+              Saturation
+              <input type="number" class="setting-value" id="wb-saturation-value" step="1">
+            </label>
+            <input type="range" class="slider" id="wb-saturation" min="0" max="200" step="1" value="100">
+          </div>
+          <p class="section-note">Finishing leaves everything as a draft. Check it, then use <strong>Save to production</strong>.</p>
+        </section>
+
+        <div id="wb-error" class="wb-status wb-status-bad hidden"></div>
+      </div>
+    </div>
+
+    <div class="dialog-actions">
+      <button id="wb-cancel" class="btn btn-secondary" type="button">Cancel</button>
+      <button id="wb-back" class="btn btn-secondary" type="button">Back</button>
+      <button id="wb-next" class="btn btn-primary" type="button">Next</button>
+      <button id="wb-finish" class="btn btn-primary hidden" type="button">Finish</button>
+    </div>
+  </div>
+</div>
+
 <script>
   const CAMERA_ID = {{ camera_id }};
 </script>
 <script src="/static/mindvision_settings/settings.js"></script>
+<script src="/static/mindvision_settings/wb_wizard.js"></script>
 </body>
 </html>

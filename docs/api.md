@@ -272,6 +272,17 @@ Run one-shot white balance calibration against the current scene. Point the came
 | ----------- | ---- | ------- | ----------- |
 | `camera_id` | int | `0` | Target camera |
 
+### Guided white balance (settings-page wizard)
+
+Used by the settings page's *Guided White Balance* wizard (see [calibration.md](calibration.md#white-balance)). `box` is `{x, y, w, h}` as fractions (0..1) of the displayed image. All take `camera_id` (default `0`) and work at the capture profile's exposure. Errors: `400` bad box, `404` camera not open, `409` monochrome camera, hardware-trigger mode or no D65 preset.
+
+| Route | Description |
+| ----- | ----------- |
+| `GET /api/cameras/white-balance/guide` | The camera's colour-temperature presets (`d65_index` is the one the wizard uses), the current choice, and the G target (`g_target`, `g_ok`). |
+| `POST /api/cameras/white-balance/measure` `{box}` | Mean `r`/`g`/`b` inside the box on a fresh frame, an exposure verdict (`dark`/`low`/`ok`/`high`/`clipped`) and the frame as a base64 JPEG (`image`). |
+| `POST /api/cameras/white-balance/tune` `{box}` | Sets the SDK white-balance window to the box, selects D65, starts from neutral gains and runs one-push white balance. Applied as a **draft** (not saved); returns `gains`, `before`, `window` (pixels), the patch `stats`, its `spread` and `neutral`. |
+| `POST /api/cameras/white-balance/color-temp` `{mode, index}` | Puts back a colour-temperature choice (mode `0` auto, `1` preset with `index`). Used by the wizard's Cancel. |
+
 ---
 
 ## MindVision — orientation

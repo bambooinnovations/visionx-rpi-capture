@@ -8,6 +8,22 @@ This page covers calibration procedures for MindVision cameras: white balance, f
 
 ## White balance
 
+### Guided (settings page)
+
+Operator step-by-step: [guided-white-balance.md](guided-white-balance.md).
+
+Open the camera's settings page and press **Guided White Balance…** in the *Gain & White Balance* section. It follows the camera vendor's procedure:
+
+1. **Box & exposure.** Drag on the image to draw a box inside a white patch (white paper, or the white square of a colour chart). Set the exposure so the patch's **G** reads about 200: use the slider, or **Auto-set to G ≈ 200**. The wizard blocks *Next* while the patch is clipping or too dark.
+2. **White balance.** Runs the camera's one-push white balance on the box at colour temperature **D65**. The result shows the gains before and after and whether the patch came out neutral.
+3. **Saturation.** Optional; default 100.
+
+Everything is applied as a **draft**: check the result, then use **Save to production** (or **Discard draft**). *Cancel* in the wizard puts back the exposure, gains, saturation and colour temperature it changed. The wizard switches the capture profile to manual exposure; white balance is only valid for the light and exposure it was run at, so re-run it if either changes.
+
+The camera must offer a D65 colour-temperature preset (the wizard says so if it doesn't), and the wizard does not work in hardware-trigger mode or on monochrome cameras.
+
+### One-shot (API)
+
 Point the camera at a neutral grey or white surface under your working lights, then run one-shot calibration:
 
 ```bash

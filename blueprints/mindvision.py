@@ -982,6 +982,82 @@ def create_blueprint(
             logger.exception("calibrate_wb_failed", camera_id=cam_id)
             return jsonify({"error": "Calibration failed"}), 500
 
+    # ── Guided white balance (settings-page wizard) ───────────────────────────
+    # `box` is {x, y, w, h} as fractions (0..1) of the displayed image. Gains are applied as a draft;
+    # "Save to production" persists them.
+
+    def _wb_camera():
+        """(cam, error_response) for the guided-WB routes."""
+        cam, cam_id = _resolve_camera()
+        if cam is None or cam._h_camera is None:
+            return None, (jsonify({"error": f"Camera {cam_id} not found or not open"}), 404)
+        return cam, None
+
+    def _wb_run(fn):
+        try:
+            return fn()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except Exception:
+            logger.exception("guided_wb_failed")
+            return jsonify({"error": "White balance failed"}), 500
+
+    @bp.route("/white-balance/guide", methods=["GET"])
+    def wb_guide():
+        """What the wizard needs up front: the D65 preset, the current colour temperature and the exposure target."""
+        from camera import wbtune
+        cam, err = _wb_camera()
+        if err:
+            return err
+        def run():
+            return jsonify({
+                "color_temps": cam.wb_color_temps(),
+                "g_target": wbtune.G_TARGET, "g_ok": [wbtune.G_OK_LOW, wbtune.G_OK_HIGH],
+                "monochrome": bool(cam._mono),
+            })
+        return _wb_run(run)
+
+    @bp.route("/white-balance/measure", methods=["POST"])
+    def wb_measure():
+        """Mean R/G/B inside the box on a fresh frame, plus that frame as a base64 JPEG for the wizard's view."""
+        import base64
+        cam, err = _wb_camera()
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        def run():
+            max_width = max(320, min(int(body.get("max_width") or 960), 1600))
+            stats, frame = cam.wb_measure(body.get("box"))
+            jpeg = _encode_raw_frame(frame, max_width, quality=80)
+            return jsonify({"stats": stats, "image": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()})
+        return _wb_run(run)
+
+    @bp.route("/white-balance/tune", methods=["POST"])
+    def wb_tune():
+        """One-push white balance against the box at D65, applied as a draft."""
+        cam, err = _wb_camera()
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        return _wb_run(lambda: jsonify(cam.wb_tune(body.get("box"))))
+
+    @bp.route("/white-balance/color-temp", methods=["POST"])
+    def wb_set_color_temp():
+        """Put back a colour-temperature choice (the wizard's Cancel). Body: {mode, index}."""
+        cam, err = _wb_camera()
+        if err:
+            return err
+        body = request.get_json(silent=True) or {}
+        def run():
+            mode = body.get("mode")
+            if not isinstance(mode, int) or isinstance(mode, bool):
+                raise ValueError("mode must be an integer")
+            cam.set_wb_color_temp(mode, body.get("index"))
+            return jsonify({"color_temps": cam.wb_color_temps()})
+        return _wb_run(run)
+
     # ── Rotation / mirror ─────────────────────────────────────────────────────
 
     @bp.route("/orientation", methods=["GET"])

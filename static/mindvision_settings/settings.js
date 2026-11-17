@@ -694,34 +694,6 @@ function wireProfileControls() {
   });
 }
 
-// ── Auto white balance ────────────────────────────────────────────────
-
-async function autoTuneWB() {
-  const btn = document.getElementById('btn-wb');
-  btn.disabled = true;
-  btn.textContent = 'Calibrating…';
-  clearError();
-  try {
-    const res = await apiFetch(`${API}/calibrate-wb?camera_id=${CAMERA_ID}`, {method: 'POST'});
-    // calibrate-wb runs at the capture exposure and saves it internally — update sliders + baseline
-    const gains = {r_gain: res.r_gain, g_gain: res.g_gain, b_gain: res.b_gain};
-    document.getElementById('r-gain').value = gains.r_gain;
-    document.getElementById('g-gain').value = gains.g_gain;
-    document.getElementById('b-gain').value = gains.b_gain;
-    document.getElementById('r-gain-value').value = gains.r_gain;
-    document.getElementById('g-gain-value').value = gains.g_gain;
-    document.getElementById('b-gain-value').value = gains.b_gain;
-    // The new gains are saved straight to production; refresh the draft list.
-    const s = await apiFetch(`${API}/settings?camera_id=${CAMERA_ID}`);
-    renderDraft(s.draft_changes);
-  } catch (e) {
-    showError('WB calibration failed: ' + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Auto Tune WB';
-  }
-}
-
 // ── Factory reset ─────────────────────────────────────────────────────
 
 function confirmFactoryReset() {

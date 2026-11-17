@@ -1423,6 +1423,153 @@ class MindVisionCamera(BaseCamera):
 
         return {"r_gain": r, "g_gain": g, "b_gain": b}
 
+    # ── Guided white balance (settings-page wizard) ──────────────────────────────────────────────────────────
+    # Follows the vendor's procedure: the operator draws a box on a white patch, brings its G level to ~200, then
+    # one-push white balance runs against that box at colour temperature D65. Runs at the capture profile's
+    # exposure, and the result is a *draft* like any settings-page edit: it only reaches production through
+    # "Save to production". See camera/wbtune.py for the box convention.
+
+    _WB_PRESET_NAME = "D65"
+
+    def _wb_require_colour(self) -> None:
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        if self._mono or bool(mvsdk.CameraGetMonochrome(self._h_camera)):
+            raise RuntimeError("White balance not applicable to monochrome cameras")
+
+    @contextmanager
+    def _wb_session(self):
+        """Hold the camera at the capture exposure for a run of grabs."""
+        with self._lock, self.capture_exposure_applied() as swapped:
+            if swapped:
+                self._discard_until_exposure_settled()
+            yield
+
+    def _wb_grab_locked(self, drop: int = 0) -> "np.ndarray":
+        """One colour frame after dropping `drop` frames. Caller is inside _wb_session()."""
+        timeout = self.exposure_grab_timeout_ms()
+        for _ in range(drop):
+            self._trigger_if_needed()
+            self._grab_frame(timeout_ms=timeout)
+        self._trigger_if_needed()
+        frame, _head = self._grab_frame(timeout_ms=timeout)
+        if frame is None:
+            raise RuntimeError("No frame available — camera may still be exposing")
+        return frame
+
+    def wb_color_temps(self) -> dict:
+        """The colour-temperature presets the camera offers, the D65 one the wizard uses, and the current choice.
+
+        {"presets": [{"index", "name"}], "d65_index": int | None, "current": {"mode", "index"}}. Mode 0 is the
+        SDK's automatic colour-temperature recognition, 1 a preset, 2 user-defined.
+        """
+        cap = self._cap
+        presets = []
+        for i in range(int(cap.iClrTempDesc) if cap is not None else 0):
+            desc = cap.pClrTempDesc[i]
+            presets.append({"index": int(desc.iIndex), "name": desc.GetDescription()})
+        d65 = next((p["index"] for p in presets if self._WB_PRESET_NAME in p["name"].upper()), None)
+        mode, index = 0, None
+        try:
+            mode = int(mvsdk.CameraGetClrTempMode(self._h_camera))
+            if mode == 1:
+                index = int(mvsdk.CameraGetPresetClrTemp(self._h_camera))
+        except Exception:
+            pass
+        return {"presets": presets, "d65_index": d65, "current": {"mode": mode, "index": index}}
+
+    def set_wb_color_temp(self, mode: int, index: int | None = None) -> None:
+        """Put back a colour-temperature choice read from wb_color_temps()['current']."""
+        if self._h_camera is None:
+            raise RuntimeError("Camera not open")
+        if mode not in (0, 1, 2):
+            raise ValueError("mode must be 0 (auto), 1 (preset) or 2 (user)")
+        if mode == 1 and index not in {p["index"] for p in self.wb_color_temps()["presets"]}:
+            raise ValueError(f"unknown colour-temperature preset {index!r}")
+        with self._lock, self._exposure_lock:
+            if mode == 1:
+                mvsdk.CameraSetPresetClrTemp(self._h_camera, index)
+            mvsdk.CameraSetClrTempMode(self._h_camera, mode)
+
+    def wb_measure(self, box: dict) -> tuple[dict, "np.ndarray"]:
+        """Mean R/G/B of `box` in a fresh frame at the capture exposure, with the exposure verdict.
+
+        Returns (stats, the frame as BGR) so the caller can also show the frame.
+        """
+        from camera import wbtune
+        self._wb_require_colour()
+        with self._wb_session():
+            frame = self._wb_grab_locked()
+        stats = wbtune.box_stats(frame, box)
+        stats["exposure"] = wbtune.classify(stats)
+        return stats, frame
+
+    def wb_tune(self, box: dict) -> dict:
+        """One-push white balance against `box`, at colour temperature D65, applied as a draft.
+
+        Sets the SDK's WB window to the box, selects D65, starts from neutral gains (an old correction would make the
+        patch look already white), runs CameraSetOnceWB and reads the gains back. Nothing is saved. Raises
+        RuntimeError if the camera has no D65 preset. On any failure the gains and colour temperature are put back.
+        """
+        from camera import wbtune
+        self._wb_require_colour()
+        if self._mode == CameraMode.HARDWARE_TRIGGER:
+            raise RuntimeError("Settings can't be tested while in hardware-trigger mode")
+        wbtune.parse_box(box)  # reject a bad box before touching the camera
+        h = self._h_camera
+        temps = self.wb_color_temps()
+        if temps["d65_index"] is None:
+            names = ", ".join(p["name"] for p in temps["presets"]) or "none"
+            raise RuntimeError(f"This camera has no {self._WB_PRESET_NAME} colour-temperature preset (it offers: {names})")
+        res = mvsdk.CameraGetImageResolution(h)
+        window = wbtune.box_to_pixels(box, int(res.iWidth), int(res.iHeight))
+        before_gains = mvsdk.CameraGetGain(h)
+        before_temp = temps["current"]
+        before_window = mvsdk.CameraGetWbWindow(h)
+        before_mode = mvsdk.CameraGetWbMode(h)
+        try:
+            with self._wb_session():
+                mvsdk.CameraSetWbMode(h, False)   # manual: white balance only when we ask
+                mvsdk.CameraSetPresetClrTemp(h, temps["d65_index"])
+                mvsdk.CameraSetClrTempMode(h, 1)
+                mvsdk.CameraSetWbWindow(h, *window)
+                mvsdk.CameraSetGain(h, 100, 100, 100)
+                self._wb_grab_locked(drop=2)       # neutral gains take effect on the next frames
+                mvsdk.CameraSetOnceWB(h)
+                frame = self._wb_grab_locked(drop=2)  # OnceWB takes effect on the next frame received
+                gains = mvsdk.CameraGetGain(h)
+        except Exception:
+            self._wb_restore(before_gains, before_temp, before_window, before_mode)
+            raise
+        stats = wbtune.box_stats(frame, box)
+        stats["exposure"] = wbtune.classify(stats)
+        spread = wbtune.spread(stats)
+        with self._exposure_lock:
+            self._draft_dirty = True
+        result = {
+            "gains": {"r_gain": gains[0], "g_gain": gains[1], "b_gain": gains[2]},
+            "before": {"r_gain": before_gains[0], "g_gain": before_gains[1], "b_gain": before_gains[2],
+                       "color_temp": before_temp},
+            "window": {"x": window[0], "y": window[1], "w": window[2], "h": window[3]},
+            "stats": stats, "spread": round(spread, 2),
+            "neutral": spread <= wbtune.NEUTRAL_SPREAD_WARN,
+        }
+        logger.info("white_balance_guided", window=result["window"], gains=result["gains"], spread=result["spread"])
+        return result
+
+    def _wb_restore(self, gains, color_temp: dict, window, wb_mode) -> None:
+        h = self._h_camera
+        try:
+            mvsdk.CameraSetGain(h, *gains)
+            if color_temp["mode"] == 1 and color_temp["index"] is not None:
+                mvsdk.CameraSetPresetClrTemp(h, color_temp["index"])
+            mvsdk.CameraSetClrTempMode(h, color_temp["mode"])
+            if all(v is not None for v in window):
+                mvsdk.CameraSetWbWindow(h, *window)
+            mvsdk.CameraSetWbMode(h, bool(wb_mode))
+        except Exception:
+            logger.exception("white_balance_restore_failed")
+
     def close(self) -> None:
         if self._h_camera is not None:
             try:
