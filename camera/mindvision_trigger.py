@@ -30,6 +30,7 @@ import concurrent.futures
 import io
 import json
 import queue
+import re
 import tempfile
 import threading
 import time
@@ -168,6 +169,9 @@ def seed_default_speed_presets() -> None:
     logger.info("speed_presets_seeded", styles=list(DEFAULT_SPEED_PRESETS.keys()))
 
 
+_CAM_FILE_RE = re.compile(r"_cam(\d+)\.jpg$")  # a per-camera upload that failed and was saved for retry
+
+
 def _get_destination_url() -> str:
     return runtime_config.get("hw_trigger.destination_url", config.HW_TRIGGER_DESTINATION_URL)
 
@@ -228,8 +232,11 @@ def _iso_from_ts_ms(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
 
 
-def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg", is_raw: bool = False, camera_id: int | None = None, ts_ms: int | None = None, timing: dict | None = None) -> bool:
+def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None, filename: str = "capture.jpg", is_raw: bool = False, camera_id: int | None = None, ts_ms: int | None = None, timing: dict | None = None, abort=None) -> bool:
     """POST jpeg_bytes to url (defaults to destination_url). Returns True on success.
+
+    `abort`, if given, is polled before every attempt; when it returns True the upload is given up (returns False)
+    — how a force-stopped task stops retrying. A request already on the wire is not interrupted.
 
     `timing` (queue/capture/decode/stitch/encode durations gathered upstream) is sent
     as a JSON form field so the server can persist it for pipeline-performance analysis.
@@ -257,6 +264,8 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
         "trigger_number": str(trigger_event.get("trigger", "")),
         "trigger_source": "manual" if trigger_event.get("source") == "serial" else trigger_event.get("source", ""),
     }
+    if trigger_event.get("task_id"):
+        data["task_id"] = str(trigger_event["task_id"])
     if camera_id is not None:
         data["camera_id"] = str(camera_id)
     if ts_ms is not None:
@@ -265,6 +274,8 @@ def _upload_image(jpeg_bytes: bytes, trigger_event: dict, url: str | None = None
         data["timing"] = json.dumps(timing)
 
     for attempt in range(1, attempts + 1):
+        if abort is not None and abort():
+            return False
         try:
             _t0 = time.perf_counter()
             resp = requests.post(
@@ -324,7 +335,7 @@ def _save_image_locally(jpeg_bytes: bytes, trigger_event: dict, filename: str | 
         # Sidecar holds all trigger metadata needed for a successful retry upload.
         sidecar = path.with_suffix(".jpg.json")
         try:
-            sidecar_data = {k: v for k, v in trigger_event.items() if k != "_received_at"}
+            sidecar_data = {k: v for k, v in trigger_event.items() if k not in ("_received_at", "_gen")}
             if ts_ms is not None:
                 sidecar_data["ts_ms"] = ts_ms
             if timing is not None:
@@ -460,8 +471,27 @@ class SerialTriggerListener:
         self._raw_pending = 0
         self._stitch_pending_bytes = 0
         self._raw_pending_bytes = 0
+        # Queued upload jobs by future → (args, kind). Lets discard_task() cancel them and clean their spill files.
+        self._jobs: dict = {}
+        # Triggers handed to a camera thread and not yet reported back to the collector (queued + in capture).
+        self._capture_inflight = 0
+
+        # Backend-driven task (see capture_task.py). Every trigger is stamped with the active task id and a
+        # generation at receipt, so frames still in flight keep the right id however long they take to upload.
+        self._task_lock = threading.Lock()
+        self._task_id: str | None = None
+        self._gen = 0            # generation of the active (or last) task; bumps on every begin_task
+        self._discard_gen = 0    # events of generation <= this (and > 0) are dropped instead of uploaded
+        self._task_counters: dict[str, int] = self._zero_task_counters()
+        self._event_callbacks: list = []
+        self._ack_waiters: dict[str, threading.Event] = {}
+        self._retry_wake = threading.Event()
+        self._disk_cache: dict = {}
+
+        self._trigger_gate_open = True  # closed by the task manager: triggers are then ignored, not captured
 
         self._stats = {
+            "triggers_gated": 0,
             "triggers_received": 0,
             "captures_ok": 0,
             "captures_failed": 0,
@@ -478,6 +508,7 @@ class SerialTriggerListener:
             "trigger_enabled": True,
             "encoder_count": 0,
             "arduino_config": {},
+            "connect_count": 0,
         }
 
         # Simulator state (independent of the serial listener).
@@ -503,6 +534,9 @@ class SerialTriggerListener:
             if self.running:
                 raise RuntimeError("Serial trigger listener is already running")
             self._stop_event.clear()
+            self._retry_wake.clear()
+            with self._pool_counter_lock:
+                self._capture_inflight = sum(q.qsize() for q in self._camera_queues.values())
             self._stats["started_at"] = time.time()
 
             # Stitch pool: compute stitch + upload stitch. Dedicated workers so this
@@ -550,6 +584,7 @@ class SerialTriggerListener:
             if not self.running:
                 return
             self._stop_event.set()
+            self._retry_wake.set()
 
         if self._thread is not None:
             self._thread.join(timeout=5)
@@ -645,6 +680,181 @@ class SerialTriggerListener:
             self._arduino_state["encoder_count"] = 0
             self._arduino_state["speed_cms"] = 0.0
 
+    # ── Backend-driven task support (driven by capture_task.TaskManager) ───────
+
+    @staticmethod
+    def _zero_task_counters() -> dict[str, int]:
+        return {"triggers": 0, "captured": 0, "capture_failed": 0, "uploaded": 0, "upload_failed": 0, "discarded": 0}
+
+    def add_event_listener(self, callback) -> None:
+        """Register callback({"type", "data"}) for pipeline events (capture/upload failures, Arduino link).
+
+        Called from capture/upload/serial threads, so it must return quickly and never raise.
+        """
+        self._event_callbacks.append(callback)
+
+    def _emit(self, event_type: str, **data) -> None:
+        for cb in list(self._event_callbacks):
+            try:
+                cb({"type": event_type, "data": data})
+            except Exception:
+                logger.exception("trigger_event_callback_failed", event_type=event_type)
+
+    def set_trigger_gate(self, open_: bool) -> None:
+        """Close the gate to make the listener ignore Arduino triggers (software backstop for set_trigger_enabled).
+
+        An Arduino that resets (serial reconnect) comes back with triggers on and a zeroed encoder; until the disable
+        command lands it can fire frames with a wrong distance. With the gate closed those are dropped on receipt.
+        """
+        self._trigger_gate_open = bool(open_)
+
+    def begin_task(self, task_id: str) -> None:
+        """Stamp every trigger from now on with task_id and zero the per-task counters."""
+        with self._task_lock:
+            self._gen += 1
+            self._task_id = task_id
+            self._task_counters = self._zero_task_counters()
+
+    def end_task(self) -> None:
+        """Stop stamping new triggers (frames already stamped keep their id)."""
+        with self._task_lock:
+            self._task_id = None
+
+    def restore_task_counters(self, counters: dict) -> None:
+        with self._task_lock:
+            self._task_counters = {**self._zero_task_counters(), **{k: int(v) for k, v in counters.items() if k in self._task_counters}}
+
+    def task_counters(self) -> dict[str, int]:
+        with self._task_lock:
+            return dict(self._task_counters)
+
+    def _task_bump(self, event: dict, key: str, n: int = 1) -> None:
+        """Count against the active task, only when the event belongs to it."""
+        tid = event.get("task_id")
+        if not tid:
+            return
+        with self._task_lock:
+            if tid == self._task_id:
+                self._task_counters[key] += n
+
+    def _discarded(self, event: dict) -> bool:
+        gen = event.get("_gen", 0)
+        return gen > 0 and gen <= self._discard_gen
+
+    def send_command_wait_ack(self, cmd: dict, timeout: float = 3.0) -> bool:
+        """send_command() and block until the Arduino acks it. False on timeout."""
+        name = cmd["cmd"]
+        waiter = threading.Event()
+        self._ack_waiters[name] = waiter
+        try:
+            self.send_command(cmd)
+            return waiter.wait(timeout)
+        finally:
+            self._ack_waiters.pop(name, None)
+
+    def kick_disk_retry(self) -> None:
+        """Retry disk-backed uploads now instead of at the next 60 s tick."""
+        self._retry_wake.set()
+
+    def _task_disk_files(self, task_id: str | None, max_age_s: float = 0.75) -> list[Path]:
+        """Disk-backed (failed, awaiting retry) images that belong to task_id, found via their sidecars."""
+        if not task_id:
+            return []
+        now = time.monotonic()
+        cached = self._disk_cache.get(task_id)
+        if cached is not None and now - cached[0] < max_age_s:
+            return cached[1]
+        save_dir = config.HW_TRIGGER_LOCAL_SAVE_DIR
+        found: list[Path] = []
+        if save_dir.exists():
+            for sidecar in save_dir.glob("*.jpg.json"):
+                try:
+                    if json.loads(sidecar.read_text()).get("task_id") != task_id:
+                        continue
+                except Exception:
+                    continue
+                image = sidecar.with_suffix("")
+                if image.exists():
+                    found.append(image)
+        self._disk_cache[task_id] = (now, found)
+        return found
+
+    def task_pending(self, task_id: str | None) -> dict:
+        """Work still outstanding for the task: what a graceful stop has to wait for."""
+        with self._pool_counter_lock:
+            capture, stitch, raw = self._capture_inflight, self._stitch_pending, self._raw_pending
+        disk = len(self._task_disk_files(task_id))
+        return {"capture": capture, "stitch": stitch, "raw": raw, "disk_retry": disk,
+                "total": capture + stitch + raw + disk}
+
+    def memory_pending(self) -> int:
+        """Capture + upload work held in memory (excludes disk-backed retries)."""
+        with self._pool_counter_lock:
+            return self._capture_inflight + self._stitch_pending + self._raw_pending
+
+    def discard_task(self, task_id: str | None) -> dict:
+        """Drop everything not yet uploaded for the active task. Returns what was dropped.
+
+        Queued triggers and not-yet-started upload jobs are removed; a job already running finishes its HTTP
+        request but skips every further upload and its local-save fallback (see _discarded()). Disk-backed
+        files that belong to the task are deleted.
+        """
+        with self._task_lock:
+            self._discard_gen = self._gen
+        dropped = {"queued_captures": 0, "upload_jobs": 0, "aborted_jobs": 0, "disk_files": 0, "files": []}
+
+        for q in self._camera_queues.values():
+            while True:
+                try:
+                    item = q.get_nowait()
+                except queue.Empty:
+                    break
+                if item is not None:
+                    dropped["queued_captures"] += 1
+                    with self._pool_counter_lock:
+                        self._capture_inflight = max(0, self._capture_inflight - 1)
+
+        with self._pool_counter_lock:
+            jobs = list(self._jobs.items())
+        for fut, (args, _kind) in jobs:
+            if fut.cancel():  # runs the done-callback, which fixes the counters
+                dropped["upload_jobs"] += 1
+                self._unlink_spilled(args)
+            elif not fut.done():
+                # Already running: it cannot be recalled, but it stops before its next attempt (see _discarded()).
+                dropped["aborted_jobs"] += 1
+
+        for image in self._task_disk_files(task_id, max_age_s=0):
+            try:
+                image.unlink(missing_ok=True)
+                image.with_suffix(".jpg.json").unlink(missing_ok=True)
+                dropped["disk_files"] += 1
+                if len(dropped["files"]) < 100:
+                    dropped["files"].append(image.name)
+            except Exception as exc:
+                logger.warning("task_discard_file_failed", filename=image.name, error=str(exc))
+        self._disk_cache.clear()
+
+        total = dropped["queued_captures"] + dropped["upload_jobs"] + dropped["aborted_jobs"] + dropped["disk_files"]
+        if task_id:
+            with self._task_lock:
+                if task_id == self._task_id:
+                    self._task_counters["discarded"] += total
+        logger.info("task_discarded", task_id=task_id, **{k: v for k, v in dropped.items() if k != "files"})
+        return dropped
+
+    @staticmethod
+    def _unlink_spilled(args: tuple) -> None:
+        """Delete spill files referenced by a job's {cam_id: (bytes | Path, serial, timing)} argument."""
+        for arg in args:
+            if isinstance(arg, dict):
+                for value in arg.values():
+                    if isinstance(value, tuple) and value and isinstance(value[0], Path):
+                        try:
+                            value[0].unlink(missing_ok=True)
+                        except Exception:
+                            pass
+
     def file_config(self) -> dict:
         """Return the full saved config (physical + raw params) from disk."""
         return self._load_file_config()
@@ -677,15 +887,14 @@ class SerialTriggerListener:
             raw_pending = self._raw_pending
             stitch_pending_mb = round(self._stitch_pending_bytes / 1024 / 1024, 1)
             raw_pending_mb = round(self._raw_pending_bytes / 1024 / 1024, 1)
+            capture_inflight = self._capture_inflight
         with self._collector._lock:
             collector_pending = len(self._collector._pending)
-        save_dir = config.HW_TRIGGER_LOCAL_SAVE_DIR
-        disk_retry = sum(1 for _ in save_dir.glob("*.jpg")) if save_dir.exists() else 0
-        spill_dir = config.CAPTURE_TMP_DIR / "hw_trigger" / "spill"
-        disk_spill = sum(1 for _ in spill_dir.glob("*.jpg")) if spill_dir.exists() else 0
+        disk_retry, disk_spill = self._disk_file_counts()
         return {
             "camera_queues": camera_queues,
             "camera_queue_maxsize": camera_queue_maxsize,
+            "capture_inflight": capture_inflight,
             "collector_pending": collector_pending,
             "stitch_pending": stitch_pending,
             "stitch_pending_mb": stitch_pending_mb,
@@ -693,7 +902,22 @@ class SerialTriggerListener:
             "raw_pending_mb": raw_pending_mb,
             "disk_retry": disk_retry,
             "disk_spill": disk_spill,
+            # Everything still to be uploaded. Spill files are excluded: each belongs to a queued job already counted.
+            "pending_total": capture_inflight + stitch_pending + raw_pending + disk_retry,
         }
+
+    def _disk_file_counts(self, max_age_s: float = 1.0) -> tuple[int, int]:
+        """(disk_retry, disk_spill) file counts, cached briefly: this is polled by every stream client."""
+        now = time.monotonic()
+        cached = getattr(self, "_disk_counts_cache", None)
+        if cached is not None and now - cached[0] < max_age_s:
+            return cached[1]
+        save_dir = config.HW_TRIGGER_LOCAL_SAVE_DIR
+        disk_retry = sum(1 for _ in save_dir.glob("*.jpg")) if save_dir.exists() else 0
+        spill_dir = config.CAPTURE_TMP_DIR / "hw_trigger" / "spill"
+        disk_spill = sum(1 for _ in spill_dir.glob("*.jpg")) if spill_dir.exists() else 0
+        self._disk_counts_cache = (now, (disk_retry, disk_spill))
+        return disk_retry, disk_spill
 
     # ── Private ───────────────────────────────────────────────────────────────
 
@@ -718,36 +942,53 @@ class SerialTriggerListener:
         return spilled
 
     def _stitch_submit(self, fn, *args, byte_count: int = 0) -> None:
-        with self._pool_counter_lock:
-            pool = self._stitch_pool
-            if pool is None:
-                return
-            self._stitch_pending += 1
-            self._stitch_pending_bytes += byte_count
-        def _run():
-            try:
-                fn(*args)
-            finally:
-                with self._pool_counter_lock:
-                    self._stitch_pending = max(0, self._stitch_pending - 1)
-                    self._stitch_pending_bytes = max(0, self._stitch_pending_bytes - byte_count)
-        pool.submit(_run)
+        self._pool_submit("stitch", fn, args, byte_count)
 
     def _raw_submit(self, fn, *args, byte_count: int = 0) -> None:
+        self._pool_submit("raw", fn, args, byte_count)
+
+    def _pool_submit(self, kind: str, fn, args: tuple, byte_count: int) -> None:
+        """Submit a job and keep the pending counters exact.
+
+        The counters are released by a done-callback rather than inside the job, because a job cancelled
+        before it starts (pool shutdown, discard_task) never runs and would otherwise leave them stuck high.
+        """
         with self._pool_counter_lock:
-            pool = self._raw_pool
+            pool = self._stitch_pool if kind == "stitch" else self._raw_pool
             if pool is None:
                 return
-            self._raw_pending += 1
-            self._raw_pending_bytes += byte_count
-        def _run():
-            try:
-                fn(*args)
-            finally:
-                with self._pool_counter_lock:
+            if kind == "stitch":
+                self._stitch_pending += 1
+                self._stitch_pending_bytes += byte_count
+            else:
+                self._raw_pending += 1
+                self._raw_pending_bytes += byte_count
+
+        def _release(fut) -> None:
+            with self._pool_counter_lock:
+                self._jobs.pop(fut, None)
+                if kind == "stitch":
+                    self._stitch_pending = max(0, self._stitch_pending - 1)
+                    self._stitch_pending_bytes = max(0, self._stitch_pending_bytes - byte_count)
+                else:
                     self._raw_pending = max(0, self._raw_pending - 1)
                     self._raw_pending_bytes = max(0, self._raw_pending_bytes - byte_count)
-        pool.submit(_run)
+
+        try:
+            fut = pool.submit(fn, *args)
+        except RuntimeError:  # pool was shut down between the check above and now
+            with self._pool_counter_lock:
+                if kind == "stitch":
+                    self._stitch_pending = max(0, self._stitch_pending - 1)
+                    self._stitch_pending_bytes = max(0, self._stitch_pending_bytes - byte_count)
+                else:
+                    self._raw_pending = max(0, self._raw_pending - 1)
+                    self._raw_pending_bytes = max(0, self._raw_pending_bytes - byte_count)
+            return
+        with self._pool_counter_lock:
+            if not fut.done():  # a job that already finished has released itself; don't leave an entry behind
+                self._jobs[fut] = (args, kind)
+        fut.add_done_callback(_release)
 
     def _load_file_config(self) -> dict:
         try:
@@ -819,7 +1060,9 @@ class SerialTriggerListener:
                         ser = serial.Serial(port, baud, timeout=0.1)
                     with self._state_lock:
                         self._arduino_state["serial_connected"] = True
+                        self._arduino_state["connect_count"] = self._arduino_state.get("connect_count", 0) + 1
                     logger.info("serial_port_opened", port=port, baud=baud)
+                    self._emit("arduino.connected")
                     # Arduino resets when DTR is asserted on open; wait for boot.
                     time.sleep(2.0)
                     self._push_startup_config(ser)
@@ -851,8 +1094,11 @@ class SerialTriggerListener:
                     ser = None
                 with self._state_lock:
                     # Don't leave the last belt speed on screen as if it were still live.
+                    was_connected = self._arduino_state["serial_connected"]
                     self._arduino_state["serial_connected"] = False
                     self._arduino_state["speed_cms"] = 0.0
+                if was_connected:
+                    self._emit("arduino.disconnected", error=str(exc))
                 if not self._stop_event.is_set():
                     time.sleep(2.0)
 
@@ -883,6 +1129,12 @@ class SerialTriggerListener:
                 self._arduino_state["speed_cms"] = event.get("speed_cms", 0.0)
                 self._arduino_state["encoder_count"] = event.get("count", 0)
 
+            if not self._trigger_gate_open:
+                with self._stats_lock:
+                    self._stats["triggers_gated"] += 1
+                logger.warning("hw_trigger_ignored_gate_closed", count=event.get("count"), trigger=event.get("trigger"))
+                return
+
             with self._stats_lock:
                 self._stats["triggers_received"] += 1
             logger.debug(
@@ -894,10 +1146,21 @@ class SerialTriggerListener:
             )
 
             event["_received_at"] = time.monotonic()
+            with self._task_lock:
+                if self._task_id:
+                    event["task_id"] = self._task_id
+                    event["_gen"] = self._gen
+                    self._task_counters["triggers"] += 1
+                else:
+                    event["_gen"] = 0
             for cam_id, q in self._camera_queues.items():
                 try:
+                    with self._pool_counter_lock:
+                        self._capture_inflight += 1
                     q.put_nowait(event)
                 except queue.Full:
+                    with self._pool_counter_lock:
+                        self._capture_inflight = max(0, self._capture_inflight - 1)
                     logger.warning(
                         "hw_trigger_queue_full_dropped",
                         camera_id=cam_id,
@@ -920,6 +1183,13 @@ class SerialTriggerListener:
 
         elif msg_type == "ack":
             logger.debug("arduino_ack", cmd=event.get("cmd"), ok=event.get("ok"))
+            cmd = event.get("cmd")
+            if cmd == "reset_count" and event.get("ok"):
+                # Serial is ordered: every message after this ack is post-reset, so this is the real zero.
+                self.note_count_reset()
+            waiter = self._ack_waiters.get(cmd)
+            if waiter is not None and event.get("ok"):
+                waiter.set()
 
         elif msg_type == "startup":
             logger.info("arduino_startup", msg=event.get("msg"))
@@ -942,6 +1212,8 @@ class SerialTriggerListener:
     def _exif_extra(self, event: dict) -> dict:
         """Per-trigger fields written into the image EXIF so reports can tell where along the roll a frame is."""
         extra: dict = {}
+        if event.get("task_id"):
+            extra["task_id"] = event["task_id"]
         if event.get("trigger") is not None:
             extra["trigger_number"] = event["trigger"]
         count = event.get("count")
@@ -969,41 +1241,59 @@ class SerialTriggerListener:
             if event is None:  # sentinel from stop()
                 break
 
-            received_at = event.get("_received_at")
-            queue_ms: float | None = None
-            if received_at is not None:
-                queue_age = time.monotonic() - received_at
-                queue_ms = round(queue_age * 1000, 2)
-                max_age = float(runtime_config.get("hw_trigger.max_queue_age_s", 5.0))
-                if queue_age > max_age:
-                    logger.warning(
-                        "hw_trigger_dropped_stale",
-                        camera_id=cam_id,
-                        queue_age_s=round(queue_age, 2),
-                        trigger=event,
-                    )
-                    self._collector.failure(event, cam_id)
-                    continue
-
             try:
-                tmp_dir.mkdir(parents=True, exist_ok=True)
-                with tempfile.TemporaryDirectory(dir=tmp_dir) as td:
-                    image_path, capture_metrics = cam.capture_image(output_folder=Path(td), extra_exif=self._exif_extra(event))
-                    jpeg_bytes = image_path.read_bytes()
-                serial = cam.serial_number or str(cam_id)
-                with self._stats_lock:
-                    self._stats["captures_ok"] += 1
-                logger.debug("hw_trigger_captured", camera_id=cam_id, trigger=event)
-                timing = {
-                    "queue_ms": queue_ms,
-                    "capture_ms": round(capture_metrics.capture_duration_ms, 2),
-                }
-                self._collector.add_frame(event, cam_id, jpeg_bytes, serial, timing)
-            except Exception as exc:
-                with self._stats_lock:
-                    self._stats["captures_failed"] += 1
-                logger.warning("hw_trigger_capture_failed", camera_id=cam_id, error=str(exc))
+                self._process_trigger(cam_id, cam, event, tmp_dir)
+            finally:
+                # Only now is the trigger handed on (to the collector), so pending never dips to zero mid-flight.
+                with self._pool_counter_lock:
+                    self._capture_inflight = max(0, self._capture_inflight - 1)
+
+    def _process_trigger(self, cam_id: int, cam: "MindVisionCamera", event: dict, tmp_dir: Path) -> None:
+        """Capture one frame for one trigger and report it (or the failure) to the collector."""
+        if self._discarded(event):
+            self._collector.failure(event, cam_id)
+            return
+
+        received_at = event.get("_received_at")
+        queue_ms: float | None = None
+        if received_at is not None:
+            queue_age = time.monotonic() - received_at
+            queue_ms = round(queue_age * 1000, 2)
+            max_age = float(runtime_config.get("hw_trigger.max_queue_age_s", 5.0))
+            if queue_age > max_age:
+                logger.warning(
+                    "hw_trigger_dropped_stale",
+                    camera_id=cam_id,
+                    queue_age_s=round(queue_age, 2),
+                    trigger=event,
+                )
+                self._task_bump(event, "capture_failed")
+                self._emit("capture.failed", camera_id=cam_id, trigger=event.get("trigger"), error="dropped: stale")
                 self._collector.failure(event, cam_id)
+                return
+
+        try:
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=tmp_dir) as td:
+                image_path, capture_metrics = cam.capture_image(output_folder=Path(td), extra_exif=self._exif_extra(event))
+                jpeg_bytes = image_path.read_bytes()
+            serial = cam.serial_number or str(cam_id)
+            with self._stats_lock:
+                self._stats["captures_ok"] += 1
+            self._task_bump(event, "captured")
+            logger.debug("hw_trigger_captured", camera_id=cam_id, trigger=event)
+            timing = {
+                "queue_ms": queue_ms,
+                "capture_ms": round(capture_metrics.capture_duration_ms, 2),
+            }
+            self._collector.add_frame(event, cam_id, jpeg_bytes, serial, timing)
+        except Exception as exc:
+            with self._stats_lock:
+                self._stats["captures_failed"] += 1
+            self._task_bump(event, "capture_failed")
+            self._emit("capture.failed", camera_id=cam_id, trigger=event.get("trigger"), error=str(exc))
+            logger.warning("hw_trigger_capture_failed", camera_id=cam_id, error=str(exc))
+            self._collector.failure(event, cam_id)
 
     def _on_all_captured(
         self,
@@ -1067,6 +1357,9 @@ class SerialTriggerListener:
             else:
                 materialized[cam_id] = (data, serial, timing)
         raw_captures = materialized
+
+        if self._discarded(event):  # the task was force-stopped while this job sat in the queue
+            return
 
         # Timing payload sent to the server with every upload from this trigger.
         # Stage keys are always present so the schema is stable regardless of
@@ -1137,15 +1430,12 @@ class SerialTriggerListener:
             stitch_ok = False
             url = _get_destination_url()
             if url:
-                stitch_ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename, ts_ms=ts_ms, timing=timings)
-                with self._stats_lock:
-                    if stitch_ok:
-                        self._stats["uploads_ok"] += 1
-                    else:
-                        self._stats["uploads_failed"] += 1
+                stitch_ok = _upload_image(stitch_bytes, event, url=url, filename=stitch_filename, ts_ms=ts_ms, timing=timings,
+                                          abort=lambda: self._discarded(event))
+                self._record_upload(event, stitch_ok, stitch_filename)
 
             # Save locally if explicitly requested OR as fallback when upload failed.
-            if not stitch_ok and _get_save_local():
+            if not stitch_ok and _get_save_local() and not self._discarded(event):
                 _save_image_locally(stitch_bytes, event, filename=stitch_filename, ts_ms=ts_ms, timing=timings)
                 if url:
                     logger.warning(
@@ -1161,14 +1451,13 @@ class SerialTriggerListener:
             url = _get_destination_url()
             if url:
                 for cam_id, (jpeg_bytes, _serial, _t) in raw_captures.items():
+                    if self._discarded(event):
+                        break
                     cam_filename = f"{ts_ms}_cam{cam_id}.jpg"
-                    ok = _upload_image(jpeg_bytes, event, url=url, filename=cam_filename, camera_id=cam_id, ts_ms=ts_ms, timing=timings)
-                    with self._stats_lock:
-                        if ok:
-                            self._stats["uploads_ok"] += 1
-                        else:
-                            self._stats["uploads_failed"] += 1
-                    if not ok and _get_save_local():
+                    ok = _upload_image(jpeg_bytes, event, url=url, filename=cam_filename, camera_id=cam_id, ts_ms=ts_ms, timing=timings,
+                                       abort=lambda: self._discarded(event))
+                    self._record_upload(event, ok, cam_filename)
+                    if not ok and _get_save_local() and not self._discarded(event):
                         _save_image_locally(jpeg_bytes, event, filename=cam_filename, ts_ms=ts_ms, timing=timings)
                         logger.warning(
                             "hw_trigger_camera_fallback_local",
@@ -1198,6 +1487,16 @@ class SerialTriggerListener:
             else:
                 raw_captures_for_pool = raw_captures
             self._raw_submit(self._upload_raw_captures, raw_captures_for_pool, event, ts_ms, raw_url, byte_count=raw_bytes)
+
+    def _record_upload(self, event: dict, ok: bool, filename: str) -> None:
+        """Count a primary upload (global stats and the active task) and announce a failure."""
+        if self._discarded(event):  # abandoned by a force-stop, neither a success nor a failure
+            return
+        with self._stats_lock:
+            self._stats["uploads_ok" if ok else "uploads_failed"] += 1
+        self._task_bump(event, "uploaded" if ok else "upload_failed")
+        if not ok:
+            self._emit("upload.failed", filename=filename, trigger=event.get("trigger"))
 
     def _wait_for_stitch_drain(self, poll_interval: float = 0.5) -> None:
         """Block until the stitch pool has no pending work, then return.
@@ -1229,6 +1528,9 @@ class SerialTriggerListener:
         """
         self._wait_for_stitch_drain()
         for cam_id, (data, serial, timing) in raw_captures.items():
+            if self._discarded(event):
+                self._unlink_spilled((raw_captures,))
+                return
             if isinstance(data, Path):
                 try:
                     jpeg_bytes = data.read_bytes()
@@ -1240,13 +1542,15 @@ class SerialTriggerListener:
             else:
                 jpeg_bytes = data
             filename = f"{ts_ms}_{serial}.jpg"
-            ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename, is_raw=True, ts_ms=ts_ms, timing=timing)
+            ok = _upload_image(jpeg_bytes, event, url=raw_url, filename=filename, is_raw=True, ts_ms=ts_ms, timing=timing,
+                               abort=lambda: self._discarded(event))
             with self._stats_lock:
                 if ok:
                     self._stats["uploads_ok"] += 1
                 else:
                     self._stats["uploads_failed"] += 1
-                    _save_image_locally(jpeg_bytes, event, filename=filename, ts_ms=ts_ms, timing=timing)
+                    if not self._discarded(event):
+                        _save_image_locally(jpeg_bytes, event, filename=filename, ts_ms=ts_ms, timing=timing)
                     logger.warning(
                         "hw_trigger_raw_fallback_local",
                         filename=filename,
@@ -1259,7 +1563,11 @@ class SerialTriggerListener:
         Disk files only exist because a previous upload failed completely. Stitch files
         are retried before raw files to preserve priority.
         """
-        while not self._stop_event.wait(timeout=60):
+        while True:
+            self._retry_wake.wait(timeout=60)
+            self._retry_wake.clear()
+            if self._stop_event.is_set():
+                return
             save_dir = config.HW_TRIGGER_LOCAL_SAVE_DIR
             if not save_dir.exists():
                 continue
@@ -1271,7 +1579,11 @@ class SerialTriggerListener:
                 if self._stop_event.is_set():
                     return
                 is_stitch = f.name.endswith("_stitch.jpg")
-                url = _get_destination_url() if is_stitch else _get_raw_destination_url()
+                # Per-camera primary uploads ("<ts>_cam<N>.jpg") go to the main destination with their camera id,
+                # exactly like the upload that failed. Only debug raw copies use the raw destination.
+                cam_match = _CAM_FILE_RE.search(f.name)
+                camera_id = int(cam_match.group(1)) if cam_match else None
+                url = _get_destination_url() if (is_stitch or camera_id is not None) else _get_raw_destination_url()
                 if not url:
                     continue
                 try:
@@ -1293,10 +1605,13 @@ class SerialTriggerListener:
                     retry_ts_ms = trigger_event.pop("ts_ms", None)
                     retry_timing = trigger_event.pop("timing", None)
                     image_bytes = f.read_bytes()
-                    ok = _upload_image(image_bytes, trigger_event, url=url, filename=f.name, ts_ms=retry_ts_ms, timing=retry_timing)
+                    ok = _upload_image(image_bytes, trigger_event, url=url, filename=f.name, camera_id=camera_id,
+                                       ts_ms=retry_ts_ms, timing=retry_timing)
                     if ok:
                         f.unlink(missing_ok=True)
                         sidecar.unlink(missing_ok=True)
+                        self._disk_cache.clear()
+                        self._task_bump(trigger_event, "uploaded")
                         logger.info("hw_trigger_disk_retry_ok", filename=f.name, url=url)
                 except Exception as exc:
                     logger.warning("hw_trigger_disk_retry_error", filename=f.name, error=str(exc))

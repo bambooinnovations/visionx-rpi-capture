@@ -578,6 +578,85 @@ Download full config for every camera as an attached JSON file (`camera_config_<
 
 ---
 
+## Capture tasks (backend-driven)
+
+The backend runs a capture by id instead of an operator using the monitor page. The routes are registered with the decoder routes (MindVision, fabric station) and answer `409 unsupported` on a `qc` station. Design and rationale: [backend-controlled-capture.md](backend-controlled-capture.md).
+
+A task moves through `idle → running → draining → idle`. While it is `running`, every capture carries the task id, in the image EXIF (`task_id` in the UserComment JSON, next to `distance_mm`) and as a `task_id` form field on the upload. Starting a task zeroes the distance, and the Arduino must confirm the reset. Only one task exists at a time.
+
+A running task becomes `interrupted` if the Pi restarts or the serial link to the Arduino reconnects (which resets the Arduino's distance counter). An interrupted task captures nothing new, photos already taken keep uploading, and only `stop` closes it.
+
+While a task is not `idle`, the manual controls that would disturb it answer `409 task_active`: `/api/decoder/reset-count`, `/api/decoder/stop`, `/api/decoder/mode/calibration`, and `/api/system/mode` set to `regular`. `/api/decoder/mode/hw-trigger` does too while the task is `draining` or `interrupted`.
+
+Errors are `{"error": "...", "code": "..."}`; the `code` is stable.
+
+### `POST /api/task/start`
+
+Body: `{"task_id": "<id>"}`. The id is 1–128 characters of `A-Z a-z 0-9 . _ : -`; an integer is accepted and stringified.
+
+| Status | Body | When |
+| ------ | ---- | ---- |
+| `200` | `{"state": "running", "task_id", "started_at"}` | Started, or the same id was already running (retries are safe) |
+| `400` | `code: invalid_task_id` | Bad id |
+| `409` | `code: task_active` / `draining` / `interrupted`, plus `active_task_id` | Another task exists |
+| `503` | `code: arduino_unavailable` / `reset_unconfirmed` / `camera_mode_failed` | The Arduino is not reachable, did not confirm the distance reset, or a camera would not enter hardware-trigger mode |
+
+Start brings the decoder up if it is not running, disables triggers, waits for the Arduino to confirm `reset_count`, then starts tagging and enables triggers, so no photo can carry a stale distance or a missing id. When it fails, it restores what it changed: cameras it switched return to capture mode and a decoder it started is stopped. Cameras already in hardware-trigger mode and an already-running decoder are left alone.
+
+### `POST /api/task/stop`
+
+Body: `{"task_id": "<id>", "force": false, "wait_s": 2}`
+
+Stops capturing at once (the Arduino confirms that triggers are off), then waits for uploads to drain. It never blocks on the network: `wait_s` (0–30, default 2) only bounds how long it waits in case the queue is nearly empty already.
+
+| Status | Body | When |
+| ------ | ---- | ---- |
+| `200` | `{"state": "idle", "task_id", "summary"}` | Everything uploaded, or the task was already stopped |
+| `202` | `{"state": "draining", "task_id", "pending": {...}}` | Uploads still pending. Watch for `task.finished` on the websocket, or poll `/api/task/status` |
+| `200` | `{"state": "idle", "summary", "discarded": {...}}` | `force: true`: pending uploads were dropped |
+| `400` | `code: invalid_force` | `force` was not a JSON boolean |
+| `409` | `code: task_mismatch` / `task_not_active` | `task_id` is not the active task |
+
+`summary` is `{task_id, started_at, stopped_at, finished_at, forced, drain_timed_out, leftover?, triggers, captured, capture_failed, uploaded, upload_failed, discarded}`. `captured` counts camera images and `uploaded` counts primary upload requests (one per camera image, or one per trigger when stitching), so the two reconcile only in per-camera mode.
+
+`discarded` is `{queued_captures, upload_jobs, aborted_jobs, disk_files, files}`: triggers not yet captured, queued uploads that were cancelled, uploads already on the wire (they finish that request and make no further attempt), and failed uploads waiting on disk (deleted; `files` lists up to 100 names).
+
+**Draining and the timeout.** A draining task keeps retrying failed uploads until they succeed. If it is still draining after `[task] drain_timeout_s` (default 600 s, `0` = wait forever), it is closed anyway: the state becomes `idle`, `summary.drain_timed_out` is `true`, `summary.leftover` holds the pending counts at that moment, and a `task.drain_timeout` event is published. Nothing is discarded. Uploads still in flight finish, and failed uploads stay on disk and keep retrying under their original task id (the saved-images limits `local_max_files` and `local_max_mb` still apply). Use `force: true` to drop them instead.
+
+### `GET /api/task/status`
+
+The same full snapshot the websocket sends:
+
+```jsonc
+{
+  "task":   { "id", "state": "idle|running|draining|interrupted", "started_at", "stopped_at", "finished_at",
+              "pending": {"capture", "stitch", "raw", "disk_retry", "total"},   // null when idle
+              "arduino_reconnects",   // serial reconnects since start; each one resets the Arduino's distance
+              "triggers", "captured", "capture_failed", "uploaded", "upload_failed", "discarded",
+              "last": { /* summary of the previous task */ } },
+  "motion": { "speed_cms", "distance_mm", "encoder_count" },
+  "arduino":{ "serial_connected", "last_message_at", "trigger_enabled", "listener_running", "port_present", "simulator_running" },
+  "queues": { "camera": {"0": 0}, "camera_maxsize", "capture_inflight", "collector", "stitch", "stitch_mb",
+              "raw", "raw_mb", "disk_retry", "disk_spill", "pending_total" },
+  "totals": { "triggers", "captures_ok", "captures_failed", "uploads_ok", "uploads_failed", "uptime_seconds" },
+  "active_style": "default"
+}
+```
+
+### `WS /ws/task`
+
+A read-only live feed; commands stay on HTTP. Up to 4 clients at once, and further connections are closed with code `1013`. Each frame is JSON: `{"v": 1, "type", "seq", "ts", "data"}`, where `ts` is epoch milliseconds and `seq` increases per connection.
+
+| `type` | Sent | `data` |
+| ------ | ---- | ------ |
+| `state` | On connect, then every 0.5 s while a task is active (1 s when idle) | The full snapshot above. A reconnecting client needs no replay. |
+| `event` | On the transition | `{"name": ..., ...}`, where `name` is one of `task.started`, `task.stopping`, `task.finished` (with `summary`), `task.drain_timeout` (with `leftover`), `task.discarded`, `task.interrupted` (with `reason`: `pi_restart` or `arduino_reconnected`), `arduino.connected`, `arduino.disconnected`, `capture.failed`, `upload.failed` |
+| `ping` | Every 10 s | `{}` |
+
+The `/monitor` page reads from this socket and falls back to polling `/api/decoder/status` when it is unavailable. There is no authentication yet.
+
+---
+
 ## Decoder (Arduino)
 
 QC stations never run the decoder or use hardware-trigger mode; see [Configuration](../README.md#configuration). `POST /start`, `POST /detect`, and `POST /mode/hw-trigger` explicitly check for this and return `409` on a `qc` station. The remaining routes have no such check — they'll return whatever error fits their normal state handling (e.g. `409` if the listener isn't running), or succeed, since a `qc` station simply never starts the listener.

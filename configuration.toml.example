@@ -93,6 +93,10 @@ db_path = "./data/capture_profiles.db"
 # use_stitch          = false    # true = upload one stitched composite; false (default) = upload each camera's raw image separately, tagged with camera_id
 # sim_gpio_pin        = 17       # BCM GPIO pin wired to the camera trigger input (required for the Dev simulator)
 
+# Backend-driven capture tasks (/api/task).
+# [task]
+# drain_timeout_s = 600   # a stopped task still draining after this long is closed (idle, drain_timed_out=true); nothing is discarded. 0 = wait forever
+
 # Manual debug capture (MindVision only, /debug-capture page).
 # Separate from hw_trigger above so debug uploads never mix with production data.
 # destination_url and destination_api_key can also be updated live via PATCH /rpi/config.

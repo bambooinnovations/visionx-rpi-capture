@@ -105,6 +105,10 @@ HW_TRIGGER_RAW_DESTINATION_URL: str = _get("hw_trigger", "raw_destination_url", 
 HW_TRIGGER_SEND_RAW_IMAGES: bool = _get("hw_trigger", "send_raw_images", False)
 HW_TRIGGER_USE_STITCH: bool = _get("hw_trigger", "use_stitch", False)
 
+# Backend-driven capture tasks: how long a stopped task may keep draining its uploads before it is closed anyway
+# (nothing is discarded; failed uploads stay on disk and keep retrying). 0 = wait forever.
+TASK_DRAIN_TIMEOUT_S: float = float(_get("task", "drain_timeout_s", 600))
+
 # Debug capture (MindVision only) — manual on-demand multi-camera capture,
 # separate destination from hw_trigger so debug uploads never mix with
 # production data.

@@ -39,8 +39,14 @@ logger = structlog.get_logger()
 def create_blueprint(
     listener: SerialTriggerListener,
     cameras: dict[int, MindVisionCamera],
+    task_manager=None,
 ) -> Blueprint:
     bp = Blueprint("arduino", __name__, url_prefix="/api/decoder")
+
+    def _task_blocks(action: str):
+        """A 409 response while a backend capture task owns the hardware, else None."""
+        err = task_manager.guard(action) if task_manager is not None else None
+        return (jsonify(err.body()), err.status) if err is not None else None
 
     # ── Serial listener lifecycle ──────────────────────────────────────────────
 
@@ -104,6 +110,9 @@ def create_blueprint(
     @bp.route("/stop", methods=["POST"])
     def decoder_stop():
         """Stop the serial trigger listener and revert cameras to capture mode."""
+        blocked = _task_blocks("stop")
+        if blocked:
+            return blocked
         if not listener.running:
             return jsonify({"error": "Decoder listener is not running"}), 409
 
@@ -168,6 +177,9 @@ def create_blueprint(
     @bp.route("/mode/hw-trigger", methods=["POST"])
     def set_mode_hw_trigger():
         """Switch to hardware trigger mode: cameras → HARDWARE_TRIGGER, Arduino begins firing pulses."""
+        blocked = _task_blocks("hw_trigger")
+        if blocked:
+            return blocked
         if config.is_capture_station():
             return jsonify({"error": "Hardware trigger mode is not available on a qc/shading station"}), 409
 
@@ -194,6 +206,9 @@ def create_blueprint(
     @bp.route("/mode/calibration", methods=["POST"])
     def set_mode_calibration():
         """Switch to calibration mode: cameras → CAPTURE (software trigger), Arduino stops firing pulses."""
+        blocked = _task_blocks("calibration")
+        if blocked:
+            return blocked
         for cam_id, cam in cameras.items():
             try:
                 cam.set_mode(CameraMode.CAPTURE)
@@ -223,6 +238,9 @@ def create_blueprint(
     @bp.route("/reset-count", methods=["POST"])
     def reset_count():
         """Reset the Arduino encoder count and speed to zero."""
+        blocked = _task_blocks("reset")
+        if blocked:
+            return blocked
         try:
             listener.send_command({"cmd": "reset_count"})
         except RuntimeError as exc:

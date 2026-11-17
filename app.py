@@ -118,13 +118,19 @@ if mindvision_cameras:
     _serial_listener = SerialTriggerListener(mindvision_cameras)
     seed_default_speed_presets()
 
+    from capture_task import TaskManager
+    _task_manager = TaskManager(_serial_listener, mindvision_cameras)
+
     from blueprints.mindvision import create_blueprint
     from blueprints.lens import create_blueprint as create_lens_blueprint
     from blueprints.arduino import create_blueprint as create_arduino_blueprint
     from blueprints.debug_capture import create_blueprint as create_debug_capture_blueprint
     app.register_blueprint(create_blueprint(mindvision_cameras, _serial_listener))
     app.register_blueprint(create_lens_blueprint(mindvision_cameras))
-    app.register_blueprint(create_arduino_blueprint(_serial_listener, mindvision_cameras))
+    app.register_blueprint(create_arduino_blueprint(_serial_listener, mindvision_cameras, _task_manager))
+    from blueprints.task import StreamHub, create_blueprint as create_task_blueprint, register_websocket
+    app.register_blueprint(create_task_blueprint(_task_manager))
+    register_websocket(app, StreamHub(_task_manager), _task_manager)
     app.register_blueprint(create_debug_capture_blueprint(mindvision_cameras))
 
     if (not _debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
@@ -167,7 +173,10 @@ if mindvision_cameras:
                         logger.warning("decoder_auto_start_failed", error=str(_e))
                 else:
                     logger.warning("decoder_auto_start_skipped", mode_errors=_mode_errors)
+        # After the decoder may have auto-started: a task that was running when the Pi went down is now `interrupted`.
+        _task_manager.recover()
 else:
+    _task_manager = None
     # No MindVision camera in the registry, so none of the routes above were
     # registered. Without this, any request under these prefixes falls through
     # to Flask's default 404 — an HTML page, not JSON — which every caller
@@ -182,7 +191,7 @@ else:
     def _mindvision_unavailable(**_kwargs):
         return jsonify({"error": _MV_UNAVAILABLE_MSG, "mindvision_available": False}), 503
 
-    for _prefix in ("/api/decoder", "/api/cameras", "/api/lens"):
+    for _prefix in ("/api/decoder", "/api/cameras", "/api/lens", "/api/task"):
         _endpoint = _prefix.strip("/").replace("/", "_")
         app.add_url_rule(
             _prefix, endpoint=f"{_endpoint}_unavailable", view_func=_mindvision_unavailable,
@@ -455,6 +464,9 @@ def system_mode():
                     actions.append({"action": "start_decoder", "ok": False, "error": str(exc)})
 
         elif mode == "regular":
+            _task_error = _task_manager.guard("regular")
+            if _task_error is not None:
+                return jsonify(_task_error.body()), _task_error.status
             if _serial_listener.running:
                 try:
                     _serial_listener.stop()

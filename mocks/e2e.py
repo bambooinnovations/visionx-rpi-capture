@@ -22,6 +22,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -39,6 +40,7 @@ from mocks.fake_upload_server import FakeUploadServer  # noqa: E402
 WHEEL_MM, PPR, INTERVAL_MM = 300.0, 600, 400.0
 BELT_CMS = 80.0
 CAMERAS = 2
+DRAIN_TIMEOUT_S = 12  # [task] drain_timeout_s for the mock app; long enough for a healthy drain, short enough to test
 
 
 def _free_port() -> int:
@@ -107,6 +109,8 @@ retry_attempts = 3
 timeout_seconds = 5
 save_local = true
 local_save_dir = "{self.save_dir.as_posix()}"
+[task]
+drain_timeout_s = {DRAIN_TIMEOUT_S}
 """, encoding="utf-8")
         return cfg
 
@@ -339,6 +343,210 @@ def scenario_upload_failures(h: Harness, r: Results) -> None:
         h.upload.fail_next = 0
 
 
+class WsCollector:
+    """Connects to /ws/task and keeps every message it receives."""
+
+    def __init__(self, base: str) -> None:
+        from simple_websocket import Client
+
+        self.msgs: list[dict] = []
+        self._stop = False
+        self.ws = Client.connect(base.replace("http://", "ws://") + "/ws/task")
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while not self._stop:
+            try:
+                raw = self.ws.receive(timeout=0.5)
+            except Exception:
+                return
+            if raw:
+                self.msgs.append(json.loads(raw))
+
+    def events(self, name: str) -> list[dict]:
+        return [m["data"] for m in list(self.msgs) if m["type"] == "event" and m["data"].get("name") == name]
+
+    def states(self) -> list[dict]:
+        return [m["data"] for m in list(self.msgs) if m["type"] == "state"]
+
+    def close(self) -> None:
+        self._stop = True
+        try:
+            self.ws.close()
+        except Exception:
+            pass
+
+
+def _tagged(h: Harness, task_id: str) -> list:
+    return [u for u in h.upload.snapshot() if u.fields.get("task_id") == task_id]
+
+
+def _disk_files_for(h: Harness, task_id: str) -> list[Path]:
+    found = []
+    for side in (h.save_dir.glob("*.jpg.json") if h.save_dir.exists() else []):
+        try:
+            if json.loads(side.read_text()).get("task_id") == task_id:
+                found.append(side)
+        except Exception:
+            pass
+    return found
+
+
+def scenario_task(h: Harness, r: Results) -> None:
+    print("backend-driven task: start, tag, graceful stop, drain, force stop")
+    h.upload.fail_next = 0
+    h.arduino.set_speed(BELT_CMS)
+    ws = WsCollector(h.base)
+    try:
+        wait_for(lambda: ws.states(), 5, "first websocket state")
+        r.check("websocket sends a full state on connect", "queues" in ws.states()[0] and "motion" in ws.states()[0])
+
+        # -- start --------------------------------------------------------
+        before = h.status()["encoder_count"]
+        resp = h.api("POST", "/api/task/start", json={"task_id": "job-1"})
+        r.check("task starts", resp.status_code == 200 and resp.json()["state"] == "running", resp.text[:120])
+        r.check("starting the same task again is a no-op", h.api("POST", "/api/task/start", json={"task_id": "job-1"}).status_code == 200)
+        other = h.api("POST", "/api/task/start", json={"task_id": "job-other"})
+        r.check("a different task is refused while one runs", other.status_code == 409 and other.json()["active_task_id"] == "job-1")
+        r.check("manual reset-count is refused during a task", h.api("POST", "/api/decoder/reset-count").status_code == 409)
+        r.check("manual decoder stop is refused during a task", h.api("POST", "/api/decoder/stop").status_code == 409)
+        r.check("invalid task id is rejected", h.api("POST", "/api/task/start", json={"task_id": "bad id!"}).status_code in (400, 409))
+
+        wait_for(lambda: len({int(u.fields["trigger_number"]) for u in _tagged(h, "job-1") if u.fields.get("trigger_number")}) >= 6,
+                 40, "6 tagged triggers")
+        tagged = _tagged(h, "job-1")
+        r.check("uploads carry the task id", all(u.fields["task_id"] == "job-1" for u in tagged), f"{len(tagged)} uploads")
+        ids = {exif_comment(u.image).get("task_id") for u in tagged}
+        r.check("EXIF carries the task id", ids == {"job-1"}, str(ids))
+        first = min(tagged, key=lambda u: int(u.fields["trigger_number"]))
+        d0 = exif_comment(first.image)["distance_mm"]
+        r.check("distance restarted from zero at start", d0 < INTERVAL_MM * 1.3, f"first tagged photo at {d0} mm (encoder was {before} before)")
+
+        # -- live telemetry -------------------------------------------------
+        wait_for(lambda: any(s["task"]["state"] == "running" and s["task"]["triggers"] > 0 for s in ws.states()), 5, "running state with triggers")
+        last = ws.states()[-1]
+        r.check("state message mirrors the monitor page",
+                {"task", "motion", "arduino", "queues", "totals"} <= set(last) and last["motion"]["speed_cms"] is not None)
+        r.check("task started event was published", bool(ws.events("task.started")))
+        seqs = [m["seq"] for m in ws.msgs]
+        r.check("websocket sequence numbers increase", seqs == sorted(seqs) and len(set(seqs)) == len(seqs))
+        r.check("GET /api/task/status matches the socket shape", set(h.api("GET", "/api/task/status").json()) == set(last))
+
+        # -- graceful stop with a healthy destination ------------------------
+        resp = h.api("POST", "/api/task/stop", json={"task_id": "job-1"})
+        body = resp.json()
+        r.check("stop returns idle (200) when uploads already drained", resp.status_code == 200 and body["state"] == "idle", resp.text[:160])
+        r.check("stop reports a summary with counters", body.get("summary", {}).get("captured", 0) >= 6, str(body.get("summary")))
+        r.check("stop is idempotent", h.api("POST", "/api/task/stop", json={"task_id": "job-1"}).status_code == 200)
+        n_after = len(h.upload.snapshot())
+        time.sleep(2.0)
+        r.check("no photos are taken after stop", len(h.upload.snapshot()) == n_after and not h.arduino.trigger_enabled)
+        r.check("task finished event was published", bool(ws.events("task.finished")))
+        r.check("stopping the wrong task id is refused", h.api("POST", "/api/task/stop", json={"task_id": "nope"}).status_code == 409)
+
+        # -- stop while uploads are failing: draining, then finished ------------
+        h.upload.fail_next = 10_000
+        resp = h.api("POST", "/api/task/start", json={"task_id": "job-2"})
+        r.check("second task starts", resp.status_code == 200, resp.text[:100])
+        wait_for(lambda: h.api("GET", "/api/task/status").json()["task"]["triggers"] >= 4, 30, "4 triggers on job-2")
+        resp = h.api("POST", "/api/task/stop", json={"task_id": "job-2", "wait_s": 0.5})
+        r.check("stop answers 202 draining while uploads are pending", resp.status_code == 202 and resp.json()["state"] == "draining", resp.text[:160])
+        r.check("a new task is refused while draining", h.api("POST", "/api/task/start", json={"task_id": "job-3"}).status_code == 409)
+        r.check("capture stays off while draining", not h.arduino.trigger_enabled)
+        h.upload.fail_next = 0  # the destination recovers
+        try:
+            wait_for(lambda: len(ws.events("task.finished")) >= 2, 60, "job-2 to drain")
+            st = h.api("GET", "/api/task/status").json()["task"]
+            r.check("draining finishes by itself once uploads succeed", st["state"] == "idle" and st["last"]["task_id"] == "job-2")
+            r.check("nothing left on disk for the drained task", not _disk_files_for(h, "job-2"))
+        except TimeoutError as e:
+            r.check("draining finishes by itself once uploads succeed", False, f"{e}; {h.api('GET', '/api/task/status').json()['task']}")
+
+        # -- force stop -----------------------------------------------------
+        h.upload.fail_next = 10_000
+        h.api("POST", "/api/task/start", json={"task_id": "job-3"})
+        wait_for(lambda: h.api("GET", "/api/task/status").json()["task"]["triggers"] >= 4, 30, "4 triggers on job-3")
+        resp = h.api("POST", "/api/task/stop", json={"task_id": "job-3", "force": True})
+        body = resp.json()
+        dropped = body.get("discarded", {})
+        r.check("force stop goes idle immediately", resp.status_code == 200 and body.get("state") == "idle", resp.text[:200])
+        r.check("force stop reports what it dropped", sum(dropped.get(k, 0) for k in ("upload_jobs", "aborted_jobs", "queued_captures", "disk_files")) > 0, str(dropped))
+        r.check("no disk-backed files remain for a discarded task", not _disk_files_for(h, "job-3"))
+        r.check("discard was announced", bool(ws.events("task.discarded")))
+        count = len(_tagged(h, "job-3"))
+        h.upload.fail_next = 0
+        time.sleep(4.0)
+        r.check("discarded photos are never uploaded afterwards", len(_tagged(h, "job-3")) == count and not _disk_files_for(h, "job-3"))
+        st = h.api("GET", "/api/task/status").json()
+        r.check("pipeline is empty after a force stop", st["queues"]["capture_inflight"] == 0 and st["queues"]["stitch"] == 0, str(st["queues"]))
+        r.check("manual controls work again once idle", h.api("POST", "/api/decoder/reset-count").status_code == 200)
+    finally:
+        ws.close()
+        h.upload.fail_next = 0
+
+
+def scenario_task_reconnect_and_timeout(h: Harness, r: Results) -> None:
+    print("task: serial reconnect interrupts it; drain timeout closes it without losing uploads")
+    h.upload.fail_next = 0
+    h.arduino.set_speed(BELT_CMS)
+    ws = WsCollector(h.base)
+    try:
+        # -- a serial reconnect mid-run: the Arduino's encoder restarts, so the task must not carry on ------------
+        h.api("POST", "/api/task/start", json={"task_id": "job-r"})
+        wait_for(lambda: h.api("GET", "/api/task/status").json()["task"]["triggers"] >= 3, 30, "3 triggers on job-r")
+        h.arduino.drop_connection()
+        try:
+            wait_for(lambda: h.api("GET", "/api/task/status").json()["task"]["state"] == "interrupted", 20, "interrupted")
+            st = h.api("GET", "/api/task/status").json()["task"]
+            r.check("a serial reconnect interrupts the running task", st["id"] == "job-r" and st["arduino_reconnects"] >= 1, str(st))
+        except TimeoutError as e:
+            r.check("a serial reconnect interrupts the running task", False, str(e))
+        ev = ws.events("task.interrupted")
+        r.check("interruption was announced with its reason", bool(ev) and ev[-1].get("reason") == "arduino_reconnected", str(ev[-1:]))
+        wait_for(lambda: not h.arduino.trigger_enabled, 10, "triggers off")
+        time.sleep(1.0)
+        n = len(_tagged(h, "job-r"))
+        time.sleep(3.0)
+        r.check("no new photos are taken once interrupted", len(_tagged(h, "job-r")) == n and not h.arduino.trigger_enabled)
+        r.check("a new task is refused while interrupted", h.api("POST", "/api/task/start", json={"task_id": "job-x"}).status_code == 409)
+        resp = h.api("POST", "/api/task/stop", json={"task_id": "job-r"})
+        r.check("the backend can close an interrupted task", resp.status_code == 200 and resp.json()["state"] == "idle", resp.text[:160])
+        r.check("manual controls work again after closing it", h.api("POST", "/api/decoder/reset-count").status_code == 200)
+        r.check("captured photos kept their task id", len(_tagged(h, "job-r")) >= 3)
+
+        # -- drain timeout: destination stays down, the task closes anyway, nothing is lost ----------------------
+        h.upload.fail_next = 10_000
+        h.api("POST", "/api/task/start", json={"task_id": "job-t"})
+        wait_for(lambda: h.api("GET", "/api/task/status").json()["task"]["triggers"] >= 3, 30, "3 triggers on job-t")
+        resp = h.api("POST", "/api/task/stop", json={"task_id": "job-t", "wait_s": 0.5})
+        r.check("stop answers draining while the destination is down", resp.status_code == 202, resp.text[:160])
+        try:
+            wait_for(lambda: h.api("GET", "/api/task/status").json()["task"]["state"] == "idle", DRAIN_TIMEOUT_S + 20, "drain timeout")
+            last = h.api("GET", "/api/task/status").json()["task"]["last"]
+            r.check("drain timeout closes the task", last["task_id"] == "job-t" and last["drain_timed_out"] is True and last["forced"] is False, str(last))
+            r.check("the timeout reports what is left", last["leftover"]["total"] > 0, str(last.get("leftover")))
+        except TimeoutError as e:
+            r.check("drain timeout closes the task", False, str(e))
+        try:
+            wait_for(lambda: bool(ws.events("task.drain_timeout")), 5, "timeout event")
+        except TimeoutError:
+            pass
+        r.check("timeout was announced", bool(ws.events("task.drain_timeout")))
+        left = _disk_files_for(h, "job-t")
+        r.check("failed uploads stay on disk after the timeout", len(left) > 0, f"{len(left)} files")
+        h.upload.fail_next = 0  # the destination recovers
+        try:
+            wait_for(lambda: not _disk_files_for(h, "job-t"), 60, "retry of job-t files")
+            r.check("they keep retrying and upload under the original task id", len(_tagged(h, "job-t")) > 0 and not _disk_files_for(h, "job-t"),
+                    f"{len(_tagged(h, 'job-t'))} uploaded")
+        except TimeoutError as e:
+            r.check("they keep retrying and upload under the original task id", False, str(e))
+    finally:
+        ws.close()
+        h.upload.fail_next = 0
+
+
 def scenario_wrap_up(h: Harness, r: Results) -> None:
     print("wrap up")
     h.arduino.set_speed(0.0)
@@ -349,7 +557,7 @@ def scenario_wrap_up(h: Harness, r: Results) -> None:
 
 
 SCENARIOS = [scenario_start_and_configure, scenario_roll, scenario_new_roll, scenario_serial_drop,
-             scenario_upload_failures, scenario_wrap_up]
+             scenario_upload_failures, scenario_task, scenario_task_reconnect_and_timeout, scenario_wrap_up]
 
 
 def run(keep_logs: bool = False) -> Results:

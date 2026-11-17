@@ -172,12 +172,115 @@ function startQueueStream() {
   } catch (_) {}
 }
 
+// ── Live feed (websocket) ────────────────────────────────────────────────
+//
+// /ws/task pushes one full snapshot every 0.5 s: everything above plus the backend task. While it is healthy it
+// replaces the status poll and the queue SSE; if it is down or silent the page falls back to those, so the monitor
+// keeps working without it.
+
+let _ws = null;
+let _wsLastStateAt = 0;
+let _wsRetryMs = 1000;
+
+function wsHealthy() {
+  return Date.now() - _wsLastStateAt < 3000;
+}
+
+function snapshotToStatus(s) {
+  return {
+    running: s.arduino.listener_running,
+    port_present: s.arduino.port_present,
+    last_message_at: s.arduino.last_message_at,
+    speed_cms: s.motion.speed_cms,
+    distance_mm: s.motion.distance_mm,
+    encoder_count: s.motion.encoder_count,
+    triggers_received: s.totals.triggers,
+    captures_ok: s.totals.captures_ok,
+    captures_failed: s.totals.captures_failed,
+    uploads_ok: s.totals.uploads_ok,
+    uploads_failed: s.totals.uploads_failed,
+    uptime_seconds: s.totals.uptime_seconds,
+    active_style: s.active_style,
+  };
+}
+
+function snapshotToQueues(s) {
+  return {
+    camera_queues: s.queues.camera,
+    collector_pending: s.queues.collector,
+    stitch_pending: s.queues.stitch,
+    raw_pending: s.queues.raw,
+    disk_retry: s.queues.disk_retry,
+    disk_spill: s.queues.disk_spill,
+  };
+}
+
+// A backend task owns the roll: show it, and take the manual "new roll" button away (the server refuses it too).
+function renderTask(task) {
+  const el = document.getElementById('mon-task');
+  const btn = document.getElementById('mon-new-roll');
+  if (!task || task.state === 'idle') {
+    el.hidden = true;
+    btn.disabled = false;
+    return;
+  }
+  const pending = task.pending && task.pending.total ? ` · ${task.pending.total} to upload` : '';
+  el.textContent = `Task ${task.id} · ${task.state}${pending}`;
+  el.hidden = false;
+  btn.disabled = true;
+}
+
+function renderSnapshot(s) {
+  renderStatus(snapshotToStatus(s));
+  renderQueueDepths(snapshotToQueues(s));
+  renderTask(s.task);
+  hideUnavailable();
+}
+
+function stopQueueStream() {
+  if (_queueStream) {
+    _queueStream.close();
+    _queueStream = null;
+  }
+}
+
+function startTaskStream() {
+  try {
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+    _ws = new WebSocket(`${scheme}://${location.host}/ws/task`);
+  } catch (_) {
+    setTimeout(startTaskStream, _wsRetryMs);
+    return;
+  }
+  _ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch (_) { return; }
+    if (msg.type !== 'state') return;
+    _wsLastStateAt = Date.now();
+    _wsRetryMs = 1000;
+    stopQueueStream();
+    try { renderSnapshot(msg.data); } catch (err) { console.error('monitor render failed', err); }
+  };
+  _ws.onclose = () => {
+    _ws = null;
+    setTimeout(startTaskStream, _wsRetryMs);
+    _wsRetryMs = Math.min(_wsRetryMs * 2, 10000);
+  };
+  _ws.onerror = () => { try { _ws.close(); } catch (_) {} };
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('mon-new-roll').addEventListener('click', openRollModal);
   document.getElementById('mon-modal-cancel').addEventListener('click', closeRollModal);
   document.getElementById('mon-modal-ok').addEventListener('click', startNewRoll);
+  startTaskStream();
+  // Fallback only: until the socket delivers, poll like before.
   pollStatus();
   startQueueStream();
 
-  setInterval(pollStatus, 2000);
+  setInterval(() => {
+    if (wsHealthy()) return;
+    pollStatus();
+    startQueueStream();
+  }, 2000);
 });
