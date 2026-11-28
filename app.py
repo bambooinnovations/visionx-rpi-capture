@@ -169,6 +169,20 @@ if mindvision_cameras:
                             baud=config.HW_TRIGGER_SERIAL_BAUD,
                         )
                         logger.info("decoder_auto_started", port=config.HW_TRIGGER_SERIAL_PORT)
+                        # Boot comes up idle: keep triggers off and the gate
+                        # closed so idle or spurious encoder motion cannot
+                        # capture before a run arms them (capture_task.start
+                        # re-enables on run start, stop disables again). Without
+                        # this a clean boot can come up with the Arduino emitting
+                        # triggers and the gate open, uploading junk with no run.
+                        _serial_listener.set_trigger_state(False)
+                        _serial_listener.set_trigger_gate(False)
+                        try:
+                            _serial_listener.send_command(
+                                {"cmd": "set_trigger_enabled", "value": False}
+                            )
+                        except Exception as _ed:
+                            logger.warning("decoder_auto_start_disable_failed", error=str(_ed))
                     except Exception as _e:
                         logger.warning("decoder_auto_start_failed", error=str(_e))
                 else:
