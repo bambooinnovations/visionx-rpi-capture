@@ -760,9 +760,10 @@ def _read_full_config(h: int, cam: "MindVisionCamera") -> dict:
 class _FocusSession:
     """Per-camera state for the focus-check page (reset on each new stream)."""
 
-    def __init__(self) -> None:
+    def __init__(self, board: str | None = None) -> None:
         from camera.focus_check import FocusTracker
-        self.tracker = FocusTracker()
+        self.tracker = FocusTracker(board)
+        self.board = self.tracker.board.key
         self.smoothed: float | None = None
         self.best: float | None = None
         self.samples = 0
@@ -784,6 +785,7 @@ class _FocusSession:
             if self.best and self.smoothed else None
         )
         d["ts"] = time.time()
+        d["board"] = self.board
         self.latest = d
         return d
 
@@ -1253,6 +1255,7 @@ def create_blueprint(
           camera_id  int    Camera index (default 0)
           fps        float  Frames per second (default 4, max 10)
           max_width  int    Preview downscale width (default 960)
+          board      str    Printed target: "10x7" or "20x14" (default 20x14); see GET /focus-check/boards
         """
         cam, cam_id = _resolve_camera()
         if cam is None:
@@ -1263,7 +1266,7 @@ def create_blueprint(
         fps = max(0.5, min(request.args.get("fps", 4.0, type=float), 10.0))
         max_width = request.args.get("max_width", 960, type=int)
 
-        session = _FocusSession()
+        session = _FocusSession(request.args.get("board"))
         _focus_sessions[cam_id] = session
 
         def _render(frame):
@@ -1284,6 +1287,30 @@ def create_blueprint(
         if session is None:
             return jsonify({"error": "No focus-check stream running"}), 404
         return jsonify({"camera_id": cam_id, **session.latest})
+
+    @bp.route("/focus-check/boards")
+    def focus_check_boards():
+        """Printable targets the focus check understands (pick one with ?board= on the stream)."""
+        from camera.focus_check import BOARDS, DEFAULT_BOARD
+        return jsonify({
+            "default": DEFAULT_BOARD,
+            "boards": [{"key": b.key, "label": b.label, "cols": b.cols, "rows": b.rows,
+                        "square_mm": b.square_mm} for b in BOARDS.values()],
+        })
+
+    @bp.route("/focus-check/frame")
+    def focus_check_frame():
+        """One full-resolution frame exactly as the detector receives it (PNG), for debugging detection."""
+        import cv2 as _cv2
+        cam, cam_id = _resolve_camera()
+        if cam is None or cam._h_camera is None:
+            return jsonify({"error": f"Camera {cam_id} not found"}), 404
+        with cam._lock:
+            frame, _head = cam._grab_frame(timeout_ms=1000)
+        if frame is None:
+            return jsonify({"error": "No frame"}), 503
+        ok, buf = _cv2.imencode(".png", frame)
+        return Response(buf.tobytes(), mimetype="image/png")
 
     @bp.route("/focus-check/reset", methods=["POST"])
     def focus_check_reset():

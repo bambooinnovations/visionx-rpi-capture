@@ -9,6 +9,7 @@ const NEAR_PCT = 80;
 const state = {
   cameras: [],
   cameraId: 0,
+  board: '20x14',
   history: [],
   lastTs: 0,
   poll: null,
@@ -26,7 +27,7 @@ function clearError() { $('error-banner').classList.add('hidden'); }
 // ── Stream ──────────────────────────────────────────────────────────────
 function startStream() {
   const img = $('fc-img');
-  const url = `/api/cameras/focus-check/stream?camera_id=${state.cameraId}&fps=${FPS}`;
+  const url = `/api/cameras/focus-check/stream?camera_id=${state.cameraId}&fps=${FPS}&board=${encodeURIComponent(state.board)}`;
   state.history = [];
   state.lastTs = 0;
   $('stream-placeholder').style.display = '';
@@ -67,6 +68,28 @@ async function pollMetrics() {
 async function resetBest() {
   state.history = [];
   try { await fetch(`/api/cameras/focus-check/reset?camera_id=${state.cameraId}`, { method: 'POST' }); } catch (_) {}
+}
+
+// ── Board choice ─────────────────────────────────────────────────────────
+async function loadBoards() {
+  const sel = $('board-select');
+  let info = { default: state.board, boards: [{ key: '20x14', label: '20 x 14 (10 mm squares)' }, { key: '10x7', label: '10 x 7 (25 mm squares, large)' }] };
+  try {
+    const r = await fetch('/api/cameras/focus-check/boards');
+    if (r.ok) info = await r.json();
+  } catch (_) {}
+  let saved = null;
+  try { saved = localStorage.getItem('fc-board'); } catch (_) {}
+  state.board = info.boards.some(b => b.key === saved) ? saved : info.default;
+  sel.innerHTML = info.boards.map(b => `<option value="${b.key}">${b.label}</option>`).join('');
+  sel.value = state.board;
+}
+
+function switchBoard(key) {
+  state.board = key;
+  try { localStorage.setItem('fc-board', key); } catch (_) {}
+  clearError();
+  startStream();   // a new stream starts a fresh session (best value reset)
 }
 
 // ── Rendering ───────────────────────────────────────────────────────────
@@ -259,6 +282,7 @@ async function init() {
   $('back-link').href = `/calibrate?camera=${state.cameraId}`;
   buildCameraButtons();
   renderZones(null);
+  await loadBoards();
   startStream();
 }
 

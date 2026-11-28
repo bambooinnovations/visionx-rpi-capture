@@ -35,6 +35,9 @@
       <div id="camera-control" class="btn-group hidden"></div>
     </div>
     <div class="page-header-right">
+      <label class="fc-board-pick" title="Which printed target is in front of the camera">Board
+        <select id="board-select" onchange="switchBoard(this.value)"></select>
+      </label>
       <button class="btn btn-secondary btn-sm" id="btn-sound" onclick="toggleSound()" title="Pitch rises as focus improves — lets you watch the lens instead of the screen">🔇 Sound off</button>
       <button class="btn btn-secondary btn-sm" onclick="resetBest()" title="Forget the best reading and start over (e.g. after moving the board)">↺ Reset best</button>
       <button class="btn btn-secondary btn-sm" onclick="toggleFullscreen()">⛶ Full screen</button>
@@ -75,8 +78,9 @@
   </div>
 
   <div class="fc-help">
-    <strong>Setup:</strong> print <code>targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png</code>
-    at 100% (10&nbsp;mm squares), mount it <em>flat</em> and square to the camera, and fill as much of the view as you can.
+    <strong>Setup:</strong> pick the board you printed (top right), print it at 100% scale
+    (<code>targets/charuco_10x7_25mm_checker_20mm_marker_DICT_4X4_250_A4.pdf</code> for the large 10&nbsp;×&nbsp;7 board,
+    <code>targets/charuco_20x14_10mm_checker_8mm_marker_DICT_4X4_250_40px.png</code> for 20&nbsp;×&nbsp;14), mount it <em>flat</em> and square to the camera, and fill as much of the view as you can.
     Turn the focus ring slowly — the reading is <strong>edge width</strong> (lower&nbsp;=&nbsp;sharper).
     Overshoot the peak, then come back until you're at <strong>≥&nbsp;95&nbsp;% of best</strong>, then lock the ring.
     Preview dots: <span class="dot g"></span> sharp <span class="dot a"></span> soft <span class="dot r"></span> blurry.
